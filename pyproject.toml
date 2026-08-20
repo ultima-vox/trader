@@ -1,0 +1,13 @@
+[project]
+name = "trader-nautilus-qualification"
+version = "0.0.1"
+description = "Architecture qualification PoC for NautilusTrader + T-Invest"
+requires-python = ">=3.11"
+dependencies = [
+  "nautilus_trader==1.231.0",
+  "pytest>=8.0,<9.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["qualification/tests"]
