@@ -37,6 +37,7 @@ class TInvestFutureSpec:
     min_price_increment: Decimal
     min_price_increment_amount: Decimal
     underlying: str
+    asset_class: AssetClass
     activation_ns: int
     expiration_ns: int
     api_trade_available: bool
@@ -112,7 +113,7 @@ def to_nautilus_future(spec: TInvestFutureSpec, *, ts_event: int = 0, ts_init: i
     return FuturesContract(
         instrument_id=InstrumentId.from_str(f"{spec.ticker}.TINVEST"),
         raw_symbol=Symbol(spec.ticker),
-        asset_class=AssetClass.INDEX,
+        asset_class=spec.asset_class,
         currency=Currency.from_str(spec.currency.upper()),
         price_precision=_precision(spec.min_price_increment),
         price_increment=Price.from_str(str(spec.min_price_increment)),
