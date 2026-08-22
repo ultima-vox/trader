@@ -35,10 +35,12 @@ jobs:
       BASH_ENV: /dev/null
       CARGO_HOME: /tmp/vox-cargo-${{ github.run_id }}
       RUSTUP_HOME: /tmp/vox-rustup-${{ github.run_id }}
+    defaults:
+      run:
+        shell: 'bash --noprofile --norc -e -o pipefail "{0}"'
     steps:
       - uses: actions/checkout@v5
       - name: Install pinned Rust toolchain
-        shell: bash
         run: |
           set -euo pipefail
           if [[ ! -x "$CARGO_HOME/bin/rustup" ]]; then
