@@ -1,8 +1,8 @@
-# Trader 2.0 — Architecture
+# Vox Trader — Architecture
 
 ## Architectural style
 
-Trader 2.0 starts as a **modular monolith with isolated runtimes and replaceable adapters**, not as a traditional all-in-one monolith and not as a microservice fleet.
+Vox Trader starts as a **modular monolith with isolated runtimes and replaceable adapters**, not as a traditional all-in-one monolith and not as a microservice fleet.
 
 The important unit is the **bounded module**, not the process. Modules communicate through explicit application interfaces and domain events. A module may later be moved into its own process without changing business semantics.
 
@@ -20,31 +20,37 @@ Clients
              HTTPS / WebSocket
                     v
 +--------------------------------------------------+
-|              Trader Application                 |
+|                 Vox Core (Rust)                  |
 |--------------------------------------------------|
-| API Gateway / Auth / RBAC / User preferences    |
+| API / Auth / RBAC / User preferences            |
 | Application services / orchestration            |
 |--------------------------------------------------|
 | Market       | Decision    | Strategy            |
 | Portfolio    | Risk        | Position Mgmt       |
-| Research     | ML/Models   | AI Agents           |
 | Audit        | Automation  | System              |
+| Broker Gateway / persistence / read models       |
 +---------------------|----------------------------+
                       |
                Runtime boundary
                       v
 +--------------------------------------------------+
-|               NautilusTrader                    |
-| Instrument model / DataEngine / Cache           |
-| ExecutionEngine / Portfolio / Backtest runtime  |
-| Runtime-level risk / event model                |
+|       NautilusTrader Rust runtime / crates       |
+| Instrument model / Data / Execution / Portfolio |
+| Backtest/live runtime / runtime-level risk       |
 +---------------------|----------------------------+
                       |
                Broker boundary
                       v
 +--------------------------------------------------+
-| Broker adapters                                   |
+| Broker adapters                                  |
 | T-Invest first; future IBKR/MOEX/etc.            |
++--------------------------------------------------+
+
+Separate computational plane:
+
++--------------------------------------------------+
+| Vox Research / ML / AI workers (Python)          |
+| training / inference / datasets / notebooks      |
 +--------------------------------------------------+
 ```
 
@@ -54,10 +60,9 @@ The first production topology should be small and explicit:
 
 ```text
 reverse-proxy
-  -> web-ui
-  -> application-api
-  -> trading-runtime worker
-  -> research/ML worker(s)
+  -> vox-web
+  -> vox-core (Rust)
+  -> vox-ml-worker(s) (Python, only when needed)
 
 shared infrastructure:
   PostgreSQL
@@ -70,21 +75,21 @@ Do not use NATS/Kafka/RabbitMQ by default. Introduce a durable message broker on
 
 ## Process isolation
 
-The following boundaries are process-worthy from the beginning:
+### 1. Vox Core process
 
-### 1. Application/API process
+Owns HTTP/WebSocket API, auth, broker sessions, market data, execution, reconciliation, safety-critical runtime state, application orchestration and durable broker/application projections.
 
-Owns HTTP/WebSocket API, auth, user/session state, read models and orchestration.
+The codebase is internally modular. A module is split into a process only when fault isolation or scaling justifies the operational cost.
 
-### 2. Trading runtime process
+### 2. Web frontend
 
-Owns live Nautilus runtime, broker sessions, execution, reconciliation and safety-critical trading state. A UI or ML failure must not crash this process.
+TypeScript frontend is independently deployable/static and communicates only with Vox Core APIs.
 
 ### 3. Research/ML workers
 
-CPU/GPU-intensive training, feature generation and bulk historical computations run outside the live trading process. They may scale horizontally.
+CPU/GPU-intensive training, feature generation, model inference where appropriate and bulk historical computations run outside Vox Core. They may scale horizontally.
 
-This is the primary answer to the prior single-core/memory problem: heavy analytical workloads and latency-sensitive trading do not share one interpreter/process/memory lifecycle.
+A Python crash, CUDA OOM or model failure must not terminate or stall live trading.
 
 ## Modules and responsibilities
 
@@ -130,11 +135,11 @@ Converts approved plans into runtime orders and tracks lifecycle through Nautilu
 
 ### Research
 
-Historical data, replay, backtests, feature computation, experiment metadata.
+Historical data, replay, backtests, feature computation, experiment metadata. Heavy/offline computation may be delegated to Python workers.
 
 ### ML / Model Registry
 
-Dataset definitions, training jobs, model metadata, metrics, promotion state and inference interfaces.
+Dataset definitions, training jobs, model metadata, metrics, promotion state and inference interfaces. Python implementations are isolated behind explicit contracts.
 
 ### AI Agents
 
@@ -147,6 +152,24 @@ Defines which strategy/agent is allowed to progress from advisory to automatic e
 ### Audit / Observability
 
 Durable decision/execution audit trail, correlation IDs, structured logs, metrics and health.
+
+## T-Invest -> Vox -> Nautilus data ownership
+
+All T-Invest data enters through the Vox T-Invest adapter and is normalized into typed Vox provider/domain representations first.
+
+```text
+T-Invest
+   |
+   v
+Vox typed adapter
+   |---------------------> Vox storage / read models / API / analytics / ML
+   |
+   +---------------------> Nautilus mapper/runtime (only faithful runtime data)
+```
+
+Nautilus is not the owner of all broker data. News, fundamentals, reports, issuer metadata, capability state and similar provider information remain Vox data. Trading instruments, market events, execution/account reports and other faithful runtime concepts are also mapped into Nautilus where required.
+
+Do not implement a second competing order/position engine in Vox. Vox keeps durable identities, broker evidence, audit/reconciliation state and product read models; Nautilus owns the in-runtime trading-engine lifecycle where its semantics are canonical.
 
 ## Data ownership
 
@@ -166,14 +189,17 @@ Redis, if used, is never the only source of durable financial state.
 
 ## Concurrency model
 
-Use concurrency deliberately:
+Rust/Tokio is the baseline for Vox Core asynchronous I/O and concurrency.
+
+Rules:
 
 - live runtime: event-driven, low-blocking, bounded work per event;
-- I/O: async where the underlying client benefits from it;
-- CPU-heavy analytics: separate worker process pool;
-- ML training: isolated process/container, optional GPU;
-- no long CPU work on API/event-loop threads;
-- bounded queues with explicit backpressure and drop/fail policy.
+- async tasks must be cancellation-safe and supervised;
+- no unbounded channels/queues;
+- CPU-heavy analytics never execute on latency-sensitive async tasks;
+- ML training/inference with material CPU/GPU load uses isolated Python workers/processes;
+- explicit backpressure/drop/fail policy for every high-volume stream;
+- no idle busy-loop polling.
 
 ## Scaling rule
 
@@ -182,19 +208,29 @@ A module is extracted into a service only if at least one is true:
 1. independent scaling is needed;
 2. fault isolation materially improves safety;
 3. independent deployment cadence is required;
-4. a different runtime/language is justified by measured performance;
+4. a different runtime/language is justified by measured or ecosystem requirements;
 5. regulatory/security isolation requires it.
 
 Until then it remains an in-process module behind the same interface.
 
 ## Language/runtime strategy
 
-- **Python** for application orchestration, strategies, research, ML and integration with NautilusTrader;
-- **Rust-backed NautilusTrader internals** provide the performance-sensitive trading runtime foundation;
-- frontend uses TypeScript;
-- additional Rust components are allowed only when profiling demonstrates a real hot path or when a broker adapter benefits materially from native implementation.
+- **Rust** is the primary language for Vox Core: application backend, broker adapters, market data, execution, reconciliation, risk/runtime, orchestration and persistence integration;
+- **NautilusTrader pure Rust/v2** is the preferred trading-runtime integration path where required capabilities are available and qualified;
+- **TypeScript** is used for the web frontend;
+- **Python** is restricted to isolated research/ML/AI workers and experimentation where its ecosystem materially helps;
+- **Go is not part of the baseline stack**. It may be introduced only for a later independently justified service.
 
-Do not rewrite modules in a lower-level language merely because the previous application consumed too much CPU. First isolate workloads and measure.
+The existing Python production seed under `src/trader2/` is transitional and must not receive new product functionality. It is replaced by the Rust foundation under ADR-0002.
+
+## Precision policy
+
+Financial economics must never depend on binary floating-point approximation.
+
+- use exact fixed-point/decimal representations for broker money, price, quantity and contract economics;
+- enable/qualify Nautilus high-precision support where the domain requires it;
+- preserve broker integer/nano semantics exactly at the adapter boundary;
+- fail closed if a critical conversion cannot be represented faithfully.
 
 ## Safety invariants
 
@@ -205,8 +241,13 @@ Do not rewrite modules in a lower-level language merely because the previous app
 - no direct AI-to-broker path;
 - no direct UI-to-broker path;
 - all mutations have correlation/request identities;
-- restart must converge from durable local identities plus broker-authoritative reports.
+- restart must converge from durable local identities plus broker-authoritative reports;
+- live mutations are disabled by default;
+- Python worker availability is never a prerequisite for safe core runtime recovery.
 
 ## Architectural decision records
 
-All irreversible or cross-cutting decisions belong in `architecture/adr/`. ADR-0001 accepts NautilusTrader as the trading-runtime foundation.
+Cross-cutting decisions belong in `architecture/adr/`.
+
+- ADR-0001 accepts NautilusTrader as the trading-runtime foundation.
+- ADR-0002 makes Vox Trader Rust-first and moves Python outside the capital-critical core.
