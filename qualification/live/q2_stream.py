@@ -29,6 +29,13 @@ WS_URL = (
     "/tinkoff.public.invest.api.contract.v1.MarketDataStreamService/MarketDataStream"
 )
 
+REQUIRED_ACKS = {
+    "subscribe_trades_response",
+    "subscribe_order_book_response",
+    "subscribe_info_response",
+    "subscribe_last_price_response",
+}
+
 
 @dataclass
 class StreamEvidence:
@@ -92,15 +99,16 @@ def _make_engine() -> tuple[DataEngine, Cache]:
 
 
 def _ack_name(message: dict[str, Any]) -> str | None:
-    for name in (
-        "subscribe_trades_response",
-        "subscribe_order_book_response",
-        "subscribe_info_response",
-        "subscribe_last_price_response",
-    ):
+    for name in REQUIRED_ACKS:
         if name in message:
             return name
     return None
+
+
+def _sample_complete(*, evidence: StreamEvidence, got_market_event: bool, require_market_event: bool) -> bool:
+    if evidence.subscription_acks != REQUIRED_ACKS:
+        return False
+    return got_market_event or not require_market_event
 
 
 async def _run_one_connection(
@@ -147,6 +155,12 @@ async def _run_one_connection(
             ack = _ack_name(message)
             if ack:
                 evidence.subscription_acks.add(ack)
+                if _sample_complete(
+                    evidence=evidence,
+                    got_market_event=got_market_event,
+                    require_market_event=require_market_event,
+                ):
+                    break
                 continue
 
             if "ping" in message:
@@ -173,49 +187,39 @@ async def _run_one_connection(
                 evidence.trades += 1
                 evidence.last_trade_id = str(tick.trade_id)
                 got_market_event = True
-                if require_market_event:
-                    break
-                continue
+            else:
+                orderbook = message.get("orderbook")
+                if orderbook:
+                    if orderbook.get("is_consistent") is False:
+                        raise QualificationError("stream order book reported is_consistent=false")
+                    if not orderbook.get("time"):
+                        raise QualificationError("stream order book has no event time")
+                    evidence.books += 1
+                    got_market_event = True
+                else:
+                    trading_status = message.get("trading_status")
+                    if trading_status:
+                        if not trading_status.get("time"):
+                            raise QualificationError("stream trading status has no event time")
+                        evidence.statuses += 1
+                        got_market_event = True
+                    else:
+                        last_price = message.get("last_price")
+                        if last_price:
+                            if not last_price.get("time"):
+                                raise QualificationError("stream last price has no event time")
+                            _ = _quotation(last_price.get("price"), field="stream.last_price.price")
+                            evidence.last_prices += 1
+                            got_market_event = True
 
-            orderbook = message.get("orderbook")
-            if orderbook:
-                if orderbook.get("is_consistent") is False:
-                    raise QualificationError("stream order book reported is_consistent=false")
-                if not orderbook.get("time"):
-                    raise QualificationError("stream order book has no event time")
-                evidence.books += 1
-                got_market_event = True
-                if require_market_event:
-                    break
-                continue
+            if _sample_complete(
+                evidence=evidence,
+                got_market_event=got_market_event,
+                require_market_event=require_market_event,
+            ):
+                break
 
-            trading_status = message.get("trading_status")
-            if trading_status:
-                if not trading_status.get("time"):
-                    raise QualificationError("stream trading status has no event time")
-                evidence.statuses += 1
-                got_market_event = True
-                if require_market_event:
-                    break
-                continue
-
-            last_price = message.get("last_price")
-            if last_price:
-                if not last_price.get("time"):
-                    raise QualificationError("stream last price has no event time")
-                _quotation(last_price.get("price"), field="stream.last_price.price")
-                evidence.last_prices += 1
-                got_market_event = True
-                if require_market_event:
-                    break
-
-        required_acks = {
-            "subscribe_trades_response",
-            "subscribe_order_book_response",
-            "subscribe_info_response",
-            "subscribe_last_price_response",
-        }
-        missing = required_acks - evidence.subscription_acks
+        missing = REQUIRED_ACKS - evidence.subscription_acks
         if missing:
             raise QualificationError(f"missing subscription ACKs: {sorted(missing)}")
         if require_market_event and not got_market_event:
@@ -271,7 +275,7 @@ async def _main_async() -> int:
             timeout_seconds=30.0,
         )
         print(
-            "        acks=4 "
+            f"        acks={len(first.subscription_acks)} "
             f"trades={first.trades} books={first.books} statuses={first.statuses} "
             f"last_prices={first.last_prices} pings={first.pings}"
         )
@@ -289,7 +293,7 @@ async def _main_async() -> int:
             timeout_seconds=30.0,
         )
         print(
-            "        acks=4 "
+            f"        acks={len(second.subscription_acks)} "
             f"trades={second.trades} books={second.books} statuses={second.statuses} "
             f"last_prices={second.last_prices} pings={second.pings}"
         )
