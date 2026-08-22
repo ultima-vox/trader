@@ -1,35 +1,44 @@
 # Trader 2.0
 
-Trader 2.0 is a new-generation AI-assisted trading platform built around a qualified upstream trading runtime rather than a bespoke execution engine.
+Trader 2.0 is an AI-assisted trading platform built around a qualified upstream trading runtime rather than a bespoke execution engine.
 
 ## Current status
 
-**Architecture qualification only. No product implementation has started.**
+**Runtime qualification complete. Architecture baseline in progress.**
 
-The first decision is whether NautilusTrader can be used as the trading runtime for T-Invest/MOEX without distorting broker, futures, market-data, execution, reconciliation, or risk semantics.
+NautilusTrader has been accepted as the Trader 2.0 trading-runtime foundation after live T-Invest qualification of instruments/futures economics, market data/reconnect, sandbox execution, reconciliation, restart recovery and UNKNOWN post-dispatch semantics.
 
-## Preferred target architecture
+See `architecture/adr/ADR-0001-nautilus-runtime.md`.
 
-- NautilusTrader as upstream trading runtime (dependency, not fork)
-- Rust-native T-Invest adapter
-- Python intelligence / ML layer
-- React + TypeScript frontend
-- Trader-owned advanced risk layer before runtime execution risk
-- shared backtest/live domain logic
-- deterministic safety path; AI/LLM never has direct order authority
+## Architecture direction
 
-## Qualification sequence
+- NautilusTrader as upstream trading runtime (dependency, not fork);
+- modular-monolith application with explicit bounded modules;
+- isolated live trading runtime process;
+- isolated research/ML workers for CPU/GPU-heavy work;
+- T-Invest broker adapter first;
+- Python for orchestration/strategy/research/ML;
+- TypeScript frontend;
+- Trader-owned advanced risk before runtime execution safeguards;
+- shared backtest/live strategy-domain logic;
+- deterministic execution safety path; AI/LLM has no direct broker authority;
+- broker-authoritative reconciliation.
 
-1. Q1 — T-Invest instrument semantics
-2. Q2 — T-Invest market-data semantics
-3. Q3 — execution and order lifecycle
-4. Q4 — reconciliation, unknown outcomes, crash recovery
-5. Q5 — futures PnL/margin/economic parity
-6. Q6 — performance and resource qualification
-7. Architecture Decision Record: accept or reject NautilusTrader
+## Baseline documents
 
-Product implementation starts only after the runtime passes qualification.
+- `PRODUCT.md` — product scope and principles;
+- `ARCHITECTURE.md` — modules, processes, deployment and scaling rules;
+- `DOMAIN_MODEL.md` — canonical financial/application domain objects;
+- `TRADING_PIPELINE.md` — signal-to-execution lifecycle;
+- `RISK_MODEL.md` — advanced risk and reservation model;
+- `BROKER_ADAPTER_SPEC.md` — broker boundary contract;
+- `DESIGN_SYSTEM.md` — operator terminal UX/design rules;
+- `IMPLEMENTATION_PLAN.md` — staged development sequence.
+
+## Qualification
+
+Qualification harnesses remain under `qualification/` as regression evidence for adapter/runtime compatibility.
 
 ## Legacy reference
 
-The previous `ultima-vox/ai-trader` repository remains a reference source for proven domain requirements, tests, broker semantics, safety rules, and UX lessons. Source code is not to be copied wholesale into Trader 2.0.
+The previous `ultima-vox/ai-trader` repository remains a reference source for proven domain requirements, tests, broker semantics, safety rules and UX lessons. Source code is not copied wholesale into Trader 2.0.
