@@ -1,14 +1,25 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "trader-nautilus-qualification"
-version = "0.0.1"
-description = "Architecture qualification PoC for NautilusTrader + T-Invest"
+name = "trader2"
+version = "0.1.0.dev0"
+description = "Trader 2.0 trading platform"
 requires-python = ">=3.11"
 dependencies = [
   "nautilus_trader==1.231.0",
-  "pytest>=8.0,<9.0",
   "websockets>=15.0,<16.0",
 ]
 
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0,<10.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["qualification/tests"]
+pythonpath = ["src", "."]
+testpaths = ["tests", "qualification/tests"]
