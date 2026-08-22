@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
   "nautilus_trader==1.231.0",
   "pytest>=8.0,<9.0",
+  "websockets>=15.0,<16.0",
 ]
 
 [tool.pytest.ini_options]
