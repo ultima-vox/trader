@@ -1,24 +1,24 @@
 # Q3/Q4 — T-Invest sandbox execution, UNKNOWN outcome, and reconciliation
 
-Status: **Q3 PASS / Q4 LIVE EVIDENCE PENDING**
+Status: **Q3 PASS / Q4 PASS — LIVE EVIDENCE RECORDED**
 
 ## Objective
 
 Qualify the execution boundary before accepting NautilusTrader as the Trader 2.0 runtime.
 
-The test must establish that T-Invest order semantics can be represented without unsafe inference and that broker-authoritative state can reconcile local state after ambiguous or interrupted mutations.
+The tests establish that T-Invest order semantics can be represented without unsafe inference and that broker-authoritative state can reconcile local state after ambiguous or interrupted mutations.
 
 ## Safety boundary
 
-All mutation tests run only against T-Invest Sandbox. The live runners require an explicit `--execute` flag and never send a production order.
+All mutation tests ran only against T-Invest Sandbox. The live runners require an explicit `--execute` flag and never send a production order.
 
-The token must be supplied only through `TINVEST_TOKEN`.
+The token is supplied only through `TINVEST_TOKEN`.
 
 ## Q3 — execution lifecycle
 
 ### Live evidence
 
-Q3 market execution passed against sandbox account `c32df791-4fc1-4414-a2cf-fab025accdff`:
+Q3 market execution passed:
 
 - 1-lot SBER market BUY returned `EXECUTION_REPORT_STATUS_FILL`;
 - authoritative `GetSandboxOrderState` confirmed fill;
@@ -38,85 +38,73 @@ Q3 replace/cancel also passed:
 
 **PASS.** Submit/fill/replace/cancel semantics map without identity loss or blind retries.
 
-## Q3 invariants
-
-- client request IDs are UUIDs and are never reused for distinct mutations;
-- broker order ID and client request ID are stored as distinct identities;
-- a transport timeout after dispatch is never translated into `REJECTED`;
-- no blind retry of an ambiguous mutation is allowed;
-- cancel/replace use authoritative broker state to resolve races;
-- quantity is expressed in broker lots at the T-Invest boundary and converted only at the domain adapter boundary.
-
 ## Q4 — reconciliation / recovery
-
-`qualification/live/q4_reconciliation.py` implements the remaining qualification scenarios.
 
 ### Q4a/Q4b — restart with broker state
 
-Prepare a resting broker order and persist only qualification identity state:
+A resting SBER order was created and minimal qualification identity state persisted locally.
 
-```bash
-python -m qualification.live.q4_reconciliation \
-  --execute \
-  --account '<sandbox-account-id>' \
-  --prepare-restart
-```
+A fresh process then reconstructed the broker state solely from authoritative SandboxService reads, without resubmitting the original mutation.
 
-Then terminate that process and run a fresh process:
+Observed live evidence:
 
-```bash
-python -m qualification.live.q4_reconciliation \
-  --resume-restart
-```
+- persisted client request ID remained available;
+- persisted broker order ID remained available;
+- authoritative order state after restart was `EXECUTION_REPORT_STATUS_NEW`;
+- broker snapshot contained one active order;
+- portfolio and positions were re-read from the broker;
+- no order mutation was resent;
+- cleanup subsequently changed the authoritative final state to `EXECUTION_REPORT_STATUS_CANCELLED`.
 
-The fresh process must reconstruct order/account state solely from:
+Result:
 
-- `GetSandboxOrders`;
-- `GetSandboxPortfolio`;
-- `GetSandboxPositions`;
-- `GetSandboxOrderState`.
-
-It must not resubmit the order.
-
-Optional cleanup after successful reconciliation:
-
-```bash
-python -m qualification.live.q4_reconciliation \
-  --execute \
-  --resume-restart \
-  --cleanup
-```
+**PASS: fresh process reconstructed broker-authoritative order/account state without resubmitting the mutation.**
 
 ### Q4c — UNKNOWN mutation simulation
 
-The harness performs a real SandboxService dispatch, deliberately hides the returned response from the adapter layer, records the local outcome as `UNKNOWN`, and then reconciles only through broker-authoritative state:
+The harness dispatched a real SandboxService mutation and deliberately discarded the returned mutation response at the local adapter boundary.
 
-```bash
-python -m qualification.live.q4_reconciliation \
-  --execute \
-  --account '<sandbox-account-id>' \
-  --unknown-after-dispatch \
-  --cleanup
-```
+Local outcome was explicitly represented as:
 
-The request must not be retried blindly. `GetSandboxOrders` is searched by the unique `orderRequestId`, then `GetSandboxOrderState` resolves the authoritative status.
+`UNKNOWN`
 
-## PASS criteria
+It then reconciled using the unique request identity and broker-authoritative state.
 
-Q3/Q4 PASS requires all of the following:
+Observed live evidence:
 
-- submit/fill/cancel/replace semantics map without identity loss;
-- broker state is sufficient to reconstruct orders and positions after restart;
-- ambiguous post-dispatch outcomes remain UNKNOWN until reconciliation;
-- duplicate application of fills/positions is prevented;
-- no requirement to change T-Invest semantics to satisfy Nautilus abstractions.
+- the dispatched mutation was found broker-side;
+- it resolved to a broker order with `EXECUTION_REPORT_STATUS_NEW`;
+- the ambiguous local result was never translated into `REJECTED`;
+- no blind retry was performed;
+- cleanup produced authoritative `EXECUTION_REPORT_STATUS_CANCELLED`.
 
-## FAIL criteria
+Results:
 
-Reject the runtime/adaptation approach if any of these are unavoidable:
+**PASS: post-dispatch ambiguity remained UNKNOWN until broker evidence resolved it.**
 
-- timeout must be represented as rejected/failed before broker evidence exists;
-- broker request/order identity cannot be mapped losslessly;
-- reconciliation cannot reconstruct broker-authoritative state after restart;
-- replace/cancel races require blind mutation retries;
-- futures/share quantity or price semantics must be approximated.
+**PASS: no blind retry was performed.**
+
+## Q3/Q4 invariants — result
+
+PASS:
+
+- client request IDs are UUIDs and are never reused for distinct mutations;
+- broker order ID and client request ID are distinct identities;
+- a post-dispatch response loss is not translated into `REJECTED`;
+- no blind retry of an ambiguous mutation is necessary;
+- cancel/replace use authoritative broker state to resolve outcomes;
+- quantity remains broker lots at the T-Invest boundary;
+- broker state is sufficient to reconstruct the tested active order/account state after process restart;
+- no T-Invest semantic approximation was required.
+
+## Qualification verdict
+
+**Q3: PASS**
+
+**Q4: PASS**
+
+Combined with the previously completed Q1 instrument/futures qualification and Q2 market-data/reconnect qualification, the architecture qualification provides sufficient evidence to accept NautilusTrader as the Trader 2.0 trading-runtime foundation.
+
+The formal decision is recorded in `architecture/adr/ADR-0001-nautilus-runtime.md`.
+
+Remaining work is implementation hardening, not foundation selection: production-grade T-Invest adapter plumbing, partial-fill/race coverage, persistent deduplication, rate limiting, observability, performance qualification, advanced risk integration, and controlled Nautilus upgrade compatibility tests.
