@@ -71,16 +71,21 @@ def _iso_to_ns(value: str | None, *, field: str) -> int:
 
 
 def _future_asset_class(asset_type: str) -> AssetClass:
+    normalized = asset_type.strip().upper()
+    if normalized.startswith("TYPE_"):
+        normalized = normalized.removeprefix("TYPE_")
+
     mapping = {
-        "security": "EQUITY",
-        "index": "INDEX",
-        "currency": "FX",
-        "commodity": "COMMODITY",
+        "SECURITY": AssetClass.EQUITY,
+        "INDEX": AssetClass.INDEX,
+        "CURRENCY": AssetClass.FX,
+        "COMMODITY": AssetClass.COMMODITY,
     }
-    enum_name = mapping.get(asset_type.lower())
-    if enum_name is None or not hasattr(AssetClass, enum_name):
-        raise QualificationError(f"unsupported T-Invest future asset_type={asset_type!r}")
-    return getattr(AssetClass, enum_name)
+
+    try:
+        return mapping[normalized]
+    except KeyError as exc:
+        raise QualificationError(f"unsupported T-Invest future asset_type={asset_type!r}") from exc
 
 
 def _select_sber(instruments: list[dict[str, Any]]) -> dict[str, Any]:
