@@ -1,0 +1,20 @@
+[package]
+name = "vox-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+time.workspace = true
+thiserror.workspace = true
+vox-domain = { path = "../vox-domain" }
+vox-nautilus = { path = "../vox-nautilus" }
+vox-tinvest = { path = "../vox-tinvest" }
+
+[lints]
+workspace = true
