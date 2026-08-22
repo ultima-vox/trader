@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Iterable
+from typing import Any
 
 from nautilus_trader.model.currencies import Currency
 from nautilus_trader.model.enums import AssetClass
