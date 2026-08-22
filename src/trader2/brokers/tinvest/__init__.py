@@ -1,0 +1,1 @@
+"""T-Invest production adapter."""
