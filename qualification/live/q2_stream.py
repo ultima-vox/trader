@@ -24,7 +24,10 @@ from qualification.poc.q1_instruments import TInvestShareSpec
 from qualification.poc.q1_instruments import to_nautilus_equity
 from qualification.poc.q2_market_data import to_nautilus_trade_tick
 
-WS_URL = "wss://invest-public-api.tbank.ru/ws/"
+WS_URL = (
+    "wss://invest-public-api.tbank.ru/ws"
+    "/tinkoff.public.invest.api.contract.v1.MarketDataStreamService/MarketDataStream"
+)
 
 
 @dataclass
@@ -254,6 +257,7 @@ async def _main_async() -> int:
         print("Q2b LIVE STREAM QUALIFICATION")
         print("=============================")
         print(f"SBER: uid={share_uid} lot={share_spec.lot} nautilus_id={share_nt.id}")
+        print(f"WS: {WS_URL}")
         print("PHASE 1: connect, authenticate, subscribe, receive ACKs + market event")
 
         first = await _run_one_connection(
