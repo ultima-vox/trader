@@ -4,7 +4,7 @@ import asyncio
 import json
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -14,9 +14,17 @@ class TInvestTransportError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class TInvestHttpTransport:
-    token: str
+    token: str = field(repr=False)
     base_url: str = "https://invest-public-api.tbank.ru/rest"
     timeout_seconds: float = 20.0
+
+    def __post_init__(self) -> None:
+        if not self.token.strip():
+            raise ValueError("T-Invest token must not be empty")
+        if self.timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        if not self.base_url.startswith("https://"):
+            raise ValueError("T-Invest base_url must use HTTPS")
 
     async def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await asyncio.to_thread(self._post_sync, path, payload)
