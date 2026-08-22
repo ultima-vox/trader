@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "trader2"
 version = "0.1.0.dev0"
-description = "Trader 2.0 trading platform"
+description = "Vox Trader trading platform"
 requires-python = ">=3.11"
 dependencies = [
   "nautilus_trader==1.231.0",
