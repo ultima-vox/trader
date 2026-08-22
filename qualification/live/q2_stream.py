@@ -6,12 +6,10 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Any
 
 from nautilus_trader.cache.cache import Cache
-from nautilus_trader.common.clock import TestClock
-from nautilus_trader.common.component import MessageBus
+from nautilus_trader.common.component import MessageBus, TestClock
 from nautilus_trader.data.engine import DataEngine
 from nautilus_trader.model.identifiers import TraderId
 
@@ -202,7 +200,7 @@ async def _run_one_connection(
             if last_price:
                 if not last_price.get("time"):
                     raise QualificationError("stream last price has no event time")
-                _ = _quotation(last_price.get("price"), field="stream.last_price.price")
+                _quotation(last_price.get("price"), field="stream.last_price.price")
                 evidence.last_prices += 1
                 got_market_event = True
                 if require_market_event:
