@@ -31,17 +31,21 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, "1"]
     timeout-minutes: 30
+    env:
+      CARGO_HOME: /tmp/vox-cargo-home
+      RUSTUP_HOME: /tmp/vox-rustup-home
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install pinned Rust toolchain
         shell: bash
         run: |
           set -euo pipefail
-          if ! command -v rustup >/dev/null 2>&1; then
+          if [[ ! -x "$CARGO_HOME/bin/rustup" ]]; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --profile minimal --default-toolchain none
-            source "$HOME/.cargo/env"
           fi
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          export PATH="$CARGO_HOME/bin:$PATH"
           rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
           rustup default 1.97.1
       - run: cargo fmt --all --check
