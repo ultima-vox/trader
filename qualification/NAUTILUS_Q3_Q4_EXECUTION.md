@@ -1,6 +1,6 @@
 # Q3/Q4 — T-Invest sandbox execution, UNKNOWN outcome, and reconciliation
 
-Status: **IMPLEMENTATION / LIVE EVIDENCE PENDING**
+Status: **Q3 PASS / Q4 LIVE EVIDENCE PENDING**
 
 ## Objective
 
@@ -10,24 +10,33 @@ The test must establish that T-Invest order semantics can be represented without
 
 ## Safety boundary
 
-All mutation tests run only against T-Invest Sandbox. The live runner requires an explicit `--execute` flag and never sends a production order.
+All mutation tests run only against T-Invest Sandbox. The live runners require an explicit `--execute` flag and never send a production order.
 
 The token must be supplied only through `TINVEST_TOKEN`.
 
 ## Q3 — execution lifecycle
 
-Required live scenarios:
+### Live evidence
 
-1. create or select an isolated sandbox account;
-2. fund the account in RUB;
-3. submit a 1-lot SBER market order with a UUID idempotency key;
-4. verify the returned request/order identifiers and authoritative `GetSandboxOrderState`;
-5. verify `GetSandboxPortfolio` / `GetSandboxPositions` after execution;
-6. submit a non-marketable limit order;
-7. replace it using a new idempotency key;
-8. cancel it;
-9. verify the final broker state from `GetSandboxOrders` / `GetSandboxOrderState`;
-10. flatten any test position before cleanup unless the Q4 restart scenario explicitly requires it to remain open.
+Q3 market execution passed against sandbox account `c32df791-4fc1-4414-a2cf-fab025accdff`:
+
+- 1-lot SBER market BUY returned `EXECUTION_REPORT_STATUS_FILL`;
+- authoritative `GetSandboxOrderState` confirmed fill;
+- position appeared in broker snapshot;
+- 1-lot market SELL flattened the position;
+- active orders returned to zero.
+
+Q3 replace/cancel also passed:
+
+- non-marketable SBER LIMIT BUY returned `EXECUTION_REPORT_STATUS_NEW`;
+- replace used a distinct idempotency/request ID and returned a new broker order ID;
+- cancel targeted the replacement order ID;
+- authoritative final status was `EXECUTION_REPORT_STATUS_CANCELLED` with zero executed lots;
+- active orders returned to zero and no SBER position remained.
+
+### Q3 verdict
+
+**PASS.** Submit/fill/replace/cancel semantics map without identity loss or blind retries.
 
 ## Q3 invariants
 
@@ -40,38 +49,57 @@ Required live scenarios:
 
 ## Q4 — reconciliation / recovery
 
-Required scenarios:
+`qualification/live/q4_reconciliation.py` implements the remaining qualification scenarios.
 
-### Q4a — authoritative snapshot
+### Q4a/Q4b — restart with broker state
 
-Given an account with broker-side orders/positions, collect:
+Prepare a resting broker order and persist only qualification identity state:
+
+```bash
+python -m qualification.live.q4_reconciliation \
+  --execute \
+  --account '<sandbox-account-id>' \
+  --prepare-restart
+```
+
+Then terminate that process and run a fresh process:
+
+```bash
+python -m qualification.live.q4_reconciliation \
+  --resume-restart
+```
+
+The fresh process must reconstruct order/account state solely from:
 
 - `GetSandboxOrders`;
 - `GetSandboxPortfolio`;
 - `GetSandboxPositions`;
-- `GetSandboxOrderState` for known order IDs.
+- `GetSandboxOrderState`.
 
-The resulting state is treated as broker-authoritative evidence.
+It must not resubmit the order.
 
-### Q4b — restart with state
+Optional cleanup after successful reconciliation:
 
-1. leave one known sandbox state item (open position and/or resting order);
-2. terminate the local qualification process;
-3. restart with only the persisted account ID and known client/order IDs;
-4. reconstruct order/position state solely from broker reports;
-5. prove local state converges to broker state without resubmitting the mutation.
+```bash
+python -m qualification.live.q4_reconciliation \
+  --execute \
+  --resume-restart \
+  --cleanup
+```
 
 ### Q4c — UNKNOWN mutation simulation
 
-The qualification harness must simulate a response loss **after dispatch**. It must record the local outcome as `UNKNOWN`, then query by request/order identity and reconcile to one authoritative result:
+The harness performs a real SandboxService dispatch, deliberately hides the returned response from the adapter layer, records the local outcome as `UNKNOWN`, and then reconciles only through broker-authoritative state:
 
-- accepted/open;
-- partially filled;
-- filled;
-- canceled/replaced;
-- rejected/not found, only when broker evidence proves non-acceptance.
+```bash
+python -m qualification.live.q4_reconciliation \
+  --execute \
+  --account '<sandbox-account-id>' \
+  --unknown-after-dispatch \
+  --cleanup
+```
 
-The harness must not classify a socket timeout itself as a broker rejection.
+The request must not be retried blindly. `GetSandboxOrders` is searched by the unique `orderRequestId`, then `GetSandboxOrderState` resolves the authoritative status.
 
 ## PASS criteria
 
@@ -92,7 +120,3 @@ Reject the runtime/adaptation approach if any of these are unavoidable:
 - reconciliation cannot reconstruct broker-authoritative state after restart;
 - replace/cancel races require blind mutation retries;
 - futures/share quantity or price semantics must be approximated.
-
-## Current implementation
-
-`qualification/live/q3_sandbox.py` provides the first sandbox execution qualification harness. It is intentionally adapter-oriented rather than product code.
