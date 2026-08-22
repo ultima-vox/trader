@@ -74,5 +74,5 @@ def test_future_mapping_uses_broker_tick_value_as_contract_multiplier() -> None:
     )
     instrument = to_nautilus_future(spec)
     assert str(instrument.id) == "TESTF.TINVEST"
-    assert str(instrument.multiplier) == "1.5"
+    assert Decimal(str(instrument.multiplier)) == Decimal("1.5")
     assert instrument.info["tinvest"]["min_price_increment_amount"] == "7.50"
