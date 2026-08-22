@@ -32,8 +32,8 @@ jobs:
     runs-on: [self-hosted, Linux, X64, "1"]
     timeout-minutes: 30
     env:
-      CARGO_HOME: /tmp/vox-cargo-home
-      RUSTUP_HOME: /tmp/vox-rustup-home
+      CARGO_HOME: /tmp/vox-cargo-${{ github.run_id }}
+      RUSTUP_HOME: /tmp/vox-rustup-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v5
       - name: Install pinned Rust toolchain
