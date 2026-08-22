@@ -1,8 +1,14 @@
-# Trader 2.0 — Product baseline
+# Vox Trader — Product baseline
+
+## Product name
+
+**Vox Trader** is the official product name. The previous working name **Trader 2.0** is retired as a product-facing name and may remain only in historical discussions or internal migration context.
+
+Repository and Python package identifiers are intentionally not renamed as part of this branding change; technical renaming is deferred unless it provides a concrete engineering benefit and can be performed without destabilizing active development.
 
 ## Purpose
 
-Trader 2.0 is a production-grade client-server platform for discretionary, semi-automated and autonomous trading with a primary focus on exchange-traded instruments and derivatives. The system combines broker connectivity, real-time market data, portfolio/risk control, strategy execution, backtesting, ML/AI analysis and an operator-grade web terminal.
+Vox Trader is a production-grade client-server platform for discretionary, semi-automated and autonomous trading with a primary focus on exchange-traded instruments and derivatives. The system combines broker connectivity, real-time market data, portfolio/risk control, strategy execution, backtesting, ML/AI analysis and an operator-grade web terminal.
 
 The product is not an MVP and must not optimize for demo speed at the cost of operational safety, recoverability or architectural clarity.
 
@@ -21,7 +27,7 @@ The product is not an MVP and must not optimize for demo speed at the cost of op
 
 - multi-broker architecture, T-Invest first;
 - real-time quotes, trades, candles, order books and instrument status;
-- shares and futures first, extensible to options and other asset classes;
+- complete broker instrument/reference-data coverage where available;
 - manual, strategy-driven and autonomous order flows;
 - portfolio state and PnL;
 - advanced risk and exposure controls;
