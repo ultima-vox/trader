@@ -83,7 +83,6 @@ def main() -> int:
                 "from": _iso(now - timedelta(days=10)),
                 "to": _iso(now),
                 "interval": "CANDLE_INTERVAL_DAY",
-                "candleSourceType": "CANDLE_SOURCE_EXCHANGE",
                 "limit": 20,
             },
         )
