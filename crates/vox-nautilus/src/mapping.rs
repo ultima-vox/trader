@@ -27,6 +27,8 @@ pub struct MappedFuture {
     pub instrument: FuturesContract,
     /// Provider aliases retained for reconciliation and collision-free lookup.
     pub identity: vox_domain::InstrumentIdentity,
+    /// Original provider display value retained outside Nautilus trading identity.
+    pub provider_underlying_name: String,
     /// Exact value of one quoted point, also used as Nautilus multiplier.
     pub money_per_point: ExactDecimal,
     /// Authoritative settlement-currency value of one minimum price increment.
@@ -81,6 +83,12 @@ pub fn to_nautilus_future(spec: &FutureSpec) -> Result<MappedFuture, MappingErro
             expiration_ns: spec.expiration_ns,
         });
     }
+    if spec.underlying_id.is_empty() || !spec.underlying_id.is_ascii() {
+        return Err(MappingError::InvalidNautilusValue {
+            field: "future underlying identifier",
+            reason: "authoritative identifier must be non-empty ASCII".to_string(),
+        });
+    }
 
     let common = &spec.instrument;
     let instrument_id = parse_instrument_id(&common.instrument_id)?;
@@ -91,7 +99,7 @@ pub fn to_nautilus_future(spec: &FutureSpec) -> Result<MappedFuture, MappingErro
     let money_per_point = future_money_per_point(spec)?;
     let multiplier = money_per_point.to_nautilus_quantity()?;
     let exchange = spec.exchange.as_deref().map(Ustr::from);
-    let underlying = Ustr::from(spec.underlying.as_str());
+    let underlying = Ustr::from(spec.underlying_id.as_str());
 
     let instrument = FuturesContract::new_checked(
         instrument_id,
@@ -127,6 +135,7 @@ pub fn to_nautilus_future(spec: &FutureSpec) -> Result<MappedFuture, MappingErro
     Ok(MappedFuture {
         instrument,
         identity: common.identity.clone(),
+        provider_underlying_name: spec.provider_underlying_name.clone(),
         money_per_point,
         price_increment_amount: spec.economics.min_price_increment_amount(),
     })

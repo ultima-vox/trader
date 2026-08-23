@@ -67,7 +67,8 @@ async fn main() -> anyhow::Result<()> {
         },
         asset_class: map_asset_class(future.asset_type)?,
         exchange: None,
-        underlying: future.basic_asset.to_owned(),
+        underlying_id: future.underlying_id.to_owned(),
+        provider_underlying_name: future.basic_asset.to_owned(),
         activation_ns,
         expiration_ns,
         economics,
@@ -93,6 +94,8 @@ async fn main() -> anyhow::Result<()> {
         || mapped_future.instrument.lot_size.to_string() != future_lot.to_string()
         || mapped_future.instrument.multiplier.to_string()
             != mapped_future.money_per_point.to_string()
+        || mapped_future.instrument.underlying != future.underlying_id
+        || mapped_future.provider_underlying_name != future.basic_asset
     {
         bail!("future source-to-runtime identity/economics round-trip mismatch");
     }
@@ -110,13 +113,15 @@ async fn main() -> anyhow::Result<()> {
         mapped_share.instrument.price_precision
     );
     println!(
-        "FUTURE: id={} uid={} figi={} class={} currency={} asset_type={} lot={} activation_ns={} expiration_ns={} tick_nanos={} tick_amount_nanos={} money_per_point={} multiplier={} initial_margin_buy_nanos={} initial_margin_sell_nanos={}",
+        "FUTURE: id={} uid={} figi={} class={} currency={} asset_type={} provider_underlying={} underlying_id={} lot={} activation_ns={} expiration_ns={} tick_nanos={} tick_amount_nanos={} money_per_point={} multiplier={} initial_margin_buy_nanos={} initial_margin_sell_nanos={}",
         mapped_future.instrument.id,
         mapped_future.identity.uid(),
         mapped_future.identity.figi().unwrap_or("<missing>"),
         mapped_future.identity.class_code(),
         mapped_future.instrument.currency,
         future.asset_type,
+        mapped_future.provider_underlying_name,
+        mapped_future.instrument.underlying,
         mapped_future.instrument.lot_size,
         activation_ns,
         expiration_ns,

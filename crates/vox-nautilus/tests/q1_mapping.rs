@@ -43,7 +43,8 @@ fn q1_future() -> Result<FutureSpec, FuturesEconomicsError> {
         instrument: common("KCQ6-SPBFUT.TINVEST", "KCQ6", 1, fixed(0, 1_000_000)),
         asset_class: FutureAssetClass::Commodity,
         exchange: Some("MISX".to_string()),
-        underlying: "COFFEE".to_string(),
+        underlying_id: "f6d6c6b8-4f98-4ca2-8d47-a7d17e7154cb".to_string(),
+        provider_underlying_name: "Кофе".to_string(),
         activation_ns: 1_767_225_600_000_000_000,
         expiration_ns: 1_788_134_400_000_000_000,
         economics: FuturesEconomics::new(tick, tick, tick_amount)?,
@@ -100,8 +101,30 @@ fn maps_captured_kcq6_economics_without_approximation() -> Result<(), Box<dyn st
     assert_eq!(mapped.instrument.multiplier.to_string(), "833.55");
     assert_eq!(mapped.instrument.multiplier.raw, 8_335_500_000_000_000_000);
     assert_eq!(mapped.instrument.lot_size.to_string(), "1");
-    assert_eq!(mapped.instrument.underlying.to_string(), "COFFEE");
+    assert_eq!(
+        mapped.instrument.underlying.to_string(),
+        "f6d6c6b8-4f98-4ca2-8d47-a7d17e7154cb"
+    );
+    assert_eq!(mapped.provider_underlying_name, "Кофе");
     Ok(())
+}
+
+#[test]
+fn rejects_missing_or_non_ascii_authoritative_underlying_id() {
+    for invalid_id in ["", "Кофе-ID"] {
+        let Ok(mut spec) = q1_future() else {
+            panic!("Q1 fixture must contain valid economics");
+        };
+        spec.underlying_id = invalid_id.to_string();
+
+        assert!(matches!(
+            to_nautilus_future(&spec),
+            Err(MappingError::InvalidNautilusValue {
+                field: "future underlying identifier",
+                ..
+            })
+        ));
+    }
 }
 
 #[test]

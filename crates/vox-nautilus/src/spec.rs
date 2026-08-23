@@ -42,7 +42,10 @@ pub struct FutureSpec {
     pub instrument: InstrumentSpec,
     pub asset_class: FutureAssetClass,
     pub exchange: Option<String>,
-    pub underlying: String,
+    /// Stable authoritative provider identifier accepted by Nautilus (non-empty ASCII).
+    pub underlying_id: String,
+    /// Original provider display value. Never transliterated or used as trading identity.
+    pub provider_underlying_name: String,
     pub activation_ns: u64,
     pub expiration_ns: u64,
     pub economics: FuturesEconomics,

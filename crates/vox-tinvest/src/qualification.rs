@@ -222,6 +222,8 @@ pub struct FutureInstrument {
     pub min_price_increment: Option<Quotation>,
     pub api_trade_available_flag: Option<bool>,
     pub basic_asset: Option<String>,
+    pub basic_asset_position_uid: Option<String>,
+    pub basic_asset_uid: Option<String>,
     pub asset_type: Option<String>,
     pub first_trade_date: Option<String>,
     pub expiration_date: Option<String>,
@@ -237,6 +239,7 @@ pub struct QualifiedFuture<'a> {
     pub lot: i64,
     pub min_price_increment: Quotation,
     pub basic_asset: &'a str,
+    pub underlying_id: &'a str,
     pub asset_type: &'a str,
     pub first_trade_date: &'a str,
     pub expiration_date: &'a str,
@@ -252,6 +255,7 @@ impl<'a> TryFrom<&'a FutureInstrument> for QualifiedFuture<'a> {
         let uid = required_future_text(instrument.uid.as_deref())?;
         let currency = required_future_text(instrument.currency.as_deref())?;
         let basic_asset = required_future_text(instrument.basic_asset.as_deref())?;
+        let underlying_id = authoritative_underlying_id(instrument)?;
         let asset_type = required_future_text(instrument.asset_type.as_deref())?;
         let first_trade_date = required_future_text(instrument.first_trade_date.as_deref())?;
         let expiration_date = required_future_text(instrument.expiration_date.as_deref())?;
@@ -298,11 +302,36 @@ impl<'a> TryFrom<&'a FutureInstrument> for QualifiedFuture<'a> {
             lot,
             min_price_increment,
             basic_asset,
+            underlying_id,
             asset_type,
             first_trade_date,
             expiration_date,
         })
     }
+}
+
+fn authoritative_underlying_id(
+    instrument: &FutureInstrument,
+) -> Result<&str, QualificationDataError> {
+    let value = instrument
+        .basic_asset_position_uid
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            instrument
+                .basic_asset_uid
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .ok_or(QualificationDataError::InvalidFuture(
+            "authoritative underlying identifier is missing",
+        ))?;
+    if !value.is_ascii() {
+        return Err(QualificationDataError::InvalidFuture(
+            "authoritative underlying identifier must be ASCII",
+        ));
+    }
+    Ok(value)
 }
 
 impl QualifiedFuture<'_> {
@@ -1019,6 +1048,7 @@ mod tests {
             Err(error) => panic!("unexpected future selection error: {error}"),
         };
         assert_eq!(selected.ticker, "NEAREST");
+        assert_eq!(selected.underlying_id, "underlying-NEAREST");
     }
 
     #[test]
@@ -1075,6 +1105,57 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn non_ascii_provider_underlying_keeps_display_and_uses_authoritative_uid() {
+        let mut future = future_json("KCQ6", "2026-01-01T00:00:00Z", "2027-03-01T00:00:00Z");
+        let object = future
+            .as_object_mut()
+            .expect("future fixture must be an object");
+        object.insert("basicAsset".to_string(), json!("Кофе"));
+        object.insert(
+            "basicAssetPositionUid".to_string(),
+            json!("f6d6c6b8-4f98-4ca2-8d47-a7d17e7154cb"),
+        );
+        let response = serde_json::from_value::<FuturesResponse>(json!({
+            "instruments": [future]
+        }))
+        .expect("provider future must deserialize");
+
+        let selected = select_tradeable_future_at(&response, timestamp("2026-08-23T00:00:00Z"))
+            .expect("authoritative ASCII UID must qualify");
+
+        assert_eq!(selected.basic_asset, "Кофе");
+        assert_eq!(
+            selected.underlying_id,
+            "f6d6c6b8-4f98-4ca2-8d47-a7d17e7154cb"
+        );
+    }
+
+    #[test]
+    fn selected_future_without_faithful_ascii_underlying_id_fails_closed() {
+        for invalid_id in [None, Some("Кофе-ID")] {
+            let mut future = future_json("KCQ6", "2026-01-01T00:00:00Z", "2027-03-01T00:00:00Z");
+            let object = future
+                .as_object_mut()
+                .expect("future fixture must be an object");
+            object.insert("basicAsset".to_string(), json!("Кофе"));
+            object.remove("basicAssetPositionUid");
+            object.remove("basicAssetUid");
+            if let Some(invalid_id) = invalid_id {
+                object.insert("basicAssetPositionUid".to_string(), json!(invalid_id));
+            }
+            let response = serde_json::from_value::<FuturesResponse>(json!({
+                "instruments": [future]
+            }))
+            .expect("wire-optional underlying UID must deserialize");
+
+            assert!(matches!(
+                select_tradeable_future_at(&response, timestamp("2026-08-23T00:00:00Z")),
+                Err(QualificationDataError::InvalidFuture(_))
+            ));
+        }
+    }
+
     fn share_json() -> serde_json::Value {
         json!({
             "figi": "BBG004730N88",
@@ -1106,6 +1187,7 @@ mod tests {
             "minPriceIncrement": {"units": "0", "nano": 1000000},
             "apiTradeAvailableFlag": true,
             "basicAsset": "TEST",
+            "basicAssetPositionUid": format!("underlying-{ticker}"),
             "assetType": "commodity",
             "firstTradeDate": activation,
             "expirationDate": expiration
