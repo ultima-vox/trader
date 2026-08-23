@@ -67,8 +67,8 @@ async fn main() -> anyhow::Result<()> {
         },
         asset_class: map_asset_class(future.asset_type)?,
         exchange: None,
-        underlying_id: future.underlying_id.to_owned(),
-        provider_underlying_name: future.basic_asset.to_owned(),
+        underlying_id: future.underlying_id.to_string(),
+        provider_underlying_name: future.basic_asset.map(str::to_owned),
         activation_ns,
         expiration_ns,
         economics,
@@ -94,8 +94,8 @@ async fn main() -> anyhow::Result<()> {
         || mapped_future.instrument.lot_size.to_string() != future_lot.to_string()
         || mapped_future.instrument.multiplier.to_string()
             != mapped_future.money_per_point.to_string()
-        || mapped_future.instrument.underlying != future.underlying_id
-        || mapped_future.provider_underlying_name != future.basic_asset
+        || mapped_future.instrument.underlying != future.underlying_id.as_ref()
+        || mapped_future.provider_underlying_name.as_deref() != future.basic_asset
     {
         bail!("future source-to-runtime identity/economics round-trip mismatch");
     }
@@ -120,7 +120,10 @@ async fn main() -> anyhow::Result<()> {
         mapped_future.identity.class_code(),
         mapped_future.instrument.currency,
         future.asset_type,
-        mapped_future.provider_underlying_name,
+        mapped_future
+            .provider_underlying_name
+            .as_deref()
+            .unwrap_or("<missing>"),
         mapped_future.instrument.underlying,
         mapped_future.instrument.lot_size,
         activation_ns,

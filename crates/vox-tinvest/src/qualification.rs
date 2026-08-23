@@ -1,7 +1,7 @@
 //! Narrow live qualification surface for issue #12. This is deliberately not
 //! the reference-data catalogue owned by issue #7.
 
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 use serde::de::{self, Visitor};
 use serde::ser::SerializeStruct;
@@ -229,7 +229,7 @@ pub struct FutureInstrument {
     pub expiration_date: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QualifiedFuture<'a> {
     pub figi: &'a str,
     pub ticker: &'a str,
@@ -238,8 +238,9 @@ pub struct QualifiedFuture<'a> {
     pub currency: &'a str,
     pub lot: i64,
     pub min_price_increment: Quotation,
-    pub basic_asset: &'a str,
-    pub underlying_id: &'a str,
+    pub basic_asset: Option<&'a str>,
+    /// ASCII Nautilus adapter token derived from provider underlying metadata.
+    pub underlying_id: Cow<'a, str>,
     pub asset_type: &'a str,
     pub first_trade_date: &'a str,
     pub expiration_date: &'a str,
@@ -254,8 +255,11 @@ impl<'a> TryFrom<&'a FutureInstrument> for QualifiedFuture<'a> {
         let class_code = required_future_text(instrument.class_code.as_deref())?;
         let uid = required_future_text(instrument.uid.as_deref())?;
         let currency = required_future_text(instrument.currency.as_deref())?;
-        let basic_asset = required_future_text(instrument.basic_asset.as_deref())?;
-        let underlying_id = authoritative_underlying_id(instrument)?;
+        let basic_asset = instrument
+            .basic_asset
+            .as_deref()
+            .filter(|value| !value.trim().is_empty());
+        let underlying_id = nautilus_underlying_token(instrument)?;
         let asset_type = required_future_text(instrument.asset_type.as_deref())?;
         let first_trade_date = required_future_text(instrument.first_trade_date.as_deref())?;
         let expiration_date = required_future_text(instrument.expiration_date.as_deref())?;
@@ -310,28 +314,41 @@ impl<'a> TryFrom<&'a FutureInstrument> for QualifiedFuture<'a> {
     }
 }
 
-fn authoritative_underlying_id(
+fn nautilus_underlying_token(
     instrument: &FutureInstrument,
-) -> Result<&str, QualificationDataError> {
-    let value = instrument
-        .basic_asset_position_uid
+) -> Result<Cow<'_, str>, QualificationDataError> {
+    for provider_uid in [
+        instrument.basic_asset_position_uid.as_deref(),
+        instrument.basic_asset_uid.as_deref(),
+    ] {
+        if let Some(provider_uid) =
+            provider_uid.filter(|value| !value.trim().is_empty() && value.is_ascii())
+        {
+            return Ok(Cow::Borrowed(provider_uid));
+        }
+    }
+
+    let basic_asset = instrument
+        .basic_asset
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            instrument
-                .basic_asset_uid
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-        })
         .ok_or(QualificationDataError::InvalidFuture(
-            "authoritative underlying identifier is missing",
+            "provider underlying UID and basic asset are all missing",
         ))?;
-    if !value.is_ascii() {
-        return Err(QualificationDataError::InvalidFuture(
-            "authoritative underlying identifier must be ASCII",
-        ));
+    Ok(Cow::Owned(encode_basic_asset(basic_asset)))
+}
+
+fn encode_basic_asset(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    const PREFIX: &str = "TINVEST_BA_HEX_";
+
+    let mut token = String::with_capacity(PREFIX.len() + value.len() * 2);
+    token.push_str(PREFIX);
+    for byte in value.as_bytes() {
+        token.push(HEX[usize::from(byte >> 4)] as char);
+        token.push(HEX[usize::from(byte & 0x0f)] as char);
     }
-    Ok(value)
+    token
 }
 
 impl QualifiedFuture<'_> {
@@ -1116,6 +1133,7 @@ mod tests {
             "basicAssetPositionUid".to_string(),
             json!("f6d6c6b8-4f98-4ca2-8d47-a7d17e7154cb"),
         );
+        object.insert("basicAssetUid".to_string(), json!("lower-priority-uid"));
         let response = serde_json::from_value::<FuturesResponse>(json!({
             "instruments": [future]
         }))
@@ -1124,7 +1142,7 @@ mod tests {
         let selected = select_tradeable_future_at(&response, timestamp("2026-08-23T00:00:00Z"))
             .expect("authoritative ASCII UID must qualify");
 
-        assert_eq!(selected.basic_asset, "Кофе");
+        assert_eq!(selected.basic_asset, Some("Кофе"));
         assert_eq!(
             selected.underlying_id,
             "f6d6c6b8-4f98-4ca2-8d47-a7d17e7154cb"
@@ -1132,28 +1150,69 @@ mod tests {
     }
 
     #[test]
-    fn selected_future_without_faithful_ascii_underlying_id_fails_closed() {
-        for invalid_id in [None, Some("Кофе-ID")] {
-            let mut future = future_json("KCQ6", "2026-01-01T00:00:00Z", "2027-03-01T00:00:00Z");
+    fn basic_asset_uid_is_used_when_position_uid_is_not_valid_ascii() {
+        let mut future = future_json("KCQ6", "2026-01-01T00:00:00Z", "2027-03-01T00:00:00Z");
+        let object = future
+            .as_object_mut()
+            .expect("future fixture must be an object");
+        object.insert("basicAssetPositionUid".to_string(), json!("Кофе-ID"));
+        object.insert("basicAssetUid".to_string(), json!("basic-asset-uid"));
+        let instrument = serde_json::from_value::<FutureInstrument>(future)
+            .expect("provider future must deserialize");
+
+        let selected = QualifiedFuture::try_from(&instrument)
+            .expect("secondary authoritative ASCII UID must qualify");
+
+        assert_eq!(selected.underlying_id, "basic-asset-uid");
+    }
+
+    #[test]
+    fn unicode_basic_asset_fallback_is_lossless_stable_and_preserved() {
+        let mut futures = [
+            future_json("KCQ6", "2026-01-01T00:00:00Z", "2027-03-01T00:00:00Z"),
+            future_json("KCU6", "2026-01-01T00:00:00Z", "2027-06-01T00:00:00Z"),
+        ];
+        for future in &mut futures {
             let object = future
                 .as_object_mut()
                 .expect("future fixture must be an object");
             object.insert("basicAsset".to_string(), json!("Кофе"));
             object.remove("basicAssetPositionUid");
             object.remove("basicAssetUid");
-            if let Some(invalid_id) = invalid_id {
-                object.insert("basicAssetPositionUid".to_string(), json!(invalid_id));
-            }
-            let response = serde_json::from_value::<FuturesResponse>(json!({
-                "instruments": [future]
-            }))
-            .expect("wire-optional underlying UID must deserialize");
-
-            assert!(matches!(
-                select_tradeable_future_at(&response, timestamp("2026-08-23T00:00:00Z")),
-                Err(QualificationDataError::InvalidFuture(_))
-            ));
         }
+        let response = serde_json::from_value::<FuturesResponse>(json!({
+            "instruments": futures
+        }))
+        .expect("provider futures must deserialize");
+        let first = QualifiedFuture::try_from(&response.instruments[0])
+            .expect("Unicode basic asset must encode");
+        let second = QualifiedFuture::try_from(&response.instruments[1])
+            .expect("same Unicode basic asset must encode across expiries");
+
+        assert_eq!(first.basic_asset, Some("Кофе"));
+        assert_eq!(second.basic_asset, Some("Кофе"));
+        assert_eq!(first.underlying_id, "TINVEST_BA_HEX_D09AD0BED184D0B5");
+        assert_eq!(second.underlying_id, first.underlying_id);
+    }
+
+    #[test]
+    fn selected_future_with_all_underlying_sources_empty_fails_closed() {
+        let mut future = future_json("KCQ6", "2026-01-01T00:00:00Z", "2027-03-01T00:00:00Z");
+        let object = future
+            .as_object_mut()
+            .expect("future fixture must be an object");
+        object.insert("basicAsset".to_string(), json!("  "));
+        object.remove("basicAssetPositionUid");
+        object.insert("basicAssetUid".to_string(), json!(""));
+        let response = serde_json::from_value::<FuturesResponse>(json!({
+            "instruments": [future]
+        }))
+        .expect("wire-optional underlying sources must deserialize");
+
+        assert!(matches!(
+            select_tradeable_future_at(&response, timestamp("2026-08-23T00:00:00Z")),
+            Err(QualificationDataError::InvalidFuture(_))
+        ));
     }
 
     fn share_json() -> serde_json::Value {

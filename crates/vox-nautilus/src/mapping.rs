@@ -28,7 +28,7 @@ pub struct MappedFuture {
     /// Provider aliases retained for reconciliation and collision-free lookup.
     pub identity: vox_domain::InstrumentIdentity,
     /// Original provider display value retained outside Nautilus trading identity.
-    pub provider_underlying_name: String,
+    pub provider_underlying_name: Option<String>,
     /// Exact value of one quoted point, also used as Nautilus multiplier.
     pub money_per_point: ExactDecimal,
     /// Authoritative settlement-currency value of one minimum price increment.
@@ -85,8 +85,8 @@ pub fn to_nautilus_future(spec: &FutureSpec) -> Result<MappedFuture, MappingErro
     }
     if spec.underlying_id.is_empty() || !spec.underlying_id.is_ascii() {
         return Err(MappingError::InvalidNautilusValue {
-            field: "future underlying identifier",
-            reason: "authoritative identifier must be non-empty ASCII".to_string(),
+            field: "future underlying adapter token",
+            reason: "adapter token must be non-empty ASCII".to_string(),
         });
     }
 
