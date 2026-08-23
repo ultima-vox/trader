@@ -40,6 +40,22 @@ jobs:
       run:
         shell: 'bash --noprofile --norc -e -o pipefail "{0}"'
     steps:
+      - name: Remove stale Vox CI artifacts
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for candidate in /tmp/vox-cargo-* /tmp/vox-rustup-* /tmp/vox-target-*; do
+            resolved="$(realpath -e -- "$candidate")"
+            case "$resolved" in
+              /tmp/vox-cargo-[0-9]*|/tmp/vox-rustup-[0-9]*|/tmp/vox-target-[0-9]*)
+                rm -rf -- "$resolved"
+                ;;
+              *)
+                echo "Refusing unexpected cleanup target: $resolved" >&2
+                exit 1
+                ;;
+            esac
+          done
       - uses: actions/checkout@v5
       - name: Install pinned Rust toolchain
         run: |
@@ -57,3 +73,20 @@ jobs:
       - run: cargo test --locked --workspace
       - name: Smoke Vox Core composition
         run: cargo run --locked -p vox-core --bin vox-core
+      - name: Remove current Vox CI artifacts
+        if: always()
+        run: |
+          set -euo pipefail
+          for candidate in "$CARGO_HOME" "$RUSTUP_HOME" "$CARGO_TARGET_DIR"; do
+            [[ -e "$candidate" ]] || continue
+            resolved="$(realpath -e -- "$candidate")"
+            case "$resolved" in
+              /tmp/vox-cargo-[0-9]*|/tmp/vox-rustup-[0-9]*|/tmp/vox-target-[0-9]*)
+                rm -rf -- "$resolved"
+                ;;
+              *)
+                echo "Refusing unexpected cleanup target: $resolved" >&2
+                exit 1
+                ;;
+            esac
+          done
