@@ -21,13 +21,13 @@ async fn main() -> anyhow::Result<()> {
     let shares = rest.qualification_shares().await?.into_body();
     let share = select_sber(&shares)?;
     let snapshot = rest
-        .qualification_order_book(&share.uid, 10)
+        .qualification_order_book(share.uid, 10)
         .await?
         .into_body();
-    snapshot.validate_rq2(&share.uid)?;
+    snapshot.validate_rq2(share.uid)?;
 
     let registry = SubscriptionRegistry::new(8)?;
-    for subscription in rq2_market_data_subscriptions(&share.uid)? {
+    for subscription in rq2_market_data_subscriptions(share.uid)? {
         registry.upsert(subscription).await?;
     }
     let reconnect =
@@ -40,10 +40,10 @@ async fn main() -> anyhow::Result<()> {
         bail!("stream event channel capacity is not bounded as configured");
     }
 
-    let first_generation = wait_for_ready_market_event(&mut stream, 1, &share.uid).await?;
+    let first_generation = wait_for_ready_market_event(&mut stream, 1, share.uid).await?;
     stream.control().force_reconnect().await?;
     let second_generation =
-        wait_for_ready_market_event(&mut stream, first_generation + 1, &share.uid).await?;
+        wait_for_ready_market_event(&mut stream, first_generation + 1, share.uid).await?;
     stream.shutdown().await?;
 
     println!("RQ2 LIVE QUALIFICATION");

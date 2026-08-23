@@ -127,42 +127,81 @@ pub struct SharesResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ShareInstrument {
-    pub figi: String,
-    pub ticker: String,
-    pub class_code: String,
-    pub uid: String,
-    pub currency: String,
-    pub lot: i64,
-    pub min_price_increment: Quotation,
-    pub api_trade_available_flag: bool,
+    pub figi: Option<String>,
+    pub ticker: Option<String>,
+    pub class_code: Option<String>,
+    pub uid: Option<String>,
+    pub currency: Option<String>,
+    pub lot: Option<i64>,
+    pub min_price_increment: Option<Quotation>,
+    pub api_trade_available_flag: Option<bool>,
 }
 
-impl ShareInstrument {
-    pub fn validate_rq1(&self) -> Result<(), QualificationDataError> {
-        if self.ticker.is_empty()
-            || self.class_code.is_empty()
-            || self.uid.is_empty()
-            || self.currency.is_empty()
-        {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QualifiedShare<'a> {
+    pub figi: &'a str,
+    pub ticker: &'a str,
+    pub class_code: &'a str,
+    pub uid: &'a str,
+    pub currency: &'a str,
+    pub lot: i64,
+    pub min_price_increment: Quotation,
+}
+
+impl<'a> TryFrom<&'a ShareInstrument> for QualifiedShare<'a> {
+    type Error = QualificationDataError;
+
+    fn try_from(instrument: &'a ShareInstrument) -> Result<Self, Self::Error> {
+        let figi = required_share_text(instrument.figi.as_deref())?;
+        let ticker = required_share_text(instrument.ticker.as_deref())?;
+        let class_code = required_share_text(instrument.class_code.as_deref())?;
+        let uid = required_share_text(instrument.uid.as_deref())?;
+        let currency = required_share_text(instrument.currency.as_deref())?;
+        if ticker != "SBER" || class_code != "TQBR" {
             return Err(QualificationDataError::InvalidShare(
-                "required identity field is empty",
+                "selected share is not SBER/TQBR",
             ));
         }
-        if self.lot <= 0 {
+        let lot = instrument
+            .lot
+            .ok_or(QualificationDataError::InvalidShare("lot is missing"))?;
+        if lot <= 0 {
             return Err(QualificationDataError::InvalidShare("lot must be positive"));
         }
-        if self.min_price_increment.fixed_point().total_nanos() <= 0 {
+        let min_price_increment =
+            instrument
+                .min_price_increment
+                .ok_or(QualificationDataError::InvalidShare(
+                    "minimum price increment is missing",
+                ))?;
+        if min_price_increment.fixed_point().total_nanos() <= 0 {
             return Err(QualificationDataError::InvalidShare(
                 "minimum price increment must be positive",
             ));
         }
-        if !self.api_trade_available_flag {
+        if instrument.api_trade_available_flag != Some(true) {
             return Err(QualificationDataError::InvalidShare(
-                "API trading flag is false",
+                "API trading flag is missing or false",
             ));
         }
-        Ok(())
+        Ok(Self {
+            figi,
+            ticker,
+            class_code,
+            uid,
+            currency,
+            lot,
+            min_price_increment,
+        })
     }
+}
+
+fn required_share_text(value: Option<&str>) -> Result<&str, QualificationDataError> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(QualificationDataError::InvalidShare(
+            "required identity field is missing or empty",
+        ))
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -174,48 +213,103 @@ pub struct FuturesResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FutureInstrument {
-    pub figi: String,
-    pub ticker: String,
-    pub class_code: String,
-    pub uid: String,
-    pub currency: String,
-    pub lot: i64,
-    pub min_price_increment: Quotation,
-    pub api_trade_available_flag: bool,
-    pub basic_asset: String,
-    pub asset_type: String,
-    pub first_trade_date: String,
-    pub expiration_date: String,
+    pub figi: Option<String>,
+    pub ticker: Option<String>,
+    pub class_code: Option<String>,
+    pub uid: Option<String>,
+    pub currency: Option<String>,
+    pub lot: Option<i64>,
+    pub min_price_increment: Option<Quotation>,
+    pub api_trade_available_flag: Option<bool>,
+    pub basic_asset: Option<String>,
+    pub asset_type: Option<String>,
+    pub first_trade_date: Option<String>,
+    pub expiration_date: Option<String>,
 }
 
-impl FutureInstrument {
-    pub fn validate_rq1(&self) -> Result<(), QualificationDataError> {
-        if self.ticker.is_empty()
-            || self.class_code != "SPBFUT"
-            || self.uid.is_empty()
-            || self.currency.is_empty()
-            || self.basic_asset.is_empty()
-            || self.asset_type.is_empty()
-            || self.first_trade_date.is_empty()
-            || self.expiration_date.is_empty()
-        {
-            return Err(QualificationDataError::InvalidFuture(
-                "required identity/economics field is empty or class is not SPBFUT",
-            ));
-        }
-        if self.lot <= 0 || !self.api_trade_available_flag {
-            return Err(QualificationDataError::InvalidFuture(
-                "lot must be positive and API trading enabled",
-            ));
-        }
-        Ok(())
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QualifiedFuture<'a> {
+    pub figi: &'a str,
+    pub ticker: &'a str,
+    pub class_code: &'a str,
+    pub uid: &'a str,
+    pub currency: &'a str,
+    pub lot: i64,
+    pub min_price_increment: Quotation,
+    pub basic_asset: &'a str,
+    pub asset_type: &'a str,
+    pub first_trade_date: &'a str,
+    pub expiration_date: &'a str,
+}
 
+impl<'a> TryFrom<&'a FutureInstrument> for QualifiedFuture<'a> {
+    type Error = QualificationDataError;
+
+    fn try_from(instrument: &'a FutureInstrument) -> Result<Self, Self::Error> {
+        let figi = required_future_text(instrument.figi.as_deref())?;
+        let ticker = required_future_text(instrument.ticker.as_deref())?;
+        let class_code = required_future_text(instrument.class_code.as_deref())?;
+        let uid = required_future_text(instrument.uid.as_deref())?;
+        let currency = required_future_text(instrument.currency.as_deref())?;
+        let basic_asset = required_future_text(instrument.basic_asset.as_deref())?;
+        let asset_type = required_future_text(instrument.asset_type.as_deref())?;
+        let first_trade_date = required_future_text(instrument.first_trade_date.as_deref())?;
+        let expiration_date = required_future_text(instrument.expiration_date.as_deref())?;
+        if class_code != "SPBFUT" {
+            return Err(QualificationDataError::InvalidFuture(
+                "selected future class is not SPBFUT",
+            ));
+        }
+        let activation = OffsetDateTime::parse(first_trade_date, &Rfc3339).map_err(|_| {
+            QualificationDataError::InvalidFuture("first trade date is not RFC3339")
+        })?;
+        let expiration = OffsetDateTime::parse(expiration_date, &Rfc3339)
+            .map_err(|_| QualificationDataError::InvalidFuture("expiration date is not RFC3339"))?;
+        if activation >= expiration {
+            return Err(QualificationDataError::InvalidFuture(
+                "future lifecycle is empty or reversed",
+            ));
+        }
+        let lot = instrument
+            .lot
+            .ok_or(QualificationDataError::InvalidFuture("lot is missing"))?;
+        if lot <= 0 || instrument.api_trade_available_flag != Some(true) {
+            return Err(QualificationDataError::InvalidFuture(
+                "lot must be positive and API trading flag present and true",
+            ));
+        }
+        let min_price_increment =
+            instrument
+                .min_price_increment
+                .ok_or(QualificationDataError::InvalidFuture(
+                    "minimum price increment is missing",
+                ))?;
+        if min_price_increment.fixed_point().total_nanos() <= 0 {
+            return Err(QualificationDataError::InvalidFuture(
+                "minimum price increment must be positive",
+            ));
+        }
+        Ok(Self {
+            figi,
+            ticker,
+            class_code,
+            uid,
+            currency,
+            lot,
+            min_price_increment,
+            basic_asset,
+            asset_type,
+            first_trade_date,
+            expiration_date,
+        })
+    }
+}
+
+impl QualifiedFuture<'_> {
     pub fn exact_economics(
         &self,
         margin: &FuturesMarginResponse,
     ) -> Result<FuturesEconomics, QualificationDataError> {
-        self.validate_rq1()?;
         FuturesEconomics::new(
             self.min_price_increment.fixed_point(),
             margin.min_price_increment.fixed_point(),
@@ -223,6 +317,14 @@ impl FutureInstrument {
         )
         .map_err(QualificationDataError::FuturesEconomics)
     }
+}
+
+fn required_future_text(value: Option<&str>) -> Result<&str, QualificationDataError> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(QualificationDataError::InvalidFuture(
+            "required identity/economics field is missing or empty",
+        ))
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -327,11 +429,12 @@ impl TInvestRestClient {
     }
 }
 
-pub fn select_sber(response: &SharesResponse) -> Result<&ShareInstrument, QualificationDataError> {
+pub fn select_sber(
+    response: &SharesResponse,
+) -> Result<QualifiedShare<'_>, QualificationDataError> {
     let mut candidates = response.instruments.iter().filter(|instrument| {
-        instrument.ticker == "SBER"
-            && instrument.class_code == "TQBR"
-            && instrument.api_trade_available_flag
+        instrument.ticker.as_deref() == Some("SBER")
+            && instrument.class_code.as_deref() == Some("TQBR")
     });
     let candidate = candidates
         .next()
@@ -339,37 +442,43 @@ pub fn select_sber(response: &SharesResponse) -> Result<&ShareInstrument, Qualif
     if candidates.next().is_some() {
         return Err(QualificationDataError::AmbiguousSber);
     }
-    candidate.validate_rq1()?;
-    Ok(candidate)
+    QualifiedShare::try_from(candidate)
 }
 
 /// Selects nearest-expiry active tradeable SPBFUT from BASE response.
 pub fn select_tradeable_future(
     response: &FuturesResponse,
-) -> Result<&FutureInstrument, QualificationDataError> {
+) -> Result<QualifiedFuture<'_>, QualificationDataError> {
     select_tradeable_future_at(response, OffsetDateTime::now_utc())
 }
 
 fn select_tradeable_future_at(
     response: &FuturesResponse,
     now: OffsetDateTime,
-) -> Result<&FutureInstrument, QualificationDataError> {
+) -> Result<QualifiedFuture<'_>, QualificationDataError> {
     let mut selected: Option<(&FutureInstrument, OffsetDateTime)> = None;
     for instrument in response.instruments.iter().filter(|instrument| {
-        instrument.class_code == "SPBFUT" && instrument.api_trade_available_flag
+        instrument.class_code.as_deref() == Some("SPBFUT")
+            && instrument.api_trade_available_flag == Some(true)
     }) {
-        instrument.validate_rq1()?;
-        let activation =
-            OffsetDateTime::parse(&instrument.first_trade_date, &Rfc3339).map_err(|_| {
-                QualificationDataError::InvalidFuture("first trade date is not RFC3339")
-            })?;
-        let expiration = OffsetDateTime::parse(&instrument.expiration_date, &Rfc3339)
-            .map_err(|_| QualificationDataError::InvalidFuture("expiration date is not RFC3339"))?;
+        let Some(first_trade_date) = instrument.first_trade_date.as_deref() else {
+            continue;
+        };
+        let Some(expiration_date) = instrument.expiration_date.as_deref() else {
+            continue;
+        };
+        let Ok(activation) = OffsetDateTime::parse(first_trade_date, &Rfc3339) else {
+            continue;
+        };
+        let Ok(expiration) = OffsetDateTime::parse(expiration_date, &Rfc3339) else {
+            continue;
+        };
         let earlier_than_selected =
             selected
                 .as_ref()
                 .is_none_or(|(current, current_expiration)| {
-                    (expiration, &instrument.ticker) < (*current_expiration, &current.ticker)
+                    (expiration, instrument.ticker.as_deref())
+                        < (*current_expiration, current.ticker.as_deref())
                 });
         if activation <= now && now < expiration && earlier_than_selected {
             selected = Some((instrument, expiration));
@@ -378,8 +487,7 @@ fn select_tradeable_future_at(
     let candidate = selected
         .map(|(instrument, _)| instrument)
         .ok_or(QualificationDataError::FutureNotFound)?;
-    candidate.validate_rq1()?;
-    Ok(candidate)
+    QualifiedFuture::try_from(candidate)
 }
 
 #[derive(Debug, Error)]
@@ -836,6 +944,59 @@ mod tests {
     }
 
     #[test]
+    fn share_catalogue_ignores_unrelated_missing_economics() {
+        let response = serde_json::from_value::<SharesResponse>(json!({
+            "instruments": [
+                {"ticker": "UNRELATED", "classCode": "TQBR"},
+                share_json()
+            ]
+        }));
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => panic!("unexpected shares decode error: {error}"),
+        };
+        let selected = match select_sber(&response) {
+            Ok(selected) => selected,
+            Err(error) => panic!("unexpected SBER selection error: {error}"),
+        };
+        assert_eq!(selected.ticker, "SBER");
+        assert_eq!(
+            selected.min_price_increment.fixed_point().total_nanos(),
+            1_000_000
+        );
+    }
+
+    #[test]
+    fn selected_share_missing_material_fields_fails_closed() {
+        for missing in [
+            "figi",
+            "uid",
+            "currency",
+            "lot",
+            "minPriceIncrement",
+            "apiTradeAvailableFlag",
+        ] {
+            let mut share = share_json();
+            let object = match share.as_object_mut() {
+                Some(object) => object,
+                None => panic!("share fixture must be an object"),
+            };
+            object.remove(missing);
+            let response = serde_json::from_value::<SharesResponse>(json!({
+                "instruments": [share]
+            }));
+            let response = match response {
+                Ok(response) => response,
+                Err(error) => panic!("wire optionality must deserialize {missing}: {error}"),
+            };
+            assert!(matches!(
+                select_sber(&response),
+                Err(QualificationDataError::InvalidShare(_))
+            ));
+        }
+    }
+
+    #[test]
     fn future_selector_uses_parsed_active_lifecycle_and_nearest_expiry() {
         let response = serde_json::from_value::<FuturesResponse>(json!({
             "instruments": [
@@ -858,6 +1019,80 @@ mod tests {
             Err(error) => panic!("unexpected future selection error: {error}"),
         };
         assert_eq!(selected.ticker, "NEAREST");
+    }
+
+    #[test]
+    fn future_catalogue_ignores_unrelated_missing_economics() {
+        let response = serde_json::from_value::<FuturesResponse>(json!({
+            "instruments": [
+                {
+                    "ticker": "EXPIRED-INCOMPLETE",
+                    "classCode": "SPBFUT",
+                    "apiTradeAvailableFlag": true,
+                    "firstTradeDate": "2025-01-01T00:00:00Z",
+                    "expirationDate": "2026-01-01T00:00:00Z"
+                },
+                future_json("ACTIVE", "2026-01-01T00:00:00Z", "2027-03-01T00:00:00Z")
+            ]
+        }));
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => panic!("unexpected futures decode error: {error}"),
+        };
+        let now = timestamp("2026-08-23T00:00:00Z");
+        let selected = match select_tradeable_future_at(&response, now) {
+            Ok(selected) => selected,
+            Err(error) => panic!("unexpected future selection error: {error}"),
+        };
+        assert_eq!(selected.ticker, "ACTIVE");
+    }
+
+    #[test]
+    fn selected_nearest_future_missing_economics_fails_closed() {
+        let mut nearest = future_json(
+            "NEAREST-INCOMPLETE",
+            "2026-01-01T00:00:00Z",
+            "2027-03-01T00:00:00Z",
+        );
+        let object = match nearest.as_object_mut() {
+            Some(object) => object,
+            None => panic!("future fixture must be an object"),
+        };
+        object.remove("minPriceIncrement");
+        let response = serde_json::from_value::<FuturesResponse>(json!({
+            "instruments": [
+                nearest,
+                future_json("LATER", "2026-01-01T00:00:00Z", "2027-06-01T00:00:00Z")
+            ]
+        }));
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => panic!("wire optionality must deserialize future: {error}"),
+        };
+        assert!(matches!(
+            select_tradeable_future_at(&response, timestamp("2026-08-23T00:00:00Z")),
+            Err(QualificationDataError::InvalidFuture(_))
+        ));
+    }
+
+    fn share_json() -> serde_json::Value {
+        json!({
+            "figi": "BBG004730N88",
+            "ticker": "SBER",
+            "classCode": "TQBR",
+            "uid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
+            "currency": "rub",
+            "lot": 10,
+            "minPriceIncrement": {"units": "0", "nano": 1000000},
+            "apiTradeAvailableFlag": true
+        })
+    }
+
+    fn timestamp(value: &str) -> OffsetDateTime {
+        match OffsetDateTime::parse(value, &Rfc3339) {
+            Ok(timestamp) => timestamp,
+            Err(error) => panic!("unexpected timestamp error: {error}"),
+        }
     }
 
     fn future_json(ticker: &str, activation: &str, expiration: &str) -> serde_json::Value {

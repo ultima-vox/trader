@@ -20,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
     let share = select_sber(&shares)?;
     let future = select_tradeable_future(&futures)?;
     let margin = client
-        .qualification_futures_margin(&future.uid)
+        .qualification_futures_margin(future.uid)
         .await?
         .into_body();
     let economics = future.exact_economics(&margin)?;
@@ -30,13 +30,13 @@ async fn main() -> anyhow::Result<()> {
         instrument: InstrumentSpec {
             identity: InstrumentIdentity::new(
                 "tinvest",
-                share.uid.clone(),
-                Some(share.figi.clone()),
-                share.ticker.clone(),
-                share.class_code.clone(),
+                share.uid,
+                Some(share.figi.to_owned()),
+                share.ticker,
+                share.class_code,
             )?,
             instrument_id: format!("{}-{}.TINVEST", share.ticker, share.class_code),
-            raw_symbol: share.ticker.clone(),
+            raw_symbol: share.ticker.to_owned(),
             currency: share.currency.to_ascii_uppercase(),
             lot_size: share_lot,
             price_increment: share.min_price_increment.fixed_point(),
@@ -45,36 +45,36 @@ async fn main() -> anyhow::Result<()> {
         },
     })?;
 
-    let activation_ns = parse_timestamp_ns(&future.first_trade_date)?;
-    let expiration_ns = parse_timestamp_ns(&future.expiration_date)?;
+    let activation_ns = parse_timestamp_ns(future.first_trade_date)?;
+    let expiration_ns = parse_timestamp_ns(future.expiration_date)?;
     let future_lot = u64::try_from(future.lot).context("future lot must fit u64")?;
     let mapped_future = to_nautilus_future(&FutureSpec {
         instrument: InstrumentSpec {
             identity: InstrumentIdentity::new(
                 "tinvest",
-                future.uid.clone(),
-                Some(future.figi.clone()),
-                future.ticker.clone(),
-                future.class_code.clone(),
+                future.uid,
+                Some(future.figi.to_owned()),
+                future.ticker,
+                future.class_code,
             )?,
             instrument_id: format!("{}-{}.TINVEST", future.ticker, future.class_code),
-            raw_symbol: future.ticker.clone(),
+            raw_symbol: future.ticker.to_owned(),
             currency: future.currency.to_ascii_uppercase(),
             lot_size: future_lot,
             price_increment: future.min_price_increment.fixed_point(),
             ts_event_ns: 0,
             ts_init_ns: 0,
         },
-        asset_class: map_asset_class(&future.asset_type)?,
+        asset_class: map_asset_class(future.asset_type)?,
         exchange: None,
-        underlying: future.basic_asset.clone(),
+        underlying: future.basic_asset.to_owned(),
         activation_ns,
         expiration_ns,
         economics,
     })?;
 
     if mapped_share.identity.uid() != share.uid
-        || mapped_share.identity.figi() != Some(share.figi.as_str())
+        || mapped_share.identity.figi() != Some(share.figi)
         || mapped_share.identity.class_code() != share.class_code
         || mapped_share.instrument.currency.to_string() != share.currency.to_ascii_uppercase()
         || mapped_share
@@ -87,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
         bail!("SBER source-to-runtime identity/economics round-trip mismatch");
     }
     if mapped_future.identity.uid() != future.uid
-        || mapped_future.identity.figi() != Some(future.figi.as_str())
+        || mapped_future.identity.figi() != Some(future.figi)
         || mapped_future.identity.class_code() != future.class_code
         || mapped_future.instrument.currency.to_string() != future.currency.to_ascii_uppercase()
         || mapped_future.instrument.lot_size.to_string() != future_lot.to_string()
