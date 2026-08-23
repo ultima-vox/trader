@@ -74,8 +74,9 @@ Official references:
 
 ## T-Invest transport policy
 
-REST uses HTTPS, Bearer authentication, rustls certificate verification, explicit timeouts, and
-typed request/response DTOs. Provider response body plus `x-tracking-id` are retained on errors.
+REST uses HTTPS, Bearer authentication, rustls certificate verification, host system/native CA
+roots, explicit timeouts, and typed request/response DTOs. Provider response body plus
+`x-tracking-id` are retained on errors.
 Only classified safe reads may use bounded retry. Mutations are attempted once; a failure after
 dispatch remains `UNKNOWN` until broker-authoritative reconciliation. HTTP 429/rate-limit metadata
 feeds bounded backoff without assuming mutation safety.
@@ -86,9 +87,19 @@ the exact `SandboxService`, paper authorization cannot mutate T-Invest, and live
 requires explicit live opt-in. New-exposure authorization additionally requires typed connectivity
 and reconciliation evidence with zero unresolved `UNKNOWN` mutations.
 
-WebSocket uses `wss://invest-public-api.tbank.ru/ws/...`, Bearer authentication, and the
-`json-proto` subprotocol. Desired subscriptions are adapter-owned, ACK order is independent, and
-reconnect restores desired subscriptions into a bounded event channel.
+WebSocket uses `wss://invest-public-api.tbank.ru/ws/...`, Bearer authentication, rustls with the
+same host system/native CA roots, and the `json-proto` subprotocol. This supports provider chains
+trusted by the deployed host, including locally managed/intermediate CAs, without disabling
+hostname or certificate verification. Desired subscriptions are adapter-owned, ACK order is
+independent, and reconnect restores desired subscriptions into a bounded event channel.
+
+Cargo enables `reqwest/rustls-tls-native-roots` and
+`tokio-tungstenite/rustls-tls-native-roots`; WebPKI-only root features are disabled. Deployment
+hosts must trust the T-Invest chain in their operating-system CA store (for example, Russian
+Trusted Sub CA where required). Missing/unreadable trust roots fail the TLS connection closed.
+Vox exposes no certificate- or hostname-verification bypass. To add a private CA, install it into
+the service account's host trust store; application-local CA bundles are not enabled in this
+foundation.
 
 Official references:
 

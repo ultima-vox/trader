@@ -9,8 +9,8 @@ mod websocket;
 
 pub use rest::{
     DEFAULT_REST_BASE_URL, DispatchCertainty, ProviderError, ProviderResponse, RequestMetadata,
-    ResponseMetadata, RestConfig, RestConfigError, RestError, RestErrorKind, RestOperation,
-    TInvestRestClient,
+    ResponseMetadata, RestCertificatePolicy, RestConfig, RestConfigError, RestError, RestErrorKind,
+    RestOperation, TInvestRestClient,
 };
 pub use retry::{
     NoopRetryObserver, RetryEvent, RetryObserver, RetryPolicy, RetryPolicyError, RetryReason,

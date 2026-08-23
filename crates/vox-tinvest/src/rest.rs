@@ -30,6 +30,12 @@ pub enum RestOperation {
     Mutation,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestCertificatePolicy {
+    /// Roots loaded from host operating-system trust store; verification remains enabled.
+    NativeRoots,
+}
+
 impl fmt::Display for RestOperation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -47,6 +53,7 @@ pub struct RestConfig {
     max_request_bytes: usize,
     max_response_bytes: usize,
     retry_policy: RetryPolicy,
+    certificate_policy: RestCertificatePolicy,
 }
 
 impl RestConfig {
@@ -62,6 +69,7 @@ impl RestConfig {
             max_request_bytes: DEFAULT_REQUEST_LIMIT,
             max_response_bytes: DEFAULT_RESPONSE_LIMIT,
             retry_policy: RetryPolicy::default(),
+            certificate_policy: RestCertificatePolicy::NativeRoots,
         }
     }
 
@@ -109,6 +117,10 @@ impl RestConfig {
     pub const fn retry_policy(&self) -> RetryPolicy {
         self.retry_policy
     }
+
+    pub const fn certificate_policy(&self) -> RestCertificatePolicy {
+        self.certificate_policy
+    }
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -153,6 +165,8 @@ impl TInvestRestClient {
         validate_https_url(&config.base_url)?;
         let client = Client::builder()
             .https_only(true)
+            .tls_built_in_root_certs(false)
+            .tls_built_in_native_certs(true)
             .connect_timeout(config.connect_timeout)
             .timeout(config.request_timeout)
             .redirect(reqwest::redirect::Policy::none())
@@ -435,7 +449,7 @@ impl fmt::Debug for TInvestRestClient {
             .debug_struct("TInvestRestClient")
             .field("token", &self.token)
             .field("config", &self.config)
-            .field("client", &"reqwest::Client(rustls)")
+            .field("client", &"reqwest::Client(rustls, native roots)")
             .field("retry_observer", &self.retry_observer)
             .finish()
     }
@@ -876,7 +890,11 @@ mod tests {
     }
 
     #[test]
-    fn production_config_enforces_https_and_client_debug_redacts_token() {
+    fn production_config_uses_native_roots_enforces_https_and_redacts_token() {
+        assert_eq!(
+            RestConfig::production().certificate_policy(),
+            RestCertificatePolicy::NativeRoots
+        );
         let insecure = match Url::parse("http://example.test/rest") {
             Ok(url) => url,
             Err(error) => panic!("unexpected URL error: {error}"),

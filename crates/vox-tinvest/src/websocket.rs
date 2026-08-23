@@ -36,8 +36,8 @@ type ProviderSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CertificatePolicy {
-    /// Public WebPKI roots supplied by rustls. No verification-disable mode exists.
-    WebPkiRoots,
+    /// Roots loaded from host operating-system trust store; verification remains enabled.
+    NativeRoots,
 }
 
 #[derive(Clone, Debug)]
@@ -60,7 +60,7 @@ impl WebSocketConfig {
             connect_timeout: Duration::from_secs(20),
             close_timeout: Duration::from_secs(5),
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
-            certificate_policy: CertificatePolicy::WebPkiRoots,
+            certificate_policy: CertificatePolicy::NativeRoots,
         }
     }
 
@@ -1302,7 +1302,7 @@ mod tests {
     }
 
     #[test]
-    fn websocket_config_rejects_plaintext_transport() {
+    fn websocket_config_uses_native_roots_and_rejects_plaintext() {
         let endpoint = match Url::parse("ws://example.test/stream") {
             Ok(url) => url,
             Err(error) => panic!("unexpected URL error: {error}"),
@@ -1313,7 +1313,7 @@ mod tests {
         ));
         assert_eq!(
             WebSocketConfig::production().certificate_policy(),
-            CertificatePolicy::WebPkiRoots
+            CertificatePolicy::NativeRoots
         );
     }
 
