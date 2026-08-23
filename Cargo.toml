@@ -22,6 +22,7 @@ nautilus-model = { version = "=0.62.0", default-features = false, features = ["h
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_path_to_error = "0.1"
 thiserror = "2.0"
 time = { version = "0.3", features = ["parsing"] }
 tokio = { version = "1.49", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }

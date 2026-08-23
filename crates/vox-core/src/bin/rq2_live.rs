@@ -25,6 +25,9 @@ async fn main() -> anyhow::Result<()> {
         .await?
         .into_body();
     snapshot.validate_rq2(share.uid)?;
+    let snapshot_depth = snapshot
+        .depth
+        .context("validated order-book depth is missing")?;
 
     let registry = SubscriptionRegistry::new(8)?;
     for subscription in rq2_market_data_subscriptions(share.uid)? {
@@ -50,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
     println!("SBER: uid={} lot={}", share.uid, share.lot);
     println!(
         "REST: order_book_depth={} bids={} asks={}",
-        snapshot.depth,
+        snapshot_depth,
         snapshot.bids.len(),
         snapshot.asks.len()
     );
@@ -147,4 +150,41 @@ fn validate_market_event(
         return Ok(true);
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vox_tinvest::qualification::OrderBookMessage;
+
+    fn stream_book(time: &str) -> MarketDataStreamMessage {
+        MarketDataStreamMessage {
+            subscribe_trades_response: None,
+            subscribe_order_book_response: None,
+            subscribe_info_response: None,
+            subscribe_last_price_response: None,
+            trade: None,
+            orderbook: Some(OrderBookMessage {
+                figi: "BBG004730N88".to_string(),
+                instrument_uid: "uid".to_string(),
+                depth: 10,
+                is_consistent: true,
+                time: time.to_string(),
+                bids: Vec::new(),
+                asks: Vec::new(),
+            }),
+            trading_status: None,
+            last_price: None,
+            ping: None,
+        }
+    }
+
+    #[test]
+    fn streaming_order_book_still_requires_provider_event_time() {
+        assert!(validate_market_event(&stream_book(""), "uid").is_err());
+        assert!(
+            validate_market_event(&stream_book("2026-08-23T20:00:00Z"), "uid")
+                .expect("timestamped stream book must validate")
+        );
+    }
 }

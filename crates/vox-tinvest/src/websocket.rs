@@ -299,6 +299,8 @@ pub enum WebSocketError {
     Receive(String),
     #[error("provider returned invalid WebSocket JSON")]
     Decode(#[source] serde_json::Error),
+    #[error("provider returned invalid WebSocket JSON at {path}: {reason}")]
+    DecodePath { path: String, reason: String },
     #[error("subscription acknowledgement failed: {0}")]
     SubscriptionAcknowledgement(String),
     #[error("subscription acknowledgements timed out after {0:?}")]
@@ -377,11 +379,18 @@ impl ProviderMessage {
             .map_err(WebSocketError::Encode)
     }
 
-    pub(crate) fn decode<T>(&self) -> Result<T, WebSocketError>
+    pub(crate) fn decode_with_path<T>(&self) -> Result<T, WebSocketError>
     where
         T: DeserializeOwned,
     {
-        serde_json::from_value(self.0.clone()).map_err(WebSocketError::Decode)
+        let bytes = serde_json::to_vec(&self.0).map_err(WebSocketError::Encode)?;
+        let mut deserializer = serde_json::Deserializer::from_slice(&bytes);
+        serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
+            WebSocketError::DecodePath {
+                path: error.path().to_string(),
+                reason: error.inner().to_string(),
+            }
+        })
     }
 
     pub(crate) const fn as_value(&self) -> &Value {

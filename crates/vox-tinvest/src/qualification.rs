@@ -398,21 +398,31 @@ pub struct OrderBookRequest<'a> {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderBookResponse {
-    pub figi: String,
-    pub instrument_uid: String,
-    pub depth: u32,
-    pub orderbook_ts: String,
+    pub figi: Option<String>,
+    pub depth: Option<u32>,
     #[serde(default)]
     pub bids: Vec<OrderBookLevel>,
     #[serde(default)]
     pub asks: Vec<OrderBookLevel>,
+    pub last_price: Option<Quotation>,
+    pub close_price: Option<Quotation>,
+    pub limit_up: Option<Quotation>,
+    pub limit_down: Option<Quotation>,
+    pub instrument_uid: Option<String>,
+    pub ticker: Option<String>,
+    pub class_code: Option<String>,
+    pub last_price_ts: Option<String>,
+    pub close_price_ts: Option<String>,
+    pub orderbook_ts: Option<String>,
 }
 
 impl OrderBookResponse {
     pub fn validate_rq2(&self, expected_uid: &str) -> Result<(), QualificationDataError> {
-        if self.instrument_uid != expected_uid || self.orderbook_ts.is_empty() || self.depth == 0 {
+        if self.instrument_uid.as_deref() != Some(expected_uid)
+            || self.depth.is_none_or(|depth| depth == 0)
+        {
             return Err(QualificationDataError::InvalidOrderBook(
-                "identity, timestamp, and positive depth are required",
+                "authoritative identity and positive depth are required",
             ));
         }
         if self.bids.is_empty() && self.asks.is_empty() {
@@ -784,7 +794,7 @@ impl ProviderMessage {
     pub fn decode_qualification_market_data(
         &self,
     ) -> Result<MarketDataStreamMessage, WebSocketError> {
-        self.decode()
+        self.decode_with_path()
     }
 }
 
@@ -968,11 +978,44 @@ mod tests {
     }
 
     #[test]
-    fn typed_order_book_snapshot_is_exact_and_nonempty() {
+    fn typed_stream_decode_error_reports_path_without_payload() {
+        let message = ProviderMessage::new(json!({
+            "subscribe_trades_response": {
+                "trade_subscriptions": [{
+                    "instrument_uid": "public-instrument-uid",
+                    "subscription_status": {"unexpected": "message"}
+                }]
+            }
+        }));
+
+        let error = message
+            .decode_qualification_market_data()
+            .expect_err("message-shaped enum must fail typed decoding");
+        let diagnostic = error.to_string();
+
+        assert!(
+            diagnostic
+                .contains("subscribe_trades_response.trade_subscriptions[0].subscription_status")
+        );
+        assert!(diagnostic.contains("invalid type: map, expected a string"));
+        assert!(!diagnostic.contains("public-instrument-uid"));
+        assert!(!diagnostic.contains("unexpected"));
+    }
+
+    #[test]
+    fn unary_order_book_preserves_full_optional_contract_exactly() {
         let decoded = serde_json::from_value::<OrderBookResponse>(json!({
             "figi": "BBG",
             "instrumentUid": "uid",
+            "ticker": "SBER",
+            "classCode": "TQBR",
             "depth": 10,
+            "lastPrice": {"units": "321", "nano": 500000000},
+            "closePrice": {"units": "320", "nano": 0},
+            "limitUp": {"units": "400", "nano": 0},
+            "limitDown": {"units": "200", "nano": 0},
+            "lastPriceTs": "2026-08-22T09:59:59.123456789Z",
+            "closePriceTs": "2026-08-21T15:40:00Z",
             "orderbookTs": "2026-08-22T10:00:00Z",
             "bids": [{"price": {"units": "321", "nano": 500000000}, "quantity": "2"}],
             "asks": []
@@ -987,6 +1030,51 @@ mod tests {
             321_500_000_000
         );
         assert_eq!(decoded.bids[0].quantity, 2);
+        assert_eq!(decoded.depth, Some(10));
+        assert_eq!(decoded.instrument_uid.as_deref(), Some("uid"));
+        assert_eq!(decoded.ticker.as_deref(), Some("SBER"));
+        assert_eq!(decoded.class_code.as_deref(), Some("TQBR"));
+        assert_eq!(
+            decoded
+                .last_price
+                .expect("fixture last price must be present")
+                .fixed_point()
+                .total_nanos(),
+            321_500_000_000
+        );
+        assert_eq!(
+            decoded.last_price_ts.as_deref(),
+            Some("2026-08-22T09:59:59.123456789Z")
+        );
+        assert_eq!(
+            decoded.close_price_ts.as_deref(),
+            Some("2026-08-21T15:40:00Z")
+        );
+        assert_eq!(
+            decoded.orderbook_ts.as_deref(),
+            Some("2026-08-22T10:00:00Z")
+        );
+    }
+
+    #[test]
+    fn unary_order_book_accepts_missing_optional_timestamps_without_fabrication() {
+        let decoded = serde_json::from_value::<OrderBookResponse>(json!({
+            "figi": "BBG",
+            "instrumentUid": "uid",
+            "depth": 10,
+            "bids": [{"price": {"units": "321", "nano": 500000000}, "quantity": "2"}],
+            "asks": []
+        }))
+        .expect("omitted protobuf message fields must deserialize");
+
+        assert!(decoded.validate_rq2("uid").is_ok());
+        assert_eq!(decoded.last_price, None);
+        assert_eq!(decoded.close_price, None);
+        assert_eq!(decoded.limit_up, None);
+        assert_eq!(decoded.limit_down, None);
+        assert_eq!(decoded.last_price_ts, None);
+        assert_eq!(decoded.close_price_ts, None);
+        assert_eq!(decoded.orderbook_ts, None);
     }
 
     #[test]
