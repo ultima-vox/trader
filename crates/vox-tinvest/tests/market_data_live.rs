@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::time::Duration;
 
@@ -7,7 +8,9 @@ use vox_tinvest::market_data::{
     CanonicalCandle, CanonicalClosePrice, CanonicalLastPrice, CanonicalMarketValueInstrument,
     CanonicalTechAnalysisValue, CanonicalTrade, CanonicalTradingStatusFact,
     CanonicalUnaryOrderBook, MarketSubscription, MarketSubscriptionRegistry, SubscriptionKind,
+    get_my_subscriptions_request,
 };
+use vox_tinvest::reference::catalogue_request;
 use vox_tinvest::{SecretToken, TInvestGrpcClient};
 
 fn period() -> (Timestamp, Timestamp) {
@@ -29,9 +32,8 @@ fn period() -> (Timestamp, Timestamp) {
 async fn complete_market_data_surface_qualifies_over_generated_grpc() -> Result<(), Box<dyn Error>>
 {
     let token = SecretToken::new(std::env::var("TINVEST_TOKEN")?)?;
-    let instrument_uid = std::env::var("TINVEST_MARKET_DATA_UID")
-        .unwrap_or_else(|_| "e6123145-9665-43e0-8413-cd61b8aa9b13".to_owned());
     let client = TInvestGrpcClient::production(token)?;
+    let instrument_uid = resolve_market_data_uid(&client).await?;
     let (from, to) = period();
 
     let candles = client
@@ -196,18 +198,87 @@ async fn qualify_stream(
             kind,
         })?;
     }
-    let mut stream = client.open_market_data_stream(16).await?;
-    for request in registry.subscribe_requests() {
-        stream.send(request).await?;
-    }
+    let subscribe_requests = registry.subscribe_requests();
+    let mut initial_requests = Vec::with_capacity(subscribe_requests.len() + 1);
+    initial_requests.push(v1::MarketDataRequest {
+        payload: Some(v1::market_data_request::Payload::PingSettings(
+            v1::PingDelaySettings {
+                ping_delay_ms: Some(120_000),
+            },
+        )),
+    });
+    initial_requests.extend(subscribe_requests);
+    let mut stream = client.open_market_data_stream(16, initial_requests).await?;
     tokio::time::timeout(Duration::from_secs(45), async {
-        let mut acknowledged = 0;
-        while acknowledged < 5 {
+        while !registry.all_confirmed() {
             let response = stream.message().await?.ok_or("provider closed stream")?;
-            acknowledged += registry.apply_ack_response(&response)?;
+            for acknowledgement in registry.apply_ack_response(&response)? {
+                println!(
+                    "ACK family={:?} instrument_uid={} status={} tracking_id={}",
+                    acknowledgement.family,
+                    acknowledgement.instrument_uid,
+                    acknowledgement.provider_status,
+                    acknowledgement.tracking_id
+                );
+            }
+        }
+        Ok::<(), Box<dyn Error>>(())
+    })
+    .await??;
+
+    stream.send(get_my_subscriptions_request()).await?;
+    let expected = registry.desired().cloned().collect::<BTreeSet<_>>();
+    let mut broker_confirmed = BTreeSet::new();
+    tokio::time::timeout(Duration::from_secs(45), async {
+        while !expected.is_subset(&broker_confirmed) {
+            let response = stream.message().await?.ok_or("provider closed stream")?;
+            for acknowledgement in registry.apply_ack_response(&response)? {
+                println!(
+                    "ACTIVE family={:?} instrument_uid={} status={} tracking_id={}",
+                    acknowledgement.family,
+                    acknowledgement.instrument_uid,
+                    acknowledgement.provider_status,
+                    acknowledgement.tracking_id
+                );
+                broker_confirmed.insert(acknowledgement.subscription);
+            }
         }
         Ok::<(), Box<dyn Error>>(())
     })
     .await??;
     Ok(())
+}
+
+async fn resolve_market_data_uid(client: &TInvestGrpcClient) -> Result<String, Box<dyn Error>> {
+    if let Ok(instrument_uid) = std::env::var("TINVEST_MARKET_DATA_UID")
+        && !instrument_uid.trim().is_empty()
+    {
+        return Ok(instrument_uid);
+    }
+    let mut candidates = client
+        .shares(catalogue_request())
+        .await?
+        .body
+        .instruments
+        .into_iter()
+        .filter(|share| {
+            !share.uid.is_empty()
+                && share.api_trade_available_flag
+                && share.buy_available_flag
+                && share.sell_available_flag
+                && share.liquidity_flag
+                && !share.blocked_tca_flag
+                && !share.for_qual_investor_flag
+                && share.first_1min_candle_date.is_some()
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|share| (share.ticker != "SBER", share.uid.clone()));
+    let selected = candidates.into_iter().next().ok_or(
+        "reference data contains no liquid API-tradable share for market-data qualification",
+    )?;
+    println!(
+        "QUALIFICATION INSTRUMENT ticker={} class_code={} uid={}",
+        selected.ticker, selected.class_code, selected.uid
+    );
+    Ok(selected.uid)
 }

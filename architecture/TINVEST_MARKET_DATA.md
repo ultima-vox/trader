@@ -68,6 +68,12 @@ reference and error catalogue, with official OpenAPI used only as a REST compati
 - bounded outbound and event queues provide backpressure;
 - adapter-owned desired registry survives disconnects;
 - ACK order is arbitrary and data may arrive before ACK;
+- initial ping/subscription requests are queued before opening the bidirectional RPC, because the
+  provider does not return stream headers for an inactive request body and closes it with `80004`;
+- only `SUBSCRIPTION_STATUS_SUCCESS` activates local confirmation; rejected ACKs fail immediately
+  with family, instrument UID, status, and tracking ID;
+- after initial ACK success, `GetMySubscriptions` must confirm every desired subscription from
+  broker state before qualification is complete;
 - reconnect resets ACK and book-authority state, then replays desired subscriptions;
 - delays use bounded exponential backoff; zero-delay busy loops are rejected;
 - native ping setting accepts only official 5,000–180,000 ms range; stale timeout forces reconnect;
@@ -112,4 +118,7 @@ cargo test -p vox-tinvest --test market_data_live -- --ignored --nocapture
 ```
 
 Required environment: `TINVEST_TOKEN`. Optional `TINVEST_MARKET_DATA_UID` overrides default SBER
-UID. Test is read-only: all 9 unary methods plus five bidirectional subscription ACK families.
+selection. Without override, qualifier resolves a liquid, non-blocked, API-tradable share from
+generated reference data and deterministically prefers SBER. Test is read-only: all 9 unary methods,
+five successful bidirectional subscription ACK families, then broker-confirmed active state through
+`GetMySubscriptions`.

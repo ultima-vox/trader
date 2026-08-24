@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use prost::Message;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -422,6 +423,7 @@ impl TInvestGrpcClient {
     pub async fn open_market_data_stream(
         &self,
         outbound_capacity: usize,
+        initial_requests: Vec<v1::MarketDataRequest>,
     ) -> Result<GrpcMarketDataStream, GrpcError> {
         let request_id = Uuid::new_v4();
         let metadata = GrpcRequestMetadata {
@@ -436,7 +438,19 @@ impl TInvestGrpcClient {
                 kind: GrpcErrorKind::InvalidStreamCapacity,
             });
         }
+        if initial_requests.is_empty() || initial_requests.len() > outbound_capacity {
+            return Err(GrpcError {
+                metadata,
+                kind: GrpcErrorKind::InvalidInitialStreamRequests,
+            });
+        }
         let (outbound, receiver) = mpsc::channel(outbound_capacity);
+        for initial in initial_requests {
+            outbound.try_send(initial).map_err(|_| GrpcError {
+                metadata,
+                kind: GrpcErrorKind::InvalidInitialStreamRequests,
+            })?;
+        }
         let request = self
             .stream_request(ReceiverStream::new(receiver), request_id)
             .map_err(|kind| GrpcError { metadata, kind })?;
@@ -881,7 +895,7 @@ impl GrpcMarketDataServerStream {
         self.inbound
             .message()
             .await
-            .map_err(|status| GrpcStreamError::Provider(GrpcProviderError::from_status(status)))
+            .map_err(GrpcStreamError::from_status)
     }
 }
 
@@ -897,7 +911,7 @@ impl GrpcMarketDataStream {
         self.inbound
             .message()
             .await
-            .map_err(|status| GrpcStreamError::Provider(GrpcProviderError::from_status(status)))
+            .map_err(GrpcStreamError::from_status)
     }
 }
 
@@ -905,8 +919,21 @@ impl GrpcMarketDataStream {
 pub enum GrpcStreamError {
     #[error("market-data stream outbound channel closed")]
     OutboundClosed,
+    #[error("provider error 80004: no active market-data subscriptions: {0}")]
+    NoActiveSubscriptions(GrpcProviderError),
     #[error("{0}")]
     Provider(GrpcProviderError),
+}
+
+impl GrpcStreamError {
+    fn from_status(status: Status) -> Self {
+        let provider = GrpcProviderError::from_status(status);
+        if provider.code == Code::ResourceExhausted && provider.has_provider_code("80004") {
+            Self::NoActiveSubscriptions(provider)
+        } else {
+            Self::Provider(provider)
+        }
+    }
 }
 
 impl<T> GrpcResponse<T> {
@@ -940,6 +967,25 @@ impl GrpcProviderError {
             tracking_id: metadata_text(status.metadata(), "x-tracking-id"),
         }
     }
+
+    fn has_provider_code(&self, expected: &str) -> bool {
+        if digit_tokens(&self.message).any(|token| token == expected) {
+            return true;
+        }
+        if let Ok(detail) = v1::ErrorDetail::decode(self.details.as_slice())
+            && detail.code == expected
+        {
+            return true;
+        }
+        let details = String::from_utf8_lossy(&self.details);
+        digit_tokens(&details).any(|token| token == expected)
+    }
+}
+
+fn digit_tokens(value: &str) -> impl Iterator<Item = &str> {
+    value
+        .split(|character: char| !character.is_ascii_digit())
+        .filter(|token| !token.is_empty())
 }
 
 impl fmt::Display for GrpcProviderError {
@@ -958,6 +1004,8 @@ pub enum GrpcErrorKind {
     InvalidRequestMetadata,
     #[error("market-data stream outbound capacity must be positive")]
     InvalidStreamCapacity,
+    #[error("initial market-data stream requests must fit non-empty outbound capacity")]
+    InvalidInitialStreamRequests,
     #[error("invalid market-data request: {0}")]
     MarketDataRequest(MarketDataRequestError),
     #[error(
@@ -1084,5 +1132,34 @@ mod tests {
             error.kind,
             GrpcErrorKind::MarketDataRequest(MarketDataRequestError::CandleSourceWithLimit)
         );
+    }
+
+    #[test]
+    fn provider_80004_has_typed_stream_classification() {
+        let error = GrpcStreamError::from_status(Status::resource_exhausted(
+            "80004: No active subscriptions",
+        ));
+        assert!(matches!(
+            error,
+            GrpcStreamError::NoActiveSubscriptions(GrpcProviderError {
+                code: Code::ResourceExhausted,
+                ..
+            })
+        ));
+        assert!(matches!(
+            GrpcStreamError::from_status(Status::resource_exhausted("quota exhausted")),
+            GrpcStreamError::Provider(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn bidirectional_stream_requires_seed_requests_before_dispatch() {
+        let client = TInvestGrpcClient::new(token(), GrpcConfig::production())
+            .unwrap_or_else(|error| panic!("client failed: {error}"));
+        let error = match client.open_market_data_stream(16, Vec::new()).await {
+            Err(error) => error,
+            Ok(_) => panic!("empty bootstrap would trigger provider 80004"),
+        };
+        assert_eq!(error.kind, GrpcErrorKind::InvalidInitialStreamRequests);
     }
 }

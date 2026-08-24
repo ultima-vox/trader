@@ -21,7 +21,7 @@
     {"method":"GetMarketValues","request":"GetMarketValuesRequest","response":"GetMarketValuesResponse","retry":"safe-read","canonical":"typed provider values","constraints":"generated identifier/value arrays and enums; open-interest futures-only; theoretical-price options-only"}
   ],
   "stream_methods": [
-    {"method":"MarketDataStream","shape":"bidirectional","production":true,"recovery":"adapter desired-state resubscribe"},
+    {"method":"MarketDataStream","shape":"bidirectional","production":true,"bootstrap":"queue ping and valid SUBSCRIBE requests before awaiting response headers","confirmation":"only SUCCESS ACK; verify broker state with GetMySubscriptions","errors":"80004 typed as NoActiveSubscriptions","recovery":"controlled reconnect with seeded desired-state resubscribe"},
     {"method":"MarketDataServerSideStream","shape":"server-streaming","production":false,"role":"generated compatibility surface"}
   ],
   "stream_request_payloads": ["subscribe_candles_request","subscribe_order_book_request","subscribe_trades_request","subscribe_info_request","subscribe_last_price_request","get_my_subscriptions","ping","ping_settings"],

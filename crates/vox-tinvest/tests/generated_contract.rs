@@ -146,6 +146,9 @@ fn adapter_exposes_every_unary_method(client: &TInvestGrpcClient) {
     drop(client.get_close_prices(v1::GetClosePricesRequest::default()));
     drop(client.get_tech_analysis(v1::GetTechAnalysisRequest::default()));
     drop(client.get_market_values(v1::GetMarketValuesRequest::default()));
-    drop(client.open_market_data_stream(1));
+    drop(client.open_market_data_stream(
+        1,
+        vec![vox_tinvest::market_data::get_my_subscriptions_request()],
+    ));
     drop(client.open_market_data_server_stream(v1::MarketDataServerSideStreamRequest::default()));
 }

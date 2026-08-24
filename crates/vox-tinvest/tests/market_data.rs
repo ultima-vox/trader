@@ -203,13 +203,22 @@ fn registry_accepts_event_before_ack_and_resets_on_disconnect() {
         .expect("valid subscription");
     assert!(registry.accepts_event_before_ack("uid", &subscription.kind));
     registry
-        .acknowledge(
-            &subscription,
-            v1::SubscriptionStatus::Success as i32,
-            v1::SubscriptionAction::Subscribe as i32,
-            "stream".into(),
-            "00000000-0000-0000-0000-000000000001".into(),
-        )
+        .apply_ack_response(&v1::MarketDataResponse {
+            payload: Some(v1::market_data_response::Payload::SubscribeTradesResponse(
+                v1::SubscribeTradesResponse {
+                    tracking_id: "tracking".into(),
+                    trade_source: 0,
+                    trade_subscriptions: vec![v1::TradeSubscription {
+                        instrument_uid: "uid".into(),
+                        subscription_status: v1::SubscriptionStatus::Success as i32,
+                        subscription_action: v1::SubscriptionAction::Subscribe as i32,
+                        stream_id: "stream".into(),
+                        subscription_id: "00000000-0000-0000-0000-000000000001".into(),
+                        ..Default::default()
+                    }],
+                },
+            )),
+        })
         .expect("matching ACK");
     assert!(matches!(
         registry.state(&subscription),
@@ -271,6 +280,120 @@ fn generated_requests_batch_multi_instrument_subscriptions() {
 }
 
 #[test]
+#[allow(deprecated)]
+fn all_five_families_encode_valid_subscribe_requests() {
+    let mut registry = MarketSubscriptionRegistry::default();
+    for kind in [
+        SubscriptionKind::Candle {
+            interval: v1::SubscriptionInterval::OneMinute as i32,
+            waiting_close: true,
+            source: Some(v1::get_candles_request::CandleSource::Exchange as i32),
+        },
+        SubscriptionKind::OrderBook {
+            depth: 10,
+            order_book_type: v1::OrderBookType::OrderbookTypeAll as i32,
+        },
+        SubscriptionKind::Trade {
+            source: v1::TradeSourceType::TradeSourceAll as i32,
+            with_open_interest: false,
+        },
+        SubscriptionKind::Info,
+        SubscriptionKind::LastPrice,
+    ] {
+        registry
+            .insert(MarketSubscription {
+                instrument_id: "uid".into(),
+                kind,
+            })
+            .expect("valid desired subscription");
+    }
+
+    let mut families = std::collections::BTreeSet::new();
+    for request in registry.subscribe_requests() {
+        use v1::market_data_request::Payload;
+        match request.payload.expect("generated subscribe payload") {
+            Payload::SubscribeCandlesRequest(request) => {
+                assert_eq!(request.subscription_action, 1);
+                assert_eq!(request.instruments[0].instrument_id, "uid");
+                assert_eq!(request.instruments[0].interval, 1);
+                assert!(request.waiting_close);
+                assert_eq!(request.candle_source_type, Some(1));
+                families.insert("candle");
+            }
+            Payload::SubscribeOrderBookRequest(request) => {
+                assert_eq!(request.subscription_action, 1);
+                assert_eq!(request.instruments[0].instrument_id, "uid");
+                assert_eq!(request.instruments[0].depth, 10);
+                assert_eq!(request.instruments[0].order_book_type, 3);
+                families.insert("order_book");
+            }
+            Payload::SubscribeTradesRequest(request) => {
+                assert_eq!(request.subscription_action, 1);
+                assert_eq!(request.instruments[0].instrument_id, "uid");
+                assert_eq!(request.trade_source, 3);
+                assert!(!request.with_open_interest);
+                families.insert("trade");
+            }
+            Payload::SubscribeInfoRequest(request) => {
+                assert_eq!(request.subscription_action, 1);
+                assert_eq!(request.instruments[0].instrument_id, "uid");
+                families.insert("info");
+            }
+            Payload::SubscribeLastPriceRequest(request) => {
+                assert_eq!(request.subscription_action, 1);
+                assert_eq!(request.instruments[0].instrument_id, "uid");
+                families.insert("last_price");
+            }
+            _ => panic!("unexpected non-subscribe payload"),
+        }
+    }
+    assert_eq!(families.len(), 5);
+}
+
+#[test]
+fn rejected_ack_fails_without_false_positive_count() {
+    let subscription = MarketSubscription {
+        instrument_id: "uid".into(),
+        kind: SubscriptionKind::LastPrice,
+    };
+    let mut registry = MarketSubscriptionRegistry::default();
+    registry
+        .insert(subscription.clone())
+        .expect("valid desired subscription");
+    let response = v1::MarketDataResponse {
+        payload: Some(
+            v1::market_data_response::Payload::SubscribeLastPriceResponse(
+                v1::SubscribeLastPriceResponse {
+                    tracking_id: "track-rejected".into(),
+                    last_price_subscriptions: vec![v1::LastPriceSubscription {
+                        instrument_uid: "uid".into(),
+                        subscription_status: v1::SubscriptionStatus::InstrumentNotFound as i32,
+                        subscription_action: v1::SubscriptionAction::Subscribe as i32,
+                        ..Default::default()
+                    }],
+                },
+            ),
+        ),
+    };
+    assert_eq!(
+        registry.apply_ack_response(&response),
+        Err(MarketDataError::SubscriptionRejected {
+            family: vox_tinvest::market_data::SubscriptionFamily::LastPrice,
+            instrument_uid: "uid".into(),
+            provider_status: v1::SubscriptionStatus::InstrumentNotFound as i32,
+            tracking_id: "track-rejected".into(),
+        })
+    );
+    assert_eq!(
+        registry.state(&subscription),
+        Some(&ConfirmationState::Rejected {
+            provider_status: v1::SubscriptionStatus::InstrumentNotFound as i32,
+        })
+    );
+    assert!(!registry.all_confirmed());
+}
+
+#[test]
 fn generated_acknowledgements_apply_in_arbitrary_order() {
     let candle = MarketSubscription {
         instrument_id: "uid-candle".into(),
@@ -326,8 +449,18 @@ fn generated_acknowledgements_apply_in_arbitrary_order() {
             },
         )),
     };
-    assert_eq!(registry.apply_ack_response(&trade_ack), Ok(1));
-    assert_eq!(registry.apply_ack_response(&candle_ack), Ok(1));
+    assert_eq!(
+        registry
+            .apply_ack_response(&trade_ack)
+            .map(|acknowledgements| acknowledgements.len()),
+        Ok(1)
+    );
+    assert_eq!(
+        registry
+            .apply_ack_response(&candle_ack)
+            .map(|acknowledgements| acknowledgements.len()),
+        Ok(1)
+    );
     assert!(matches!(
         registry.state(&trade),
         Some(ConfirmationState::Confirmed { .. })

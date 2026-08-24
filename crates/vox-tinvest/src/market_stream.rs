@@ -14,7 +14,8 @@ use crate::generated::v1;
 use crate::market_data::{
     CanonicalCandle, CanonicalLastPrice, CanonicalOpenInterest, CanonicalOrderBook, CanonicalTrade,
     CanonicalTradingStatus, DEFAULT_PING_DELAY_MS, MAX_SUBSCRIPTION_REQUESTS_PER_MINUTE,
-    MarketDataError, MarketSubscriptionRegistry, SubscriptionKind, validate_ping_delay,
+    MarketDataError, MarketSubscription, MarketSubscriptionRegistry, SubscriptionKind,
+    get_my_subscriptions_request, validate_ping_delay,
 };
 use crate::{GrpcError, GrpcStreamError, TInvestGrpcClient};
 
@@ -67,6 +68,8 @@ pub enum MarketDataSupervisorError {
     InvalidReconnectPolicy,
     #[error("desired subscriptions need more than provider maximum 100 requests per minute")]
     SubscriptionRequestRate,
+    #[error("initial market-data requests exceed configured outbound capacity")]
+    InitialRequestsExceedCapacity,
     #[error("{0}")]
     MarketData(MarketDataError),
     #[error("{0}")]
@@ -91,6 +94,9 @@ pub enum MarketDataStreamEvent {
         delay: Duration,
     },
     Acknowledged {
+        count: usize,
+    },
+    BrokerConfirmed {
         count: usize,
     },
     Candle(CanonicalCandle),
@@ -206,6 +212,7 @@ pub trait MarketDataStreamConnector: Send + Sync {
     async fn connect(
         &self,
         outbound_capacity: usize,
+        initial_requests: Vec<v1::MarketDataRequest>,
     ) -> Result<Box<dyn MarketDataStreamConnection>, MarketDataSupervisorError>;
 }
 
@@ -216,9 +223,10 @@ impl MarketDataStreamConnector for TonicMarketDataStreamConnector {
     async fn connect(
         &self,
         outbound_capacity: usize,
+        initial_requests: Vec<v1::MarketDataRequest>,
     ) -> Result<Box<dyn MarketDataStreamConnection>, MarketDataSupervisorError> {
         self.0
-            .open_market_data_stream(outbound_capacity)
+            .open_market_data_stream(outbound_capacity, initial_requests)
             .await
             .map(|stream| Box::new(stream) as Box<dyn MarketDataStreamConnection>)
             .map_err(MarketDataSupervisorError::Connect)
@@ -345,6 +353,11 @@ impl MarketDataStreamSupervisor {
                     return;
                 }
                 Err(error) => {
+                    let has_desired_subscriptions = registry.desired().next().is_some();
+                    if !should_reconnect(&error, has_desired_subscriptions) {
+                        let _ = events.send(MarketDataStreamEvent::Fault(error)).await;
+                        return;
+                    }
                     reconnect_attempt += 1;
                     if reconnect_attempt > self.config.max_reconnect_attempts {
                         let _ = events.send(MarketDataStreamEvent::Fault(error)).await;
@@ -368,9 +381,28 @@ impl MarketDataStreamSupervisor {
         stop: &mut watch::Receiver<bool>,
         reconnect_attempt: &mut u32,
     ) -> Result<(), MarketDataSupervisorError> {
+        let requests = registry.subscribe_requests();
+        if requests.len() > MAX_SUBSCRIPTION_REQUESTS_PER_MINUTE as usize {
+            return Err(MarketDataSupervisorError::SubscriptionRequestRate);
+        }
+        let ping_delay_ms = i32::try_from(self.config.ping_delay_ms).map_err(|_| {
+            MarketDataSupervisorError::MarketData(MarketDataError::InvalidPingDelay)
+        })?;
+        let mut initial_requests = Vec::with_capacity(requests.len() + 1);
+        initial_requests.push(v1::MarketDataRequest {
+            payload: Some(v1::market_data_request::Payload::PingSettings(
+                v1::PingDelaySettings {
+                    ping_delay_ms: Some(ping_delay_ms),
+                },
+            )),
+        });
+        initial_requests.extend(requests);
+        if initial_requests.len() > self.config.outbound_capacity {
+            return Err(MarketDataSupervisorError::InitialRequestsExceedCapacity);
+        }
         let mut stream = self
             .connector
-            .connect(self.config.outbound_capacity)
+            .connect(self.config.outbound_capacity, initial_requests)
             .await?;
         events
             .send(MarketDataStreamEvent::Connected)
@@ -379,25 +411,9 @@ impl MarketDataStreamSupervisor {
         // Only consecutive connection failures consume reconnect budget.
         *reconnect_attempt = 0;
 
-        let requests = registry.subscribe_requests();
-        if requests.len() > MAX_SUBSCRIPTION_REQUESTS_PER_MINUTE as usize {
-            return Err(MarketDataSupervisorError::SubscriptionRequestRate);
-        }
-        let ping_delay_ms = i32::try_from(self.config.ping_delay_ms).map_err(|_| {
-            MarketDataSupervisorError::MarketData(MarketDataError::InvalidPingDelay)
-        })?;
-        stream
-            .send(v1::MarketDataRequest {
-                payload: Some(v1::market_data_request::Payload::PingSettings(
-                    v1::PingDelaySettings {
-                        ping_delay_ms: Some(ping_delay_ms),
-                    },
-                )),
-            })
-            .await?;
-        for request in requests {
-            stream.send(request).await?;
-        }
+        let expected = registry.desired().cloned().collect::<BTreeSet<_>>();
+        let mut active_check_requested = false;
+        let mut broker_confirmed = BTreeSet::new();
 
         loop {
             tokio::select! {
@@ -411,8 +427,19 @@ impl MarketDataStreamSupervisor {
                         .map_err(|_| MarketDataSupervisorError::Stale)?
                         ?
                         .ok_or(MarketDataSupervisorError::Closed)?;
-                    if let Some(event) = process_response(registry, sequence_gate, response)? {
+                    if let Some(event) = process_response(
+                        registry,
+                        sequence_gate,
+                        response,
+                        active_check_requested,
+                        &expected,
+                        &mut broker_confirmed,
+                    )? {
                         events.send(event).await.map_err(|_| MarketDataSupervisorError::Closed)?;
+                    }
+                    if !active_check_requested && registry.all_confirmed() {
+                        stream.send(get_my_subscriptions_request()).await?;
+                        active_check_requested = true;
                     }
                 }
             }
@@ -424,15 +451,30 @@ fn process_response(
     registry: &mut MarketSubscriptionRegistry,
     sequence_gate: &mut EventSequenceGate,
     response: v1::MarketDataResponse,
+    active_check_requested: bool,
+    expected: &BTreeSet<MarketSubscription>,
+    broker_confirmed: &mut BTreeSet<MarketSubscription>,
 ) -> Result<Option<MarketDataStreamEvent>, MarketDataSupervisorError> {
     use v1::market_data_response::Payload;
 
-    let ack_count = registry
+    let acknowledgements = registry
         .apply_ack_response(&response)
         .map_err(MarketDataSupervisorError::MarketData)?;
-    if ack_count > 0 {
+    if !acknowledgements.is_empty() {
+        if active_check_requested {
+            broker_confirmed.extend(
+                acknowledgements
+                    .iter()
+                    .map(|acknowledgement| acknowledgement.subscription.clone()),
+            );
+            if expected.is_subset(broker_confirmed) {
+                return Ok(Some(MarketDataStreamEvent::BrokerConfirmed {
+                    count: expected.len(),
+                }));
+            }
+        }
         return Ok(Some(MarketDataStreamEvent::Acknowledged {
-            count: ack_count,
+            count: acknowledgements.len(),
         }));
     }
     let event = match response.payload {
@@ -626,6 +668,27 @@ fn reconnect_delay(initial: Duration, maximum: Duration, attempt: u32) -> Durati
     initial.saturating_mul(multiplier).min(maximum)
 }
 
+fn should_reconnect(error: &MarketDataSupervisorError, has_desired_subscriptions: bool) -> bool {
+    match error {
+        MarketDataSupervisorError::Stream(GrpcStreamError::NoActiveSubscriptions(_)) => {
+            has_desired_subscriptions
+        }
+        MarketDataSupervisorError::MarketData(
+            MarketDataError::SubscriptionRejected { .. }
+            | MarketDataError::UnexpectedAcknowledgementAction(_)
+            | MarketDataError::InvalidAcknowledgementIdentity
+            | MarketDataError::UnknownAcknowledgement,
+        )
+        | MarketDataSupervisorError::ZeroCapacity
+        | MarketDataSupervisorError::InvalidReconnectPolicy
+        | MarketDataSupervisorError::SubscriptionRequestRate
+        | MarketDataSupervisorError::InitialRequestsExceedCapacity
+        | MarketDataSupervisorError::UndesiredEvent
+        | MarketDataSupervisorError::ReconnectExhausted => false,
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -643,13 +706,26 @@ mod tests {
         emitted_ping: bool,
     }
 
+    #[derive(Clone, Default)]
+    struct NoActiveConnector {
+        connects: Arc<AtomicUsize>,
+        seeded: Arc<AtomicUsize>,
+    }
+
+    struct NoActiveConnection {
+        fail: bool,
+    }
+
     #[async_trait]
     impl MarketDataStreamConnector for FakeConnector {
         async fn connect(
             &self,
             _outbound_capacity: usize,
+            initial_requests: Vec<v1::MarketDataRequest>,
         ) -> Result<Box<dyn MarketDataStreamConnection>, MarketDataSupervisorError> {
             let attempt = self.connects.fetch_add(1, Ordering::SeqCst);
+            self.sends
+                .fetch_add(initial_requests.len(), Ordering::SeqCst);
             Ok(Box::new(FakeConnection {
                 sends: Arc::clone(&self.sends),
                 close_after_ping: attempt == 0,
@@ -692,6 +768,47 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl MarketDataStreamConnector for NoActiveConnector {
+        async fn connect(
+            &self,
+            _outbound_capacity: usize,
+            initial_requests: Vec<v1::MarketDataRequest>,
+        ) -> Result<Box<dyn MarketDataStreamConnection>, MarketDataSupervisorError> {
+            let attempt = self.connects.fetch_add(1, Ordering::SeqCst);
+            self.seeded
+                .fetch_add(initial_requests.len(), Ordering::SeqCst);
+            Ok(Box::new(NoActiveConnection { fail: attempt == 0 }))
+        }
+    }
+
+    #[async_trait]
+    impl MarketDataStreamConnection for NoActiveConnection {
+        async fn send(
+            &mut self,
+            _request: v1::MarketDataRequest,
+        ) -> Result<(), MarketDataSupervisorError> {
+            Ok(())
+        }
+
+        async fn message(
+            &mut self,
+        ) -> Result<Option<v1::MarketDataResponse>, MarketDataSupervisorError> {
+            if self.fail {
+                self.fail = false;
+                return Err(MarketDataSupervisorError::Stream(
+                    GrpcStreamError::NoActiveSubscriptions(crate::GrpcProviderError {
+                        code: tonic::Code::ResourceExhausted,
+                        message: "80004: No active subscriptions".into(),
+                        details: Vec::new(),
+                        tracking_id: Some("track-80004".into()),
+                    }),
+                ));
+            }
+            std::future::pending().await
+        }
+    }
+
     #[test]
     fn reconnect_delay_is_bounded() {
         let initial = Duration::from_millis(100);
@@ -721,6 +838,29 @@ mod tests {
     }
 
     #[test]
+    fn reconnect_policy_is_fail_closed_for_subscription_state() {
+        let rejected =
+            MarketDataSupervisorError::MarketData(MarketDataError::SubscriptionRejected {
+                family: crate::market_data::SubscriptionFamily::LastPrice,
+                instrument_uid: "uid".into(),
+                provider_status: v1::SubscriptionStatus::InstrumentNotFound as i32,
+                tracking_id: "track".into(),
+            });
+        assert!(!should_reconnect(&rejected, true));
+
+        let no_active = MarketDataSupervisorError::Stream(GrpcStreamError::NoActiveSubscriptions(
+            crate::GrpcProviderError {
+                code: tonic::Code::ResourceExhausted,
+                message: "80004".into(),
+                details: Vec::new(),
+                tracking_id: None,
+            },
+        ));
+        assert!(should_reconnect(&no_active, true));
+        assert!(!should_reconnect(&no_active, false));
+    }
+
+    #[test]
     fn sequence_gate_drops_duplicates_and_out_of_order_but_allows_same_time_distinct_trade() {
         let mut gate = EventSequenceGate::default();
         assert_eq!(
@@ -743,6 +883,63 @@ mod tests {
             gate.observe("uid", EventFamily::Trade, 11, vec![4]),
             EventDisposition::Accept
         );
+    }
+
+    #[test]
+    fn get_my_subscriptions_confirms_broker_active_state() {
+        let subscription = crate::market_data::MarketSubscription {
+            instrument_id: "uid".into(),
+            kind: SubscriptionKind::LastPrice,
+        };
+        let mut registry = MarketSubscriptionRegistry::default();
+        registry
+            .insert(subscription.clone())
+            .expect("valid desired subscription");
+        let response = v1::MarketDataResponse {
+            payload: Some(
+                v1::market_data_response::Payload::SubscribeLastPriceResponse(
+                    v1::SubscribeLastPriceResponse {
+                        tracking_id: "track".into(),
+                        last_price_subscriptions: vec![v1::LastPriceSubscription {
+                            instrument_uid: "uid".into(),
+                            subscription_status: v1::SubscriptionStatus::Success as i32,
+                            subscription_action: v1::SubscriptionAction::Subscribe as i32,
+                            stream_id: "stream".into(),
+                            subscription_id: "00000000-0000-0000-0000-000000000001".into(),
+                            ..Default::default()
+                        }],
+                    },
+                ),
+            ),
+        };
+        let expected = BTreeSet::from([subscription]);
+        let mut broker_confirmed = BTreeSet::new();
+        let mut gate = EventSequenceGate::default();
+
+        assert_eq!(
+            process_response(
+                &mut registry,
+                &mut gate,
+                response.clone(),
+                false,
+                &expected,
+                &mut broker_confirmed,
+            ),
+            Ok(Some(MarketDataStreamEvent::Acknowledged { count: 1 }))
+        );
+        assert!(broker_confirmed.is_empty());
+        assert_eq!(
+            process_response(
+                &mut registry,
+                &mut gate,
+                response,
+                true,
+                &expected,
+                &mut broker_confirmed,
+            ),
+            Ok(Some(MarketDataStreamEvent::BrokerConfirmed { count: 1 }))
+        );
+        assert_eq!(broker_confirmed, expected);
     }
 
     #[tokio::test]
@@ -777,6 +974,41 @@ mod tests {
         }
         assert_eq!(evidence.connects.load(Ordering::SeqCst), 2);
         assert_eq!(evidence.sends.load(Ordering::SeqCst), 4);
+        handle.stop();
+    }
+
+    #[tokio::test]
+    async fn no_active_subscriptions_reconnects_with_seeded_resubscribe() {
+        let connector = NoActiveConnector::default();
+        let evidence = connector.clone();
+        let config = MarketDataSupervisorConfig {
+            reconnect_initial_delay: Duration::from_millis(1),
+            reconnect_max_delay: Duration::from_millis(2),
+            stale_timeout: Duration::from_secs(5),
+            ..Default::default()
+        };
+        let supervisor = MarketDataStreamSupervisor::with_connector(connector, config)
+            .expect("valid fake supervisor");
+        let mut registry = MarketSubscriptionRegistry::default();
+        registry
+            .insert(crate::market_data::MarketSubscription {
+                instrument_id: "uid".into(),
+                kind: SubscriptionKind::LastPrice,
+            })
+            .expect("valid desired state");
+        let mut handle = supervisor.start(registry);
+        let mut connected = 0;
+        while connected < 2 {
+            let event = tokio::time::timeout(Duration::from_secs(1), handle.recv())
+                .await
+                .expect("supervisor event timeout")
+                .expect("supervisor event channel closed");
+            if event == MarketDataStreamEvent::Connected {
+                connected += 1;
+            }
+        }
+        assert_eq!(evidence.connects.load(Ordering::SeqCst), 2);
+        assert_eq!(evidence.seeded.load(Ordering::SeqCst), 4);
         handle.stop();
     }
 }

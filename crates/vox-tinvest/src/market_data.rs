@@ -232,6 +232,15 @@ pub enum MarketDataError {
     UnexpectedAcknowledgementAction(i32),
     #[error("successful acknowledgement has invalid stream/subscription identity")]
     InvalidAcknowledgementIdentity,
+    #[error(
+        "subscription {family:?} for {instrument_uid} rejected with provider status {provider_status}, tracking_id={tracking_id}"
+    )]
+    SubscriptionRejected {
+        family: SubscriptionFamily,
+        instrument_uid: String,
+        provider_status: i32,
+        tracking_id: String,
+    },
 }
 
 /// Documented provider request failures rejected before consuming broker quota.
@@ -791,6 +800,33 @@ pub struct MarketSubscription {
     pub kind: SubscriptionKind,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum SubscriptionFamily {
+    Candle,
+    OrderBook,
+    Trade,
+    Info,
+    LastPrice,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubscriptionAcknowledgement {
+    pub subscription: MarketSubscription,
+    pub family: SubscriptionFamily,
+    pub instrument_uid: String,
+    pub provider_status: i32,
+    pub tracking_id: String,
+}
+
+struct AcknowledgementFields<'a> {
+    family: SubscriptionFamily,
+    tracking_id: &'a str,
+    provider_status: i32,
+    provider_action: i32,
+    stream_id: String,
+    subscription_id: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConfirmationState {
     Pending,
@@ -851,35 +887,47 @@ impl MarketSubscriptionRegistry {
         })
     }
 
-    pub fn acknowledge(
+    fn acknowledge(
         &mut self,
         subscription: &MarketSubscription,
-        provider_status: i32,
-        provider_action: i32,
-        stream_id: String,
-        subscription_id: String,
-    ) -> Result<(), MarketDataError> {
+        acknowledgement: AcknowledgementFields<'_>,
+    ) -> Result<SubscriptionAcknowledgement, MarketDataError> {
         let state = self
             .entries
             .get_mut(subscription)
             .ok_or(MarketDataError::UnknownAcknowledgement)?;
-        if provider_action != v1::SubscriptionAction::Subscribe as i32 {
+        if acknowledgement.provider_status != v1::SubscriptionStatus::Success as i32 {
+            *state = ConfirmationState::Rejected {
+                provider_status: acknowledgement.provider_status,
+            };
+            return Err(MarketDataError::SubscriptionRejected {
+                family: acknowledgement.family,
+                instrument_uid: subscription.instrument_id.clone(),
+                provider_status: acknowledgement.provider_status,
+                tracking_id: acknowledgement.tracking_id.to_owned(),
+            });
+        }
+        if acknowledgement.provider_action != v1::SubscriptionAction::Subscribe as i32 {
             return Err(MarketDataError::UnexpectedAcknowledgementAction(
-                provider_action,
+                acknowledgement.provider_action,
             ));
         }
-        *state = if provider_status == v1::SubscriptionStatus::Success as i32 {
-            if stream_id.is_empty() || Uuid::parse_str(&subscription_id).is_err() {
-                return Err(MarketDataError::InvalidAcknowledgementIdentity);
-            }
-            ConfirmationState::Confirmed {
-                stream_id,
-                subscription_id,
-            }
-        } else {
-            ConfirmationState::Rejected { provider_status }
+        if acknowledgement.stream_id.is_empty()
+            || Uuid::parse_str(&acknowledgement.subscription_id).is_err()
+        {
+            return Err(MarketDataError::InvalidAcknowledgementIdentity);
+        }
+        *state = ConfirmationState::Confirmed {
+            stream_id: acknowledgement.stream_id,
+            subscription_id: acknowledgement.subscription_id,
         };
-        Ok(())
+        Ok(SubscriptionAcknowledgement {
+            subscription: subscription.clone(),
+            family: acknowledgement.family,
+            instrument_uid: subscription.instrument_id.clone(),
+            provider_status: acknowledgement.provider_status,
+            tracking_id: acknowledgement.tracking_id.to_owned(),
+        })
     }
 
     pub fn observe_book(&mut self, instrument_id: &str, is_consistent: bool) {
@@ -1005,9 +1053,9 @@ impl MarketSubscriptionRegistry {
     pub fn apply_ack_response(
         &mut self,
         response: &v1::MarketDataResponse,
-    ) -> Result<usize, MarketDataError> {
+    ) -> Result<Vec<SubscriptionAcknowledgement>, MarketDataError> {
         use v1::market_data_response::Payload;
-        let mut applied = 0;
+        let mut applied = Vec::new();
         match response.payload.as_ref() {
             Some(Payload::SubscribeCandlesResponse(response)) => {
                 for ack in &response.candles_subscriptions {
@@ -1019,14 +1067,17 @@ impl MarketSubscriptionRegistry {
                             source: ack.candle_source_type,
                         },
                     };
-                    self.acknowledge(
+                    applied.push(self.acknowledge(
                         &key,
-                        ack.subscription_status,
-                        ack.subscription_action,
-                        ack.stream_id.clone(),
-                        ack.subscription_id.clone(),
-                    )?;
-                    applied += 1;
+                        AcknowledgementFields {
+                            family: SubscriptionFamily::Candle,
+                            tracking_id: &response.tracking_id,
+                            provider_status: ack.subscription_status,
+                            provider_action: ack.subscription_action,
+                            stream_id: ack.stream_id.clone(),
+                            subscription_id: ack.subscription_id.clone(),
+                        },
+                    )?);
                 }
             }
             Some(Payload::SubscribeOrderBookResponse(response)) => {
@@ -1038,14 +1089,17 @@ impl MarketSubscriptionRegistry {
                             order_book_type: ack.order_book_type,
                         },
                     };
-                    self.acknowledge(
+                    applied.push(self.acknowledge(
                         &key,
-                        ack.subscription_status,
-                        ack.subscription_action,
-                        ack.stream_id.clone(),
-                        ack.subscription_id.clone(),
-                    )?;
-                    applied += 1;
+                        AcknowledgementFields {
+                            family: SubscriptionFamily::OrderBook,
+                            tracking_id: &response.tracking_id,
+                            provider_status: ack.subscription_status,
+                            provider_action: ack.subscription_action,
+                            stream_id: ack.stream_id.clone(),
+                            subscription_id: ack.subscription_id.clone(),
+                        },
+                    )?);
                 }
             }
             Some(Payload::SubscribeTradesResponse(response)) => {
@@ -1057,14 +1111,17 @@ impl MarketSubscriptionRegistry {
                             with_open_interest: ack.with_open_interest,
                         },
                     };
-                    self.acknowledge(
+                    applied.push(self.acknowledge(
                         &key,
-                        ack.subscription_status,
-                        ack.subscription_action,
-                        ack.stream_id.clone(),
-                        ack.subscription_id.clone(),
-                    )?;
-                    applied += 1;
+                        AcknowledgementFields {
+                            family: SubscriptionFamily::Trade,
+                            tracking_id: &response.tracking_id,
+                            provider_status: ack.subscription_status,
+                            provider_action: ack.subscription_action,
+                            stream_id: ack.stream_id.clone(),
+                            subscription_id: ack.subscription_id.clone(),
+                        },
+                    )?);
                 }
             }
             Some(Payload::SubscribeInfoResponse(response)) => {
@@ -1073,14 +1130,17 @@ impl MarketSubscriptionRegistry {
                         instrument_id: ack.instrument_uid.clone(),
                         kind: SubscriptionKind::Info,
                     };
-                    self.acknowledge(
+                    applied.push(self.acknowledge(
                         &key,
-                        ack.subscription_status,
-                        ack.subscription_action,
-                        ack.stream_id.clone(),
-                        ack.subscription_id.clone(),
-                    )?;
-                    applied += 1;
+                        AcknowledgementFields {
+                            family: SubscriptionFamily::Info,
+                            tracking_id: &response.tracking_id,
+                            provider_status: ack.subscription_status,
+                            provider_action: ack.subscription_action,
+                            stream_id: ack.stream_id.clone(),
+                            subscription_id: ack.subscription_id.clone(),
+                        },
+                    )?);
                 }
             }
             Some(Payload::SubscribeLastPriceResponse(response)) => {
@@ -1089,14 +1149,17 @@ impl MarketSubscriptionRegistry {
                         instrument_id: ack.instrument_uid.clone(),
                         kind: SubscriptionKind::LastPrice,
                     };
-                    self.acknowledge(
+                    applied.push(self.acknowledge(
                         &key,
-                        ack.subscription_status,
-                        ack.subscription_action,
-                        ack.stream_id.clone(),
-                        ack.subscription_id.clone(),
-                    )?;
-                    applied += 1;
+                        AcknowledgementFields {
+                            family: SubscriptionFamily::LastPrice,
+                            tracking_id: &response.tracking_id,
+                            provider_status: ack.subscription_status,
+                            provider_action: ack.subscription_action,
+                            stream_id: ack.stream_id.clone(),
+                            subscription_id: ack.subscription_id.clone(),
+                        },
+                    )?);
                 }
             }
             _ => {}
@@ -1106,6 +1169,15 @@ impl MarketSubscriptionRegistry {
 
     pub fn desired(&self) -> impl Iterator<Item = &MarketSubscription> {
         self.entries.keys()
+    }
+
+    #[must_use]
+    pub fn all_confirmed(&self) -> bool {
+        !self.entries.is_empty()
+            && self
+                .entries
+                .values()
+                .all(|state| matches!(state, ConfirmationState::Confirmed { .. }))
     }
 }
 
@@ -1160,5 +1232,14 @@ pub fn validate_ping_delay(delay_ms: i64) -> Result<(), MarketDataError> {
         Ok(())
     } else {
         Err(MarketDataError::InvalidPingDelay)
+    }
+}
+
+#[must_use]
+pub fn get_my_subscriptions_request() -> v1::MarketDataRequest {
+    v1::MarketDataRequest {
+        payload: Some(v1::market_data_request::Payload::GetMySubscriptions(
+            v1::GetMySubscriptions {},
+        )),
     }
 }
