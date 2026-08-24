@@ -1,6 +1,6 @@
 # T-Invest InstrumentsService safe-read audit
 
-Contract snapshot: official `RussianInvestments/investAPI` `instruments.proto` and `common.proto`, commit `3eaf23a25f598fe483c913184acdbd9132bc68d2`, checked 2026-08-24. Current portal contracts supplement newer DFA and News methods. All protobuf singular wire values remain `Option`; repeated values default only to empty collections. Unknown enums and extension fields stay provider-owned. Domain promotion validates required identity/economics and fails closed.
+Contract snapshot: official T-Bank `invest/invest-contracts`, commit `762e720e27164213f41cac0b226c5698c2ae8199` (2026-07-31), checked 2026-08-24. `prost`/`tonic-build` generate all provider messages and 43 RPC client methods from vendored `instruments.proto`/`common.proto`; no handwritten reference wire DTOs remain. Proto `optional` and message presence stays `Option`; repeated fields use empty collections; enum wire numbers remain forward-compatible. Vox mapping validates required identity/economics and fails closed. Official OpenAPI at same revision cross-checks REST compatibility only.
 
 Live status below means runner coverage, not fabricated credential evidence. `QUALIFIED` requires successful decode; permission/tariff/environment errors become explicit `GATED`; missing provider-owned feature samples become `UNAVAILABLE`; provider-sourced detail 404 remains failure. Paginated methods request page 2 when metadata/cursor says more.
 
@@ -25,7 +25,7 @@ Live status below means runner coverage, not fabricated credential evidence. `QU
 | 17 | DfaBy | UID from same-run `Dfas` | `DfaResponse` | no DFA sample => `UNAVAILABLE`; rollout may gate |
 | 18 | Dfas | empty request | `DfasResponse` | rollout may gate; DFA economics optional/exact |
 | 19 | GetAccruedInterests | bond UID from `Bonds`; required from/to | `AccruedInterestsResponse` | token; typed required-period request; exact quotation/omission fixture |
-| 20 | GetFuturesMargin | future UID from `Futures` | `FuturesMarginResponse` | observed omitted-margin fixture; trading validation fails closed |
+| 20 | GetFuturesMargin | future UID from `Futures` | generated `GetFuturesMarginResponse` | generated-protobuf omitted-margin fixture; canonical trading validation fails closed |
 | 21 | GetInstrumentBy | UID from `Shares` | `InstrumentResponse` | token; shared validated lookup |
 | 22 | GetDividends | share UID from `Shares`; optional from/to | `DividendsResponse` | token; complete money/timestamp fixture |
 | 23 | GetAssetBy | UID from same-run `GetAssets` | `AssetResponse` | token; extension fields retained |
@@ -39,7 +39,7 @@ Live status below means runner coverage, not fabricated credential evidence. `QU
 | 31 | GetAssetFundamentals | 1..=100 non-empty asset UIDs from `GetAssets` | `FundamentalsResponse` | tariff/rollout gate; exact decimal and unrelated-field isolation tests |
 | 32 | GetAssetReports | share UID from `Shares`; optional from/to | `AssetReportsResponse` | tariff/rollout gate; complete timestamp fixture |
 | 33 | GetConsensusForecasts | provider paging; page 2 when present | `ConsensusForecastsResponse` | tariff/rollout gate; pagination and omission tests |
-| 34 | GetForecastBy | authoritative non-empty UID from same-run consensus pages | `ForecastResponse` | empty source => `UNAVAILABLE`; sourced 404 => failure; selection tests |
+| 34 | GetForecastBy | consensus `asset_uid` -> `GetAssetBy` -> deterministic bounded `AssetFull.instruments[].uid` | generated `GetForecastResponse` | no candidates => typed inconsistency; candidate 404 probes bounded; record UID never reused |
 | 35 | GetInsiderDeals | share UID from `Shares`; positive limit; next cursor page | `InsiderDealsResponse` | tariff/rollout gate; cursor and exact decimal fixture |
 | 36 | StructuredNoteBy | UID from same-run `StructuredNotes` | `InstrumentResponse` | no sample => `UNAVAILABLE`; rollout may gate |
 | 37 | StructuredNotes | explicit status/exchange filters | `InstrumentsResponse` | rollout may gate; optional instrument wire fixture |

@@ -231,6 +231,7 @@ impl TInvestRestClient {
             .await
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn post_mutation<Request, Response>(
         &self,
         authorization: MutationAuthorization,
@@ -746,6 +747,7 @@ pub enum RestErrorKind {
     ResponseDecode(#[source] serde_json::Error),
 }
 
+#[allow(dead_code)]
 fn mutation_path_matches_environment(
     environment: Environment,
     base_url: &Url,
@@ -820,6 +822,7 @@ fn is_safe_read_method(method: &str) -> bool {
         )
 }
 
+#[allow(dead_code)]
 fn is_mutation_method(method: &str) -> bool {
     ["Post", "Cancel", "Replace", "Open", "Close", "PayIn"]
         .iter()

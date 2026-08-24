@@ -179,5 +179,5 @@ A missing optional capability may degrade only the feature that depends on it. A
 4. Pagination and cursor traversal are adapter responsibilities.
 5. Rate-limit policy is centralized per provider/service family.
 6. 429, transient 5xx, disconnect and timeout behavior uses bounded backoff and does not turn ambiguous mutations into rejection.
-7. Reference/news/fundamental data may use REST; latency-sensitive market and execution events use streaming interfaces where available.
+7. Production provider calls prefer generated gRPC clients. REST/OpenAPI is compatibility cross-check or documented provider fallback only; certificate verification always remains enabled.
 8. Full support means implementation + typed mapping + tests + error semantics + capability reporting, not merely declaring an endpoint constant.
