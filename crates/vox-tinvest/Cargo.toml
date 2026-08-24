@@ -18,6 +18,7 @@ serde_path_to_error.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["net"] }
+tokio-stream.workspace = true
 tokio-tungstenite.workspace = true
 tonic.workspace = true
 tracing.workspace = true

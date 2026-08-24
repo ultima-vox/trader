@@ -84,17 +84,19 @@ Unknown future `InstrumentType` values remain explicit and default to `TRADER_ON
 
 | Capability | T-Invest surface | Trader 2.0 status |
 | --- | --- | --- |
-| Historical candles | `GetCandles` | required |
-| Last prices | `GetLastPrices` | required |
-| Last/public trades | `GetLastTrades` | required |
-| Order book snapshot | `GetOrderBook` | required |
-| Close prices | `GetClosePrices` | required |
-| Market values | `GetMarketValues` | required |
-| Technical analysis | `GetTechAnalysis` | required |
-| Trading status | `GetTradingStatus`, `GetTradingStatuses` | required |
-| Streaming quotes/trades/books/status | `MarketDataStreamService` | required |
-| Subscription recovery | adapter registry + reconnect | required |
-| Order-book consistency handling | provider `is_consistent` semantics where available | required |
+| Historical candles | `GetCandles` | supported: generated gRPC, exact canonical candle, interval-aware chunk plan |
+| Last prices | `GetLastPrices` | supported: generated gRPC, exact last-price fact; never quote |
+| Last/public trades | `GetLastTrades` | supported: generated gRPC, exact trade + documented compatibility ID |
+| Order book snapshot | `GetOrderBook` | supported: generated gRPC, full optional unary facts |
+| Close prices | `GetClosePrices` | supported: generated gRPC, missing prices/times remain `None` |
+| Market values | `GetMarketValues` | supported: generated gRPC, optional type/value/time preserved |
+| Technical analysis | `GetTechAnalysis` | supported: generated gRPC, optional indicator bands preserved |
+| Trading status | `GetTradingStatus`, `GetTradingStatuses` | supported: generated gRPC, provider enum/flags preserved |
+| Streaming quotes/trades/books/status | `MarketDataStream` | supported: generated bidirectional gRPC, bounded queues |
+| Server-side streaming | `MarketDataServerSideStream` | supported compatibility surface; bidirectional is production default |
+| Subscription recovery | adapter desired registry + reconnect | supported: ACK reset/replay, event-before-ACK |
+| Order-book consistency handling | provider `is_consistent` | supported: fail closed; consistent rebuild required after reconnect |
+| Duplicate/out-of-order handling | provider event timestamps + full message fingerprint | supported with observable drops; provider exposes no sequence |
 
 ## Accounts and user
 

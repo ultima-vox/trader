@@ -7,10 +7,16 @@
 
 mod exact;
 mod mapping;
+mod market_mapping;
+mod market_spec;
 mod spec;
 
 pub use exact::{ExactDecimal, future_money_per_point, to_nautilus_price};
 pub use mapping::{MappedEquity, MappedFuture, to_nautilus_equity, to_nautilus_future};
+pub use market_mapping::{to_nautilus_bar, to_nautilus_order_book_snapshot, to_nautilus_trade};
+pub use market_spec::{
+    BarSpec, BookLevelSpec, OrderBookSnapshotSpec, TimeBarInterval, TradeAggressor, TradeTickSpec,
+};
 pub use spec::{EquitySpec, FutureAssetClass, FutureSpec, InstrumentSpec};
 
 use thiserror::Error;
@@ -41,4 +47,8 @@ pub enum MappingError {
     },
     #[error("invalid Nautilus {field}: {reason}")]
     InvalidNautilusValue { field: &'static str, reason: String },
+    #[error("incomplete provider candle cannot become an authoritative Nautilus bar")]
+    IncompleteBar,
+    #[error("inconsistent provider order book cannot become a Nautilus snapshot")]
+    InconsistentOrderBook,
 }

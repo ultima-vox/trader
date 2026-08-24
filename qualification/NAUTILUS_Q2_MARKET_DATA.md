@@ -1,12 +1,13 @@
 # Q2 — T-Invest market-data semantics on NautilusTrader
 
-Status: **IN PROGRESS**
+Status: **IMPLEMENTED; CREDENTIALED LIVE EVIDENCE PENDING**
 
 ## Target path
 
 ```text
 T-Invest MarketDataStream
-  -> adapter parser
+  -> generated prost/tonic contract
+  -> Vox adapter normalization
   -> Nautilus normalized event
   -> DataEngine
   -> test Actor/DataTester
@@ -120,4 +121,7 @@ T-Invest `GetMySubscriptions` may be used as evidence/diagnostics but must not r
 
 ## Current verdict
 
-**NOT YET QUALIFIED.** Q1 live instrument mapping has passed. Q2 normalization primitives and the unary live probe now exist, but no T-Invest stream has yet been passed through Nautilus `DataEngine`, and forced reconnect/resubscription evidence is still required.
+Rust contract generation, all unary calls, bidirectional/server-side clients, exact normalization,
+bounded stream supervision, ACK/reconnect/resubscribe, duplicate/out-of-order handling, consistency
+gates, history planning, and Nautilus `TradeTick`/`Bar`/MBP snapshot mappings are implemented.
+Credentialed all-method live evidence remains required before Q2 becomes **QUALIFIED**.

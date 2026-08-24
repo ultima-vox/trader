@@ -1,0 +1,37 @@
+{
+  "source": {
+    "repository": "https://opensource.tbank.ru/invest/invest-contracts.git",
+    "revision": "762e720e27164213f41cac0b226c5698c2ae8199",
+    "proto": "src/docs/contracts/marketdata.proto",
+    "sha256": "60474e266b4e9f7c7a228728dc6da7bfa516a5cac4f85739e624d3ce4bebb263"
+  },
+  "wire_strategy": {
+    "kind": "prost-tonic-generated-grpc",
+    "rest_role": "compatibility-cross-check-only"
+  },
+  "unary_methods": [
+    {"method":"GetCandles","request":"GetCandlesRequest","response":"GetCandlesResponse","retry":"safe-read","canonical":"CanonicalCandle","constraints":"interval-span-limit; deterministic chunk+dedup"},
+    {"method":"GetLastPrices","request":"GetLastPricesRequest","response":"GetLastPricesResponse","retry":"safe-read","canonical":"last-price fact; never quote"},
+    {"method":"GetOrderBook","request":"GetOrderBookRequest","response":"GetOrderBookResponse","retry":"safe-read","canonical":"CanonicalOrderBook"},
+    {"method":"GetTradingStatus","request":"GetTradingStatusRequest","response":"GetTradingStatusResponse","retry":"safe-read","canonical":"provider status + flags"},
+    {"method":"GetTradingStatuses","request":"GetTradingStatusesRequest","response":"GetTradingStatusesResponse","retry":"safe-read","canonical":"provider status + flags"},
+    {"method":"GetLastTrades","request":"GetLastTradesRequest","response":"GetLastTradesResponse","retry":"safe-read","canonical":"CanonicalTrade","constraints":"provider guarantees last hour"},
+    {"method":"GetClosePrices","request":"GetClosePricesRequest","response":"GetClosePricesResponse","retry":"safe-read","canonical":"exact close facts"},
+    {"method":"GetTechAnalysis","request":"GetTechAnalysisRequest","response":"GetTechAnalysisResponse","retry":"safe-read","canonical":"exact optional indicator values"},
+    {"method":"GetMarketValues","request":"GetMarketValuesRequest","response":"GetMarketValuesResponse","retry":"safe-read","canonical":"typed provider values"}
+  ],
+  "stream_methods": [
+    {"method":"MarketDataStream","shape":"bidirectional","production":true,"recovery":"adapter desired-state resubscribe"},
+    {"method":"MarketDataServerSideStream","shape":"server-streaming","production":false,"role":"generated compatibility surface"}
+  ],
+  "stream_request_payloads": ["subscribe_candles_request","subscribe_order_book_request","subscribe_trades_request","subscribe_info_request","subscribe_last_price_request","get_my_subscriptions","ping","ping_settings"],
+  "stream_response_payloads": ["subscribe_candles_response","subscribe_order_book_response","subscribe_trades_response","subscribe_info_response","candle","trade","orderbook","trading_status","ping","subscribe_last_price_response","last_price","open_interest"],
+  "limits": {
+    "limited_subscriptions_per_stream": 300,
+    "subscription_requests_per_minute": 100,
+    "stream_connections": 32,
+    "ping_delay_ms_min": 5000,
+    "ping_delay_ms_default": 120000,
+    "ping_delay_ms_max": 180000
+  }
+}

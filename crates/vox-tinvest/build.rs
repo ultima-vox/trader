@@ -4,9 +4,11 @@ use std::path::PathBuf;
 fn main() -> Result<(), Box<dyn Error>> {
     let proto_root = PathBuf::from("proto/tinkoff");
     let instrument_contract = proto_root.join("instruments.proto");
+    let market_data_contract = proto_root.join("marketdata.proto");
     let common_contract = proto_root.join("common.proto");
 
     println!("cargo:rerun-if-changed={}", instrument_contract.display());
+    println!("cargo:rerun-if-changed={}", market_data_contract.display());
     println!("cargo:rerun-if-changed={}", common_contract.display());
     println!("cargo:rerun-if-changed=proto/tinkoff/google/api/field_behavior.proto");
 
@@ -18,7 +20,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .build_server(false)
         .compile_protos_with_config(
             prost,
-            &[instrument_contract, common_contract],
+            &[instrument_contract, market_data_contract, common_contract],
             &[proto_root],
         )?;
     Ok(())
