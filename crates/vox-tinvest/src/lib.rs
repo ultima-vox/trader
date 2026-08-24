@@ -3,10 +3,14 @@
 pub mod qualification;
 pub mod reference;
 
+pub mod account;
 pub mod canonical;
 pub mod generated;
 pub mod market_data;
 pub mod market_stream;
+pub mod operations;
+pub mod operations_stream;
+pub mod reports;
 
 mod grpc;
 mod rest;
@@ -17,8 +21,8 @@ mod websocket;
 pub use grpc::{
     DEFAULT_GRPC_ENDPOINT, DEFAULT_SANDBOX_GRPC_ENDPOINT, GrpcCertificatePolicy, GrpcConfig,
     GrpcConfigError, GrpcError, GrpcErrorKind, GrpcMarketDataServerStream, GrpcMarketDataStream,
-    GrpcProviderError, GrpcRequestMetadata, GrpcResponse, GrpcResponseMetadata, GrpcStreamError,
-    TInvestGrpcClient,
+    GrpcProviderError, GrpcRequestMetadata, GrpcResponse, GrpcResponseMetadata, GrpcServerStream,
+    GrpcStreamError, TInvestGrpcClient,
 };
 pub use rest::{
     DEFAULT_REST_BASE_URL, DEFAULT_SANDBOX_REST_BASE_URL, DispatchCertainty, ProviderError,

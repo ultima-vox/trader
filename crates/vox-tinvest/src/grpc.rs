@@ -32,6 +32,11 @@ type GeneratedClient = v1::instruments_service_client::InstrumentsServiceClient<
 type MarketGeneratedClient = v1::market_data_service_client::MarketDataServiceClient<Channel>;
 type MarketStreamGeneratedClient =
     v1::market_data_stream_service_client::MarketDataStreamServiceClient<Channel>;
+type UsersGeneratedClient = v1::users_service_client::UsersServiceClient<Channel>;
+type OperationsGeneratedClient = v1::operations_service_client::OperationsServiceClient<Channel>;
+type OperationsStreamGeneratedClient =
+    v1::operations_stream_service_client::OperationsStreamServiceClient<Channel>;
+type SandboxGeneratedClient = v1::sandbox_service_client::SandboxServiceClient<Channel>;
 type GrpcFuture<'a, T> = Pin<Box<dyn Future<Output = Result<Response<T>, Status>> + Send + 'a>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -229,6 +234,30 @@ impl TInvestGrpcClient {
             .max_decoding_message_size(self.config.max_response_bytes)
     }
 
+    fn users_generated_client(&self) -> UsersGeneratedClient {
+        UsersGeneratedClient::new(self.channel.clone())
+            .max_encoding_message_size(self.config.max_request_bytes)
+            .max_decoding_message_size(self.config.max_response_bytes)
+    }
+
+    fn operations_generated_client(&self) -> OperationsGeneratedClient {
+        OperationsGeneratedClient::new(self.channel.clone())
+            .max_encoding_message_size(self.config.max_request_bytes)
+            .max_decoding_message_size(self.config.max_response_bytes)
+    }
+
+    fn operations_stream_generated_client(&self) -> OperationsStreamGeneratedClient {
+        OperationsStreamGeneratedClient::new(self.channel.clone())
+            .max_encoding_message_size(self.config.max_request_bytes)
+            .max_decoding_message_size(self.config.max_response_bytes)
+    }
+
+    fn sandbox_generated_client(&self) -> SandboxGeneratedClient {
+        SandboxGeneratedClient::new(self.channel.clone())
+            .max_encoding_message_size(self.config.max_request_bytes)
+            .max_decoding_message_size(self.config.max_response_bytes)
+    }
+
     fn authenticated_request<T>(
         &self,
         body: T,
@@ -419,6 +448,68 @@ impl TInvestGrpcClient {
         unreachable!("retry policy always has at least one attempt")
     }
 
+    async fn service_read<Req, Resp, Client, Build, Dispatch>(
+        &self,
+        method: &'static str,
+        body: Req,
+        mut build: Build,
+        mut dispatch: Dispatch,
+        retry: bool,
+    ) -> Result<GrpcResponse<Resp>, GrpcError>
+    where
+        Req: Clone + Send + Sync + 'static,
+        Resp: Send + 'static,
+        Client: Send,
+        Build: FnMut() -> Client,
+        Dispatch: for<'a> FnMut(&'a mut Client, Request<Req>) -> GrpcFuture<'a, Resp>,
+    {
+        let request_id = Uuid::new_v4();
+        let attempts = if retry {
+            self.config.retry_policy.max_attempts()
+        } else {
+            1
+        };
+        for attempt in 1..=attempts {
+            let metadata = GrpcRequestMetadata {
+                request_id,
+                method,
+                attempt,
+                mutation: false,
+            };
+            let request = self
+                .unary_request(body.clone(), request_id)
+                .map_err(|kind| GrpcError { metadata, kind })?;
+            let mut client = build();
+            match dispatch(&mut client, request).await {
+                Ok(response) => return Ok(GrpcResponse::from_tonic(request_id, attempt, response)),
+                Err(status) if attempt < attempts && retryable_status(status.code()) => {
+                    let delay = self.config.retry_policy.delay_for(attempt, request_id);
+                    self.retry_observer.on_retry(&RetryEvent {
+                        operation: RestOperation::SafeRead,
+                        request_id,
+                        failed_attempt: attempt,
+                        next_attempt: attempt + 1,
+                        delay,
+                        server_retry_after: None,
+                        server_retry_after_raw: None,
+                        reason: match status.code() {
+                            Code::DeadlineExceeded => RetryReason::Timeout,
+                            _ => RetryReason::Transport,
+                        },
+                    });
+                    tokio::time::sleep(delay).await;
+                }
+                Err(status) => {
+                    return Err(GrpcError {
+                        metadata,
+                        kind: GrpcErrorKind::Provider(GrpcProviderError::from_status(status)),
+                    });
+                }
+            }
+        }
+        unreachable!("read always has at least one attempt")
+    }
+
     /// Opens verified, authenticated generated bidirectional market-data stream.
     pub async fn open_market_data_stream(
         &self,
@@ -593,6 +684,163 @@ impl TInvestGrpcClient {
         }
         self.safe_market_read("GetCandles", request, |client, request| {
             Box::pin(client.get_candles(request))
+        })
+        .await
+    }
+}
+
+macro_rules! service_safe_reads {
+    ($builder:ident; $(($name:ident, $provider_name:literal, $request:ty, $response:ty)),+ $(,)?) => {
+        impl TInvestGrpcClient {
+            $(
+                #[allow(deprecated)]
+                pub async fn $name(&self, request: $request) -> Result<GrpcResponse<$response>, GrpcError> {
+                    self.service_read(
+                        $provider_name,
+                        request,
+                        || self.$builder(),
+                        |client, request| Box::pin(client.$name(request)),
+                        true,
+                    ).await
+                }
+            )+
+        }
+    };
+}
+
+service_safe_reads!(users_generated_client;
+    (get_accounts, "GetAccounts", v1::GetAccountsRequest, v1::GetAccountsResponse),
+    (get_margin_attributes, "GetMarginAttributes", v1::GetMarginAttributesRequest, v1::GetMarginAttributesResponse),
+    (get_user_tariff, "GetUserTariff", v1::GetUserTariffRequest, v1::GetUserTariffResponse),
+    (get_info, "GetInfo", v1::GetInfoRequest, v1::GetInfoResponse),
+    (get_bank_accounts, "GetBankAccounts", v1::GetBankAccountsRequest, v1::GetBankAccountsResponse),
+    (get_account_values, "GetAccountValues", v1::GetAccountValuesRequest, v1::GetAccountValuesResponse),
+);
+
+service_safe_reads!(operations_generated_client;
+    (get_operations, "GetOperations", v1::OperationsRequest, v1::OperationsResponse),
+    (get_portfolio, "GetPortfolio", v1::PortfolioRequest, v1::PortfolioResponse),
+    (get_positions, "GetPositions", v1::PositionsRequest, v1::PositionsResponse),
+    (get_withdraw_limits, "GetWithdrawLimits", v1::WithdrawLimitsRequest, v1::WithdrawLimitsResponse),
+    (get_operations_by_cursor, "GetOperationsByCursor", v1::GetOperationsByCursorRequest, v1::GetOperationsByCursorResponse),
+);
+
+service_safe_reads!(sandbox_generated_client;
+    (get_sandbox_accounts, "GetSandboxAccounts", v1::GetAccountsRequest, v1::GetAccountsResponse),
+    (get_sandbox_portfolio, "GetSandboxPortfolio", v1::PortfolioRequest, v1::PortfolioResponse),
+    (get_sandbox_positions, "GetSandboxPositions", v1::PositionsRequest, v1::PositionsResponse),
+    (get_sandbox_withdraw_limits, "GetSandboxWithdrawLimits", v1::WithdrawLimitsRequest, v1::WithdrawLimitsResponse),
+    (get_sandbox_operations, "GetSandboxOperations", v1::OperationsRequest, v1::OperationsResponse),
+    (get_sandbox_operations_by_cursor, "GetSandboxOperationsByCursor", v1::GetOperationsByCursorRequest, v1::GetOperationsByCursorResponse),
+);
+
+impl TInvestGrpcClient {
+    pub async fn get_broker_report(
+        &self,
+        request: v1::BrokerReportRequest,
+    ) -> Result<GrpcResponse<v1::BrokerReportResponse>, GrpcError> {
+        let retry = matches!(
+            request.payload,
+            Some(v1::broker_report_request::Payload::GetBrokerReportRequest(
+                _
+            ))
+        );
+        self.service_read(
+            "GetBrokerReport",
+            request,
+            || self.operations_generated_client(),
+            |client, request| Box::pin(client.get_broker_report(request)),
+            retry,
+        )
+        .await
+    }
+
+    pub async fn get_dividends_foreign_issuer(
+        &self,
+        request: v1::GetDividendsForeignIssuerRequest,
+    ) -> Result<GrpcResponse<v1::GetDividendsForeignIssuerResponse>, GrpcError> {
+        let retry = matches!(
+            request.payload,
+            Some(v1::get_dividends_foreign_issuer_request::Payload::GetDivForeignIssuerReport(_))
+        );
+        self.service_read(
+            "GetDividendsForeignIssuer",
+            request,
+            || self.operations_generated_client(),
+            |client, request| Box::pin(client.get_dividends_foreign_issuer(request)),
+            retry,
+        )
+        .await
+    }
+
+    async fn open_operations_server_stream<Req, Resp, Dispatch>(
+        &self,
+        method: &'static str,
+        body: Req,
+        mut dispatch: Dispatch,
+    ) -> Result<GrpcServerStream<Resp>, GrpcError>
+    where
+        Req: Send + Sync + 'static,
+        Resp: Send + 'static,
+        Dispatch: for<'a> FnMut(
+            &'a mut OperationsStreamGeneratedClient,
+            Request<Req>,
+        ) -> GrpcFuture<'a, tonic::codec::Streaming<Resp>>,
+    {
+        let request_id = Uuid::new_v4();
+        let metadata = GrpcRequestMetadata {
+            request_id,
+            method,
+            attempt: 1,
+            mutation: false,
+        };
+        let request = self
+            .stream_request(body, request_id)
+            .map_err(|kind| GrpcError { metadata, kind })?;
+        let mut client = self.operations_stream_generated_client();
+        let response = dispatch(&mut client, request)
+            .await
+            .map_err(|status| GrpcError {
+                metadata,
+                kind: GrpcErrorKind::Provider(GrpcProviderError::from_status(status)),
+            })?;
+        let tracking_id = metadata_text(response.metadata(), "x-tracking-id");
+        Ok(GrpcServerStream {
+            inbound: response.into_inner(),
+            metadata: GrpcResponseMetadata {
+                request_id,
+                tracking_id,
+                attempt: 1,
+            },
+        })
+    }
+
+    pub async fn open_portfolio_stream(
+        &self,
+        request: v1::PortfolioStreamRequest,
+    ) -> Result<GrpcServerStream<v1::PortfolioStreamResponse>, GrpcError> {
+        self.open_operations_server_stream("PortfolioStream", request, |client, request| {
+            Box::pin(client.portfolio_stream(request))
+        })
+        .await
+    }
+
+    pub async fn open_positions_stream(
+        &self,
+        request: v1::PositionsStreamRequest,
+    ) -> Result<GrpcServerStream<v1::PositionsStreamResponse>, GrpcError> {
+        self.open_operations_server_stream("PositionsStream", request, |client, request| {
+            Box::pin(client.positions_stream(request))
+        })
+        .await
+    }
+
+    pub async fn open_operations_stream(
+        &self,
+        request: v1::OperationsStreamRequest,
+    ) -> Result<GrpcServerStream<v1::OperationsStreamResponse>, GrpcError> {
+        self.open_operations_server_stream("OperationsStream", request, |client, request| {
+            Box::pin(client.operations_stream(request))
         })
         .await
     }
@@ -888,6 +1136,20 @@ pub struct GrpcMarketDataStream {
 pub struct GrpcMarketDataServerStream {
     inbound: tonic::Streaming<v1::MarketDataResponse>,
     pub metadata: GrpcResponseMetadata,
+}
+
+pub struct GrpcServerStream<T> {
+    inbound: tonic::Streaming<T>,
+    pub metadata: GrpcResponseMetadata,
+}
+
+impl<T> GrpcServerStream<T> {
+    pub async fn message(&mut self) -> Result<Option<T>, GrpcStreamError> {
+        self.inbound
+            .message()
+            .await
+            .map_err(GrpcStreamError::from_status)
+    }
 }
 
 impl GrpcMarketDataServerStream {
