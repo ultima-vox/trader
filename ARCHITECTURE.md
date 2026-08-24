@@ -223,6 +223,16 @@ Until then it remains an in-process module behind the same interface.
 
 The existing Python production seed under `src/trader2/` is transitional and must not receive new product functionality. It is replaced by the Rust foundation under ADR-0002.
 
+Current Rust dependency direction is one-way:
+
+```text
+vox-core -> vox-tinvest -> vox-domain
+         -> vox-nautilus -> vox-domain
+                         -> nautilus-model
+```
+
+`vox-domain` contains no provider or Nautilus dependency. `vox-tinvest` owns wire DTOs and never exports raw provider JSON. `vox-nautilus` is the only mapping boundary allowed to construct Nautilus instrument types from Vox representations.
+
 ## Precision policy
 
 Financial economics must never depend on binary floating-point approximation.

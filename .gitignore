@@ -1,0 +1,8 @@
+/target/
+/.env
+/.venv/
+/.pytest_cache/
+/.qualification-q4-state.json
+/actions-runner/
+**/__pycache__/
+*.egg-info/

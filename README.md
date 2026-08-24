@@ -4,7 +4,7 @@ Trader 2.0 is an AI-assisted trading platform built around a qualified upstream 
 
 ## Current status
 
-**Runtime qualification complete. Architecture baseline in progress.**
+**Rust runtime foundation in progress under issue #12. Python production seed is frozen.**
 
 NautilusTrader has been accepted as the Trader 2.0 trading-runtime foundation after live T-Invest qualification of instruments/futures economics, market data/reconnect, sandbox execution, reconciliation, restart recovery and UNKNOWN post-dispatch semantics.
 
@@ -17,7 +17,8 @@ See `architecture/adr/ADR-0001-nautilus-runtime.md`.
 - isolated live trading runtime process;
 - isolated research/ML workers for CPU/GPU-heavy work;
 - T-Invest broker adapter first;
-- Python for orchestration/strategy/research/ML;
+- Rust for Vox Core orchestration, broker adapters and capital-critical paths;
+- Python only for isolated research/ML/AI workers;
 - TypeScript frontend;
 - Trader-owned advanced risk before runtime execution safeguards;
 - shared backtest/live strategy-domain logic;
@@ -37,7 +38,7 @@ See `architecture/adr/ADR-0001-nautilus-runtime.md`.
 
 ## Qualification
 
-Qualification harnesses remain under `qualification/` as regression evidence for adapter/runtime compatibility.
+Qualification harnesses under `qualification/` remain regression evidence while equivalent Rust gates move into the workspace. See `docs/rust-foundation.md`.
 
 ## Legacy reference
 

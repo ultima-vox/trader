@@ -1,6 +1,6 @@
 # Vox Trader — Rust migration gate
 
-Status: **ACTIVE**
+Status: **READY FOR REVIEW — issue #12; credentialed Rust live rerun required**
 
 This plan implements ADR-0002 before feature development continues.
 
@@ -34,6 +34,19 @@ crates/
 ```
 
 Initial migration may start with fewer crates if boundaries stay explicit; do not create empty crate ceremony without a concrete dependency boundary.
+
+## Implemented foundation boundary
+
+Issue #12 establishes four concrete crates:
+
+- `vox-domain`: broker-neutral exact values, readiness, mutation authorization, identities and recovery evidence;
+- `vox-tinvest`: typed REST/WebSocket adapter, correlation, retry and reconnect primitives;
+- `vox-nautilus`: explicit high-precision mappings into Nautilus Rust/v2;
+- `vox-core`: Tokio composition and executable qualification entry points.
+
+Persistence and API crates remain deferred until they own real behavior. Issues #7–#11 remain blocked until this gate is reviewed and merged.
+
+Deterministic Rust gates cover exact Q1 economics, typed REST/WebSocket behavior, bounded reconnect/resubscribe, mutation `UNKNOWN`, sandbox-style readback/cancel and fresh-process recovery. Executable `rq1_live` and `rq2_live` runners are ready; Head of Development must capture their credentialed read-only output before accepting the gate because implementation environment had no `TINVEST_TOKEN`.
 
 ## Rust baseline
 

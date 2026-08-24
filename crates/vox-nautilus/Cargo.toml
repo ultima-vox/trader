@@ -1,0 +1,15 @@
+[package]
+name = "vox-nautilus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+nautilus-model.workspace = true
+thiserror.workspace = true
+ustr.workspace = true
+vox-domain = { path = "../vox-domain" }
+
+[lints]
+workspace = true
