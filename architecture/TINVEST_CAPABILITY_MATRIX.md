@@ -17,7 +17,7 @@ Official `InstrumentsService` contract checked 2026-08-24. `reference` below mea
 
 | Service | Method | Class | Requirements | Rust module/state | Routing | Exact Nautilus target | Tests/live evidence | Deprecated replacement | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| InstrumentsService | `TradingSchedules` | read | token | `reference` / supported | `TRADER_ONLY` | — | unit; read-only live eligible | — | UTC intervals retained |
+| InstrumentsService | `TradingSchedules` | read | token | `reference` / supported | `TRADER_ONLY` | — | legal-window, boundary, deterministic merge, partial-failure unit tests; read-only live eligible | — | UTC intervals retained; ranges split into provider-legal <=14-day windows |
 | InstrumentsService | `BondBy` | read | token | `reference` / supported | `TRADER_AND_NAUTILUS` | `nautilus_model::instruments::Bond` | unit; read-only live eligible | — | mapping only when exact |
 | InstrumentsService | `Bonds` | read | token | `reference` / supported | `TRADER_AND_NAUTILUS` | `nautilus_model::instruments::Bond` | every-family unit; read-only live eligible | — | provider catalogue retained |
 | InstrumentsService | `GetBondCoupons` | read | token | `reference` / supported | `TRADER_ONLY` | — | DTO unit; read-only live eligible | — | exact money/quotation |

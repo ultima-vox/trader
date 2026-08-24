@@ -13,4 +13,6 @@ Expected output contains one `QUALIFIED <method>` or `GATED <method> <state>` li
 
 First credentialed run reached `GetFuturesMargin` and proved that current REST protobuf JSON omits unset `initialMarginOnBuy`. Regression coverage now preserves that field as `None`, audits omission across the complete reference wire surface, and requires explicit fail-closed economics validation.
 
+Second credentialed run reached `TradingSchedules` and proved provider code `30002`: requested period must not exceed 14 days. Production client now chunks longer caller ranges without truncation; live qualification deliberately uses an exact seven-day range.
+
 Implementation environment recheck on 2026-08-24: `TINVEST_TOKEN` absent. Complete rerun cannot execute in this process; no credentialed result is claimed. Head of Development must supply token and attach full command output before accepting live evidence.

@@ -6,7 +6,8 @@ use vox_tinvest::reference::{
     FindInstrumentRequest, IdRequest, InsiderDealsRequest, InstrumentExchange, InstrumentIdRequest,
     InstrumentIdType, InstrumentRequest, InstrumentStatus, InstrumentsRequest, NewsRequest,
     OptionsByRequest, PageRequest, PagedRequest, PeriodRequest, ProviderInstrumentType,
-    RiskRatesRequest, Timestamp, TradingSchedulesRequest,
+    RiskRatesRequest, Timestamp, TradingSchedulesError, TradingSchedulesRequest,
+    TradingSchedulesResult,
 };
 use vox_tinvest::{ProviderResponse, RestError, RestErrorKind, SecretToken, TInvestRestClient};
 
@@ -29,6 +30,38 @@ fn qualified<T>(
             };
             if gated {
                 println!("GATED {method} {:?}", registry.state(method));
+                Ok(None)
+            } else {
+                Err(Box::new(error))
+            }
+        }
+    }
+}
+
+fn qualified_trading_schedules(
+    result: Result<TradingSchedulesResult, TradingSchedulesError>,
+    registry: &mut CapabilityRegistry,
+) -> Result<Option<TradingSchedulesResult>, Box<dyn Error>> {
+    match result {
+        Ok(response) => {
+            println!("QUALIFIED TradingSchedules");
+            Ok(Some(response))
+        }
+        Err(error) => {
+            let gated = error
+                .rest_error()
+                .and_then(|error| match error.kind() {
+                    RestErrorKind::Provider(provider) => Some(
+                        registry.record_provider_http("TradingSchedules", provider.http_status()),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or(false);
+            if gated {
+                println!(
+                    "GATED TradingSchedules {:?}",
+                    registry.state("TradingSchedules")
+                );
                 Ok(None)
             } else {
                 Err(Box::new(error))
@@ -69,6 +102,8 @@ async fn current_reference_surface_decodes_live_read_only() -> Result<(), Box<dy
     };
     let from = Timestamp::parse("2025-01-01T00:00:00Z")?;
     let to = Timestamp::parse("2026-12-31T23:59:59Z")?;
+    let schedule_from = Timestamp::parse("2026-08-17T00:00:00Z")?;
+    let schedule_to = Timestamp::parse("2026-08-24T00:00:00Z")?;
 
     let shares = qualified("Shares", client.shares(&catalogue).await, &mut capabilities)?
         .ok_or("Shares unexpectedly gated")?;
@@ -256,13 +291,12 @@ async fn current_reference_surface_decodes_live_read_only() -> Result<(), Box<dy
         client.get_countries(&EmptyRequest::default()).await,
         &mut capabilities,
     )?;
-    qualified(
-        "TradingSchedules",
+    qualified_trading_schedules(
         client
             .trading_schedules(&TradingSchedulesRequest {
                 exchange: None,
-                from: &from,
-                to: &to,
+                from: &schedule_from,
+                to: &schedule_to,
             })
             .await,
         &mut capabilities,

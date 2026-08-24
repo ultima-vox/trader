@@ -6,13 +6,14 @@
 
 use core::fmt;
 use std::collections::BTreeMap;
+use std::future::Future;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Number;
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 use vox_domain::{InstrumentIdentity, MutationAuthorization, UnitsNano};
 
-use crate::{ProviderResponse, RestError, TInvestRestClient};
+use crate::{ProviderResponse, ResponseMetadata, RestError, TInvestRestClient};
 
 const SERVICE: &str = "tinkoff.public.invest.api.contract.v1.InstrumentsService";
 
@@ -183,6 +184,20 @@ impl Timestamp {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    fn datetime(&self) -> OffsetDateTime {
+        match OffsetDateTime::parse(&self.0, &Rfc3339) {
+            Ok(value) => value,
+            Err(_) => unreachable!("Timestamp is validated at construction"),
+        }
+    }
+
+    fn from_datetime(value: OffsetDateTime) -> Self {
+        match value.format(&Rfc3339) {
+            Ok(value) => Self(value),
+            Err(error) => unreachable!("OffsetDateTime always formats as RFC3339: {error}"),
+        }
     }
 }
 
@@ -1390,6 +1405,155 @@ mod tests {
     }
 
     #[test]
+    fn trading_schedule_windows_honor_legal_and_exact_boundaries()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let start = Timestamp::parse("2026-01-01T00:00:00Z")?;
+        let seven_days = Timestamp::parse("2026-01-08T00:00:00Z")?;
+        let exact_limit = Timestamp::parse("2026-01-15T00:00:00Z")?;
+        let over_limit = Timestamp::parse("2026-01-15T00:00:01Z")?;
+
+        let legal = trading_schedule_windows(&TradingSchedulesRequest {
+            exchange: None,
+            from: &start,
+            to: &seven_days,
+        })?;
+        assert_eq!(legal.len(), 1);
+        assert_eq!(legal[0].from, start);
+        assert_eq!(legal[0].to, seven_days);
+
+        let exact = trading_schedule_windows(&TradingSchedulesRequest {
+            exchange: Some("MOEX"),
+            from: &start,
+            to: &exact_limit,
+        })?;
+        assert_eq!(exact.len(), 1);
+        assert_eq!(exact[0].to, exact_limit);
+
+        let split = trading_schedule_windows(&TradingSchedulesRequest {
+            exchange: None,
+            from: &start,
+            to: &over_limit,
+        })?;
+        assert_eq!(split.len(), 2);
+        assert_eq!(split[0].to, exact_limit);
+        assert_eq!(split[1].from, exact_limit);
+        assert_eq!(split[1].to, over_limit);
+        Ok(())
+    }
+
+    #[test]
+    fn trading_schedule_merge_preserves_order_and_deduplicates_boundaries()
+    -> Result<(), Box<dyn std::error::Error>> {
+        fn day(value: &str) -> Result<TradingDay, TimestampError> {
+            Ok(TradingDay {
+                date: Some(Timestamp::parse(value)?),
+                is_trading_day: Some(true),
+                start_time: None,
+                end_time: None,
+                intervals: Vec::new(),
+            })
+        }
+
+        let first = day("2026-01-01T00:00:00Z")?;
+        let boundary = day("2026-01-15T00:00:00Z")?;
+        let last = day("2026-01-20T00:00:00Z")?;
+        let mut merged = TradingSchedulesResponse {
+            exchanges: vec![TradingSchedule {
+                exchange: Some("MOEX".to_owned()),
+                days: vec![first.clone(), boundary.clone()],
+            }],
+        };
+        merge_trading_schedules(
+            &mut merged,
+            TradingSchedulesResponse {
+                exchanges: vec![
+                    TradingSchedule {
+                        exchange: Some("MOEX".to_owned()),
+                        days: vec![boundary, last.clone()],
+                    },
+                    TradingSchedule {
+                        exchange: Some("SPB".to_owned()),
+                        days: vec![first.clone()],
+                    },
+                ],
+            },
+        )?;
+
+        assert_eq!(merged.exchanges[0].exchange.as_deref(), Some("MOEX"));
+        assert_eq!(
+            merged.exchanges[0].days,
+            vec![first.clone(), day("2026-01-15T00:00:00Z")?, last]
+        );
+        assert_eq!(merged.exchanges[1].exchange.as_deref(), Some("SPB"));
+        assert_eq!(merged.exchanges[1].days, vec![first]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn trading_schedule_chunk_failure_never_returns_partial_body()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let start = Timestamp::parse("2026-01-01T00:00:00Z")?;
+        let finish = Timestamp::parse("2026-02-01T00:00:00Z")?;
+        let windows = trading_schedule_windows(&TradingSchedulesRequest {
+            exchange: None,
+            from: &start,
+            to: &finish,
+        })?;
+        assert_eq!(windows.len(), 3);
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let result = execute_trading_schedule_windows(windows, {
+            let calls = Arc::clone(&calls);
+            move |_| {
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if call == 1 {
+                        return Err("observed chunk failure");
+                    }
+                    Ok(ProviderResponse {
+                        body: TradingSchedulesResponse {
+                            exchanges: Vec::new(),
+                        },
+                        metadata: ResponseMetadata {
+                            request: crate::RequestMetadata {
+                                request_id: uuid::Uuid::nil(),
+                                operation: crate::RestOperation::SafeRead,
+                                method_path: path("TradingSchedules"),
+                                attempt: 1,
+                            },
+                            http_status: 200,
+                            provider_tracking_id: None,
+                        },
+                    })
+                }
+            }
+        })
+        .await;
+
+        match result {
+            Err(ChunkExecutionError::Fetch {
+                completed_windows,
+                window_number,
+                total_windows,
+                source,
+                ..
+            }) => {
+                assert_eq!(completed_windows, 1);
+                assert_eq!(window_number, 2);
+                assert_eq!(total_windows, 3);
+                assert_eq!(source, "observed chunk failure");
+            }
+            Err(ChunkExecutionError::Merge(_)) => panic!("unexpected merge failure"),
+            Ok(_) => panic!("partial schedules must never be returned as complete"),
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        Ok(())
+    }
+
+    #[test]
     fn pagination_is_bounded_and_monotonic() -> Result<(), PaginationError> {
         let page = PageRequest::new(100, 0)?.next()?;
         assert_eq!(
@@ -2081,7 +2245,7 @@ pub struct RiskRatesRequest<'a> {
     pub instrument_id: &'a [&'a str],
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TradingInterval {
     #[serde(rename = "type")]
@@ -2089,14 +2253,14 @@ pub struct TradingInterval {
     pub interval: Option<TimeInterval>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TimeInterval {
     pub start_ts: Option<Timestamp>,
     pub end_ts: Option<Timestamp>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TradingDay {
     pub date: Option<Timestamp>,
@@ -2109,14 +2273,14 @@ pub struct TradingDay {
     pub intervals: Vec<TradingInterval>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct TradingSchedule {
     pub exchange: Option<String>,
     #[serde(default)]
     pub days: Vec<TradingDay>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct TradingSchedulesResponse {
     #[serde(default)]
     pub exchanges: Vec<TradingSchedule>,
@@ -2128,6 +2292,181 @@ pub struct TradingSchedulesRequest<'a> {
     pub exchange: Option<&'a str>,
     pub from: &'a Timestamp,
     pub to: &'a Timestamp,
+}
+
+const MAX_TRADING_SCHEDULE_PERIOD: Duration = Duration::days(14);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TradingSchedulesWindow {
+    pub from: Timestamp,
+    pub to: Timestamp,
+}
+
+impl TradingSchedulesWindow {
+    fn request<'a>(&'a self, exchange: Option<&'a str>) -> TradingSchedulesRequest<'a> {
+        TradingSchedulesRequest {
+            exchange,
+            from: &self.from,
+            to: &self.to,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TradingSchedulesResult {
+    pub body: TradingSchedulesResponse,
+    pub window_metadata: Vec<ResponseMetadata>,
+}
+
+impl TradingSchedulesResult {
+    pub fn into_body(self) -> TradingSchedulesResponse {
+        self.body
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TradingSchedulesError {
+    #[error("trading-schedule range starts after it ends")]
+    InvalidRange,
+    #[error(
+        "trading-schedule chunk {window_number}/{total_windows} failed after {completed_windows} complete windows"
+    )]
+    Partial {
+        completed_windows: usize,
+        window_number: usize,
+        total_windows: usize,
+        from: Timestamp,
+        to: Timestamp,
+        #[source]
+        source: Box<RestError>,
+    },
+    #[error("provider returned conflicting trading days for exchange/date")]
+    ConflictingDay {
+        exchange: Option<String>,
+        date: Timestamp,
+    },
+}
+
+impl TradingSchedulesError {
+    pub fn rest_error(&self) -> Option<&RestError> {
+        match self {
+            Self::Partial { source, .. } => Some(source.as_ref()),
+            Self::InvalidRange | Self::ConflictingDay { .. } => None,
+        }
+    }
+}
+
+pub fn trading_schedule_windows(
+    request: &TradingSchedulesRequest<'_>,
+) -> Result<Vec<TradingSchedulesWindow>, TradingSchedulesError> {
+    let start = request.from.datetime();
+    let finish = request.to.datetime();
+    if start > finish {
+        return Err(TradingSchedulesError::InvalidRange);
+    }
+
+    let mut windows = Vec::new();
+    let mut cursor = start;
+    loop {
+        let window_finish = cursor
+            .checked_add(MAX_TRADING_SCHEDULE_PERIOD)
+            .map_or(finish, |limit| limit.min(finish));
+        windows.push(TradingSchedulesWindow {
+            from: if cursor == start {
+                request.from.clone()
+            } else {
+                Timestamp::from_datetime(cursor)
+            },
+            to: if window_finish == finish {
+                request.to.clone()
+            } else {
+                Timestamp::from_datetime(window_finish)
+            },
+        });
+        if window_finish == finish {
+            return Ok(windows);
+        }
+        cursor = window_finish;
+    }
+}
+
+fn merge_trading_schedules(
+    merged: &mut TradingSchedulesResponse,
+    next: TradingSchedulesResponse,
+) -> Result<(), TradingSchedulesError> {
+    for mut schedule in next.exchanges {
+        let Some(existing) = merged
+            .exchanges
+            .iter_mut()
+            .find(|candidate| candidate.exchange == schedule.exchange)
+        else {
+            merged.exchanges.push(schedule);
+            continue;
+        };
+
+        for day in schedule.days.drain(..) {
+            if existing.days.contains(&day) {
+                continue;
+            }
+            if let Some(date) = day.date.as_ref()
+                && existing
+                    .days
+                    .iter()
+                    .any(|candidate| candidate.date.as_ref() == Some(date))
+            {
+                return Err(TradingSchedulesError::ConflictingDay {
+                    exchange: existing.exchange.clone(),
+                    date: date.clone(),
+                });
+            }
+            existing.days.push(day);
+        }
+    }
+    Ok(())
+}
+
+async fn execute_trading_schedule_windows<E, Fetch, FetchFuture>(
+    windows: Vec<TradingSchedulesWindow>,
+    mut fetch: Fetch,
+) -> Result<TradingSchedulesResult, ChunkExecutionError<E>>
+where
+    Fetch: FnMut(TradingSchedulesWindow) -> FetchFuture,
+    FetchFuture: Future<Output = Result<ProviderResponse<TradingSchedulesResponse>, E>>,
+{
+    let total_windows = windows.len();
+    let mut body = TradingSchedulesResponse {
+        exchanges: Vec::new(),
+    };
+    let mut window_metadata = Vec::with_capacity(total_windows);
+    for (index, window) in windows.into_iter().enumerate() {
+        let response =
+            fetch(window.clone())
+                .await
+                .map_err(|source| ChunkExecutionError::Fetch {
+                    completed_windows: index,
+                    window_number: index + 1,
+                    total_windows,
+                    window,
+                    source,
+                })?;
+        merge_trading_schedules(&mut body, response.body).map_err(ChunkExecutionError::Merge)?;
+        window_metadata.push(response.metadata);
+    }
+    Ok(TradingSchedulesResult {
+        body,
+        window_metadata,
+    })
+}
+
+enum ChunkExecutionError<E> {
+    Fetch {
+        completed_windows: usize,
+        window_number: usize,
+        total_windows: usize,
+        window: TradingSchedulesWindow,
+        source: E,
+    },
+    Merge(TradingSchedulesError),
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2391,7 +2730,6 @@ read_methods!(
     (get_brands, "GetBrands", PagedRequest, BrandsResponse),
     (get_brand_by, "GetBrandBy", IdRequest<'_>, Brand),
     (get_countries, "GetCountries", EmptyRequest, CountriesResponse),
-    (trading_schedules, "TradingSchedules", TradingSchedulesRequest<'_>, TradingSchedulesResponse),
     (get_dividends, "GetDividends", PeriodRequest<'_>, DividendsResponse),
     (get_bond_coupons, "GetBondCoupons", PeriodRequest<'_>, BondCouponsResponse),
     (get_accrued_interests, "GetAccruedInterests", PeriodRequest<'_>, AccruedInterestsResponse),
@@ -2407,6 +2745,44 @@ read_methods!(
     (get_favorites, "GetFavorites", FavoritesRequest<'_>, FavoritesResponse),
     (get_favorite_groups, "GetFavoriteGroups", FavoriteGroupsRequest<'_>, FavoriteGroupsResponse),
 );
+
+impl TInvestRestClient {
+    pub async fn trading_schedules(
+        &self,
+        request: &TradingSchedulesRequest<'_>,
+    ) -> Result<TradingSchedulesResult, TradingSchedulesError> {
+        let windows = trading_schedule_windows(request)?;
+        let exchange = request.exchange.map(str::to_owned);
+        execute_trading_schedule_windows(windows, |window| {
+            let exchange = exchange.clone();
+            async move {
+                self.post_read(
+                    &path("TradingSchedules"),
+                    &window.request(exchange.as_deref()),
+                )
+                .await
+            }
+        })
+        .await
+        .map_err(|error| match error {
+            ChunkExecutionError::Fetch {
+                completed_windows,
+                window_number,
+                total_windows,
+                window,
+                source,
+            } => TradingSchedulesError::Partial {
+                completed_windows,
+                window_number,
+                total_windows,
+                from: window.from,
+                to: window.to,
+                source: Box::new(source),
+            },
+            ChunkExecutionError::Merge(error) => error,
+        })
+    }
+}
 
 impl TInvestRestClient {
     pub async fn edit_favorites(
