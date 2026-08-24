@@ -228,10 +228,14 @@ pub enum MarketDataError {
     InvalidPingDelay,
     #[error("acknowledgement does not match desired subscription")]
     UnknownAcknowledgement,
-    #[error("acknowledgement action {0} does not match subscribe request")]
+    #[error("acknowledgement action {0} does not match pending subscription command")]
     UnexpectedAcknowledgementAction(i32),
+    #[error("subscription response received without a pending command or snapshot request")]
+    UnexpectedSubscriptionResponse,
     #[error("successful acknowledgement has invalid stream/subscription identity")]
     InvalidAcknowledgementIdentity,
+    #[error("active snapshot identity does not match confirmed subscription")]
+    InvalidActiveSnapshotIdentity,
     #[error(
         "subscription {family:?} for {instrument_uid} rejected with provider status {provider_status}, tracking_id={tracking_id}"
     )]
@@ -809,16 +813,51 @@ pub enum SubscriptionFamily {
     LastPrice,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubscriptionCommand {
+    Subscribe,
+    Unsubscribe,
+}
+
+impl SubscriptionCommand {
+    const fn wire_action(self) -> i32 {
+        match self {
+            Self::Subscribe => v1::SubscriptionAction::Subscribe as i32,
+            Self::Unsubscribe => v1::SubscriptionAction::Unsubscribe as i32,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubscriptionAcknowledgement {
     pub subscription: MarketSubscription,
     pub family: SubscriptionFamily,
     pub instrument_uid: String,
     pub provider_status: i32,
+    pub provider_action: i32,
     pub tracking_id: String,
+    pub stream_id: String,
+    pub subscription_id: String,
 }
 
-struct AcknowledgementFields<'a> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActiveSubscriptionSnapshot {
+    pub subscription: MarketSubscription,
+    pub family: SubscriptionFamily,
+    pub instrument_uid: String,
+    pub provider_status: i32,
+    pub tracking_id: String,
+    pub stream_id: String,
+    pub subscription_id: String,
+}
+
+#[derive(Clone, Copy)]
+enum SubscriptionResponseContext {
+    Command { expected_action: i32 },
+    ActiveSnapshot,
+}
+
+struct SubscriptionResponseFields<'a> {
     family: SubscriptionFamily,
     tracking_id: &'a str,
     provider_status: i32,
@@ -887,46 +926,68 @@ impl MarketSubscriptionRegistry {
         })
     }
 
-    fn acknowledge(
+    fn apply_subscription_status(
         &mut self,
         subscription: &MarketSubscription,
-        acknowledgement: AcknowledgementFields<'_>,
+        fields: SubscriptionResponseFields<'_>,
+        context: SubscriptionResponseContext,
     ) -> Result<SubscriptionAcknowledgement, MarketDataError> {
         let state = self
             .entries
             .get_mut(subscription)
             .ok_or(MarketDataError::UnknownAcknowledgement)?;
-        if acknowledgement.provider_status != v1::SubscriptionStatus::Success as i32 {
+        if fields.provider_status != v1::SubscriptionStatus::Success as i32 {
             *state = ConfirmationState::Rejected {
-                provider_status: acknowledgement.provider_status,
+                provider_status: fields.provider_status,
             };
             return Err(MarketDataError::SubscriptionRejected {
-                family: acknowledgement.family,
+                family: fields.family,
                 instrument_uid: subscription.instrument_id.clone(),
-                provider_status: acknowledgement.provider_status,
-                tracking_id: acknowledgement.tracking_id.to_owned(),
+                provider_status: fields.provider_status,
+                tracking_id: fields.tracking_id.to_owned(),
             });
         }
-        if acknowledgement.provider_action != v1::SubscriptionAction::Subscribe as i32 {
+        if let SubscriptionResponseContext::Command { expected_action } = context
+            && fields.provider_action != expected_action
+        {
             return Err(MarketDataError::UnexpectedAcknowledgementAction(
-                acknowledgement.provider_action,
+                fields.provider_action,
             ));
         }
-        if acknowledgement.stream_id.is_empty()
-            || Uuid::parse_str(&acknowledgement.subscription_id).is_err()
-        {
+        if fields.stream_id.is_empty() || Uuid::parse_str(&fields.subscription_id).is_err() {
             return Err(MarketDataError::InvalidAcknowledgementIdentity);
         }
-        *state = ConfirmationState::Confirmed {
-            stream_id: acknowledgement.stream_id,
-            subscription_id: acknowledgement.subscription_id,
-        };
+        if matches!(context, SubscriptionResponseContext::ActiveSnapshot)
+            && !matches!(
+                state,
+                ConfirmationState::Confirmed {
+                    stream_id,
+                    subscription_id,
+                } if stream_id == &fields.stream_id
+                    && subscription_id == &fields.subscription_id
+            )
+        {
+            return Err(MarketDataError::InvalidActiveSnapshotIdentity);
+        }
+        if let SubscriptionResponseContext::Command { expected_action } = context {
+            if expected_action == v1::SubscriptionAction::Subscribe as i32 {
+                *state = ConfirmationState::Confirmed {
+                    stream_id: fields.stream_id.clone(),
+                    subscription_id: fields.subscription_id.clone(),
+                };
+            } else {
+                *state = ConfirmationState::Pending;
+            }
+        }
         Ok(SubscriptionAcknowledgement {
             subscription: subscription.clone(),
-            family: acknowledgement.family,
+            family: fields.family,
             instrument_uid: subscription.instrument_id.clone(),
-            provider_status: acknowledgement.provider_status,
-            tracking_id: acknowledgement.tracking_id.to_owned(),
+            provider_status: fields.provider_status,
+            provider_action: fields.provider_action,
+            tracking_id: fields.tracking_id.to_owned(),
+            stream_id: fields.stream_id,
+            subscription_id: fields.subscription_id,
         })
     }
 
@@ -1049,10 +1110,48 @@ impl MarketSubscriptionRegistry {
         requests
     }
 
-    /// Applies generated provider ACKs in any arrival order. Desired keys remain adapter-owned.
-    pub fn apply_ack_response(
+    /// Parses a response to an explicit SUBSCRIBE or UNSUBSCRIBE command.
+    pub fn apply_command_response(
         &mut self,
         response: &v1::MarketDataResponse,
+        command: SubscriptionCommand,
+    ) -> Result<Vec<SubscriptionAcknowledgement>, MarketDataError> {
+        self.apply_subscription_response(
+            response,
+            SubscriptionResponseContext::Command {
+                expected_action: command.wire_action(),
+            },
+        )
+    }
+
+    /// Parses authoritative state returned by `GetMySubscriptions`.
+    /// Snapshot entries are not command acknowledgements, so their default/UNSPECIFIED action is
+    /// intentionally ignored. Desired state remains adapter-owned.
+    pub fn parse_active_snapshot_response(
+        &mut self,
+        response: &v1::MarketDataResponse,
+    ) -> Result<Vec<ActiveSubscriptionSnapshot>, MarketDataError> {
+        self.apply_subscription_response(response, SubscriptionResponseContext::ActiveSnapshot)
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|entry| ActiveSubscriptionSnapshot {
+                        subscription: entry.subscription,
+                        family: entry.family,
+                        instrument_uid: entry.instrument_uid,
+                        provider_status: entry.provider_status,
+                        tracking_id: entry.tracking_id,
+                        stream_id: entry.stream_id,
+                        subscription_id: entry.subscription_id,
+                    })
+                    .collect()
+            })
+    }
+
+    fn apply_subscription_response(
+        &mut self,
+        response: &v1::MarketDataResponse,
+        context: SubscriptionResponseContext,
     ) -> Result<Vec<SubscriptionAcknowledgement>, MarketDataError> {
         use v1::market_data_response::Payload;
         let mut applied = Vec::new();
@@ -1067,9 +1166,9 @@ impl MarketSubscriptionRegistry {
                             source: ack.candle_source_type,
                         },
                     };
-                    applied.push(self.acknowledge(
+                    applied.push(self.apply_subscription_status(
                         &key,
-                        AcknowledgementFields {
+                        SubscriptionResponseFields {
                             family: SubscriptionFamily::Candle,
                             tracking_id: &response.tracking_id,
                             provider_status: ack.subscription_status,
@@ -1077,6 +1176,7 @@ impl MarketSubscriptionRegistry {
                             stream_id: ack.stream_id.clone(),
                             subscription_id: ack.subscription_id.clone(),
                         },
+                        context,
                     )?);
                 }
             }
@@ -1089,9 +1189,9 @@ impl MarketSubscriptionRegistry {
                             order_book_type: ack.order_book_type,
                         },
                     };
-                    applied.push(self.acknowledge(
+                    applied.push(self.apply_subscription_status(
                         &key,
-                        AcknowledgementFields {
+                        SubscriptionResponseFields {
                             family: SubscriptionFamily::OrderBook,
                             tracking_id: &response.tracking_id,
                             provider_status: ack.subscription_status,
@@ -1099,6 +1199,7 @@ impl MarketSubscriptionRegistry {
                             stream_id: ack.stream_id.clone(),
                             subscription_id: ack.subscription_id.clone(),
                         },
+                        context,
                     )?);
                 }
             }
@@ -1111,9 +1212,9 @@ impl MarketSubscriptionRegistry {
                             with_open_interest: ack.with_open_interest,
                         },
                     };
-                    applied.push(self.acknowledge(
+                    applied.push(self.apply_subscription_status(
                         &key,
-                        AcknowledgementFields {
+                        SubscriptionResponseFields {
                             family: SubscriptionFamily::Trade,
                             tracking_id: &response.tracking_id,
                             provider_status: ack.subscription_status,
@@ -1121,6 +1222,7 @@ impl MarketSubscriptionRegistry {
                             stream_id: ack.stream_id.clone(),
                             subscription_id: ack.subscription_id.clone(),
                         },
+                        context,
                     )?);
                 }
             }
@@ -1130,9 +1232,9 @@ impl MarketSubscriptionRegistry {
                         instrument_id: ack.instrument_uid.clone(),
                         kind: SubscriptionKind::Info,
                     };
-                    applied.push(self.acknowledge(
+                    applied.push(self.apply_subscription_status(
                         &key,
-                        AcknowledgementFields {
+                        SubscriptionResponseFields {
                             family: SubscriptionFamily::Info,
                             tracking_id: &response.tracking_id,
                             provider_status: ack.subscription_status,
@@ -1140,6 +1242,7 @@ impl MarketSubscriptionRegistry {
                             stream_id: ack.stream_id.clone(),
                             subscription_id: ack.subscription_id.clone(),
                         },
+                        context,
                     )?);
                 }
             }
@@ -1149,9 +1252,9 @@ impl MarketSubscriptionRegistry {
                         instrument_id: ack.instrument_uid.clone(),
                         kind: SubscriptionKind::LastPrice,
                     };
-                    applied.push(self.acknowledge(
+                    applied.push(self.apply_subscription_status(
                         &key,
-                        AcknowledgementFields {
+                        SubscriptionResponseFields {
                             family: SubscriptionFamily::LastPrice,
                             tracking_id: &response.tracking_id,
                             provider_status: ack.subscription_status,
@@ -1159,6 +1262,7 @@ impl MarketSubscriptionRegistry {
                             stream_id: ack.stream_id.clone(),
                             subscription_id: ack.subscription_id.clone(),
                         },
+                        context,
                     )?);
                 }
             }

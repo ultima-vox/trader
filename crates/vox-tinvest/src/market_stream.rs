@@ -14,8 +14,8 @@ use crate::generated::v1;
 use crate::market_data::{
     CanonicalCandle, CanonicalLastPrice, CanonicalOpenInterest, CanonicalOrderBook, CanonicalTrade,
     CanonicalTradingStatus, DEFAULT_PING_DELAY_MS, MAX_SUBSCRIPTION_REQUESTS_PER_MINUTE,
-    MarketDataError, MarketSubscription, MarketSubscriptionRegistry, SubscriptionKind,
-    get_my_subscriptions_request, validate_ping_delay,
+    MarketDataError, MarketSubscription, MarketSubscriptionRegistry, SubscriptionCommand,
+    SubscriptionKind, get_my_subscriptions_request, validate_ping_delay,
 };
 use crate::{GrpcError, GrpcStreamError, TInvestGrpcClient};
 
@@ -412,7 +412,7 @@ impl MarketDataStreamSupervisor {
         *reconnect_attempt = 0;
 
         let expected = registry.desired().cloned().collect::<BTreeSet<_>>();
-        let mut active_check_requested = false;
+        let mut control_phase = StreamControlPhase::AwaitingSubscribeAcks;
         let mut broker_confirmed = BTreeSet::new();
 
         loop {
@@ -431,15 +431,17 @@ impl MarketDataStreamSupervisor {
                         registry,
                         sequence_gate,
                         response,
-                        active_check_requested,
+                        &mut control_phase,
                         &expected,
                         &mut broker_confirmed,
                     )? {
                         events.send(event).await.map_err(|_| MarketDataSupervisorError::Closed)?;
                     }
-                    if !active_check_requested && registry.all_confirmed() {
+                    if control_phase == StreamControlPhase::AwaitingSubscribeAcks
+                        && registry.all_confirmed()
+                    {
                         stream.send(get_my_subscriptions_request()).await?;
-                        active_check_requested = true;
+                        control_phase = StreamControlPhase::AwaitingActiveSnapshot;
                     }
                 }
             }
@@ -447,35 +449,66 @@ impl MarketDataStreamSupervisor {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StreamControlPhase {
+    AwaitingSubscribeAcks,
+    AwaitingActiveSnapshot,
+    Active,
+}
+
 fn process_response(
     registry: &mut MarketSubscriptionRegistry,
     sequence_gate: &mut EventSequenceGate,
     response: v1::MarketDataResponse,
-    active_check_requested: bool,
+    control_phase: &mut StreamControlPhase,
     expected: &BTreeSet<MarketSubscription>,
     broker_confirmed: &mut BTreeSet<MarketSubscription>,
 ) -> Result<Option<MarketDataStreamEvent>, MarketDataSupervisorError> {
     use v1::market_data_response::Payload;
 
-    let acknowledgements = registry
-        .apply_ack_response(&response)
-        .map_err(MarketDataSupervisorError::MarketData)?;
-    if !acknowledgements.is_empty() {
-        if active_check_requested {
-            broker_confirmed.extend(
-                acknowledgements
-                    .iter()
-                    .map(|acknowledgement| acknowledgement.subscription.clone()),
-            );
-            if expected.is_subset(broker_confirmed) {
-                return Ok(Some(MarketDataStreamEvent::BrokerConfirmed {
-                    count: expected.len(),
+    let is_subscription_response = matches!(
+        response.payload.as_ref(),
+        Some(
+            Payload::SubscribeCandlesResponse(_)
+                | Payload::SubscribeOrderBookResponse(_)
+                | Payload::SubscribeTradesResponse(_)
+                | Payload::SubscribeInfoResponse(_)
+                | Payload::SubscribeLastPriceResponse(_)
+        )
+    );
+    if is_subscription_response {
+        match control_phase {
+            StreamControlPhase::AwaitingSubscribeAcks => {
+                let acknowledgements = registry
+                    .apply_command_response(&response, SubscriptionCommand::Subscribe)
+                    .map_err(MarketDataSupervisorError::MarketData)?;
+                return Ok(Some(MarketDataStreamEvent::Acknowledged {
+                    count: acknowledgements.len(),
                 }));
             }
+            StreamControlPhase::AwaitingActiveSnapshot => {
+                let snapshots = registry
+                    .parse_active_snapshot_response(&response)
+                    .map_err(MarketDataSupervisorError::MarketData)?;
+                broker_confirmed.extend(
+                    snapshots
+                        .iter()
+                        .map(|snapshot| snapshot.subscription.clone()),
+                );
+                if expected.is_subset(broker_confirmed) {
+                    *control_phase = StreamControlPhase::Active;
+                    return Ok(Some(MarketDataStreamEvent::BrokerConfirmed {
+                        count: expected.len(),
+                    }));
+                }
+                return Ok(None);
+            }
+            StreamControlPhase::Active => {
+                return Err(MarketDataSupervisorError::MarketData(
+                    MarketDataError::UnexpectedSubscriptionResponse,
+                ));
+            }
         }
-        return Ok(Some(MarketDataStreamEvent::Acknowledged {
-            count: acknowledgements.len(),
-        }));
     }
     let event = match response.payload {
         Some(Payload::Candle(value)) => {
@@ -676,7 +709,9 @@ fn should_reconnect(error: &MarketDataSupervisorError, has_desired_subscriptions
         MarketDataSupervisorError::MarketData(
             MarketDataError::SubscriptionRejected { .. }
             | MarketDataError::UnexpectedAcknowledgementAction(_)
+            | MarketDataError::UnexpectedSubscriptionResponse
             | MarketDataError::InvalidAcknowledgementIdentity
+            | MarketDataError::InvalidActiveSnapshotIdentity
             | MarketDataError::UnknownAcknowledgement,
         )
         | MarketDataSupervisorError::ZeroCapacity
@@ -915,31 +950,145 @@ mod tests {
         let expected = BTreeSet::from([subscription]);
         let mut broker_confirmed = BTreeSet::new();
         let mut gate = EventSequenceGate::default();
+        let mut phase = StreamControlPhase::AwaitingSubscribeAcks;
 
         assert_eq!(
             process_response(
                 &mut registry,
                 &mut gate,
                 response.clone(),
-                false,
+                &mut phase,
                 &expected,
                 &mut broker_confirmed,
             ),
             Ok(Some(MarketDataStreamEvent::Acknowledged { count: 1 }))
         );
         assert!(broker_confirmed.is_empty());
+        phase = StreamControlPhase::AwaitingActiveSnapshot;
+        let mut snapshot_response = response;
+        let Some(v1::market_data_response::Payload::SubscribeLastPriceResponse(snapshot_entries)) =
+            snapshot_response.payload.as_mut()
+        else {
+            unreachable!()
+        };
+        snapshot_entries.last_price_subscriptions[0].subscription_action =
+            v1::SubscriptionAction::Unspecified as i32;
         assert_eq!(
             process_response(
                 &mut registry,
                 &mut gate,
-                response,
-                true,
+                snapshot_response,
+                &mut phase,
                 &expected,
                 &mut broker_confirmed,
             ),
             Ok(Some(MarketDataStreamEvent::BrokerConfirmed { count: 1 }))
         );
         assert_eq!(broker_confirmed, expected);
+        assert_eq!(phase, StreamControlPhase::Active);
+    }
+
+    #[test]
+    fn ping_and_market_events_do_not_change_control_context() {
+        let subscription = MarketSubscription {
+            instrument_id: "uid".into(),
+            kind: SubscriptionKind::LastPrice,
+        };
+        let mut registry = MarketSubscriptionRegistry::default();
+        registry
+            .insert(subscription.clone())
+            .expect("valid desired subscription");
+        let expected = BTreeSet::from([subscription]);
+        let mut confirmed = BTreeSet::new();
+        let mut gate = EventSequenceGate::default();
+        let mut phase = StreamControlPhase::AwaitingSubscribeAcks;
+
+        let ping = v1::MarketDataResponse {
+            payload: Some(v1::market_data_response::Payload::Ping(v1::Ping {
+                stream_id: "stream".into(),
+                time: Some(prost_types::Timestamp {
+                    seconds: 1,
+                    nanos: 0,
+                }),
+                ping_request_time: None,
+            })),
+        };
+        assert!(matches!(
+            process_response(
+                &mut registry,
+                &mut gate,
+                ping,
+                &mut phase,
+                &expected,
+                &mut confirmed,
+            ),
+            Ok(Some(MarketDataStreamEvent::Ping { .. }))
+        ));
+        assert_eq!(phase, StreamControlPhase::AwaitingSubscribeAcks);
+
+        phase = StreamControlPhase::Active;
+        let event = v1::MarketDataResponse {
+            payload: Some(v1::market_data_response::Payload::LastPrice(
+                v1::LastPrice {
+                    instrument_uid: "uid".into(),
+                    price: Some(v1::Quotation { units: 1, nano: 0 }),
+                    time: Some(prost_types::Timestamp {
+                        seconds: 2,
+                        nanos: 0,
+                    }),
+                    ..Default::default()
+                },
+            )),
+        };
+        assert!(matches!(
+            process_response(
+                &mut registry,
+                &mut gate,
+                event,
+                &mut phase,
+                &expected,
+                &mut confirmed,
+            ),
+            Ok(Some(MarketDataStreamEvent::LastPrice(_)))
+        ));
+        assert_eq!(phase, StreamControlPhase::Active);
+    }
+
+    #[test]
+    fn subscription_response_without_pending_control_request_fails_closed() {
+        let subscription = MarketSubscription {
+            instrument_id: "uid".into(),
+            kind: SubscriptionKind::LastPrice,
+        };
+        let mut registry = MarketSubscriptionRegistry::default();
+        registry
+            .insert(subscription.clone())
+            .expect("valid desired subscription");
+        let expected = BTreeSet::from([subscription]);
+        let mut confirmed = BTreeSet::new();
+        let mut gate = EventSequenceGate::default();
+        let mut phase = StreamControlPhase::Active;
+        let response = v1::MarketDataResponse {
+            payload: Some(
+                v1::market_data_response::Payload::SubscribeLastPriceResponse(
+                    v1::SubscribeLastPriceResponse::default(),
+                ),
+            ),
+        };
+
+        assert_eq!(
+            process_response(
+                &mut registry,
+                &mut gate,
+                response,
+                &mut phase,
+                &expected,
+                &mut confirmed,
+            ),
+            Err(MarketDataSupervisorError::MarketData(
+                MarketDataError::UnexpectedSubscriptionResponse,
+            ))
+        );
     }
 
     #[tokio::test]

@@ -3,8 +3,8 @@ use vox_tinvest::generated::v1;
 use vox_tinvest::market_data::{
     CanonicalCandle, CanonicalClosePrice, CanonicalMarketValue, CanonicalOrderBook,
     CanonicalTechAnalysisValue, CanonicalTrade, ConfirmationState, MarketDataError,
-    MarketDataRequestError, MarketSubscription, MarketSubscriptionRegistry, SubscriptionKind,
-    candle_request_constraint, derived_trade_compatibility_id, lots_to_units,
+    MarketDataRequestError, MarketSubscription, MarketSubscriptionRegistry, SubscriptionCommand,
+    SubscriptionKind, candle_request_constraint, derived_trade_compatibility_id, lots_to_units,
     merge_historic_candles, plan_candle_history, validate_get_candles_request, validate_ping_delay,
 };
 
@@ -203,22 +203,25 @@ fn registry_accepts_event_before_ack_and_resets_on_disconnect() {
         .expect("valid subscription");
     assert!(registry.accepts_event_before_ack("uid", &subscription.kind));
     registry
-        .apply_ack_response(&v1::MarketDataResponse {
-            payload: Some(v1::market_data_response::Payload::SubscribeTradesResponse(
-                v1::SubscribeTradesResponse {
-                    tracking_id: "tracking".into(),
-                    trade_source: 0,
-                    trade_subscriptions: vec![v1::TradeSubscription {
-                        instrument_uid: "uid".into(),
-                        subscription_status: v1::SubscriptionStatus::Success as i32,
-                        subscription_action: v1::SubscriptionAction::Subscribe as i32,
-                        stream_id: "stream".into(),
-                        subscription_id: "00000000-0000-0000-0000-000000000001".into(),
-                        ..Default::default()
-                    }],
-                },
-            )),
-        })
+        .apply_command_response(
+            &v1::MarketDataResponse {
+                payload: Some(v1::market_data_response::Payload::SubscribeTradesResponse(
+                    v1::SubscribeTradesResponse {
+                        tracking_id: "tracking".into(),
+                        trade_source: 0,
+                        trade_subscriptions: vec![v1::TradeSubscription {
+                            instrument_uid: "uid".into(),
+                            subscription_status: v1::SubscriptionStatus::Success as i32,
+                            subscription_action: v1::SubscriptionAction::Subscribe as i32,
+                            stream_id: "stream".into(),
+                            subscription_id: "00000000-0000-0000-0000-000000000001".into(),
+                            ..Default::default()
+                        }],
+                    },
+                )),
+            },
+            SubscriptionCommand::Subscribe,
+        )
         .expect("matching ACK");
     assert!(matches!(
         registry.state(&subscription),
@@ -376,7 +379,7 @@ fn rejected_ack_fails_without_false_positive_count() {
         ),
     };
     assert_eq!(
-        registry.apply_ack_response(&response),
+        registry.apply_command_response(&response, SubscriptionCommand::Subscribe),
         Err(MarketDataError::SubscriptionRejected {
             family: vox_tinvest::market_data::SubscriptionFamily::LastPrice,
             instrument_uid: "uid".into(),
@@ -391,6 +394,129 @@ fn rejected_ack_fails_without_false_positive_count() {
         })
     );
     assert!(!registry.all_confirmed());
+}
+
+fn last_price_subscription_response(action: v1::SubscriptionAction) -> v1::MarketDataResponse {
+    v1::MarketDataResponse {
+        payload: Some(
+            v1::market_data_response::Payload::SubscribeLastPriceResponse(
+                v1::SubscribeLastPriceResponse {
+                    tracking_id: "track-control".into(),
+                    last_price_subscriptions: vec![v1::LastPriceSubscription {
+                        instrument_uid: "uid".into(),
+                        subscription_status: v1::SubscriptionStatus::Success as i32,
+                        subscription_action: action as i32,
+                        stream_id: "stream".into(),
+                        subscription_id: "00000000-0000-0000-0000-000000000001".into(),
+                        ..Default::default()
+                    }],
+                },
+            ),
+        ),
+    }
+}
+
+#[test]
+fn get_my_subscriptions_snapshot_accepts_unspecified_action_and_matches_command_identity() {
+    let subscription = MarketSubscription {
+        instrument_id: "uid".into(),
+        kind: SubscriptionKind::LastPrice,
+    };
+    let mut registry = MarketSubscriptionRegistry::default();
+    registry
+        .insert(subscription.clone())
+        .expect("valid desired subscription");
+    registry
+        .apply_command_response(
+            &last_price_subscription_response(v1::SubscriptionAction::Subscribe),
+            SubscriptionCommand::Subscribe,
+        )
+        .expect("matching subscribe acknowledgement");
+
+    let snapshots = registry
+        .parse_active_snapshot_response(&last_price_subscription_response(
+            v1::SubscriptionAction::Unspecified,
+        ))
+        .expect("authoritative active snapshot");
+
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].subscription, subscription);
+    assert!(matches!(
+        registry.state(&subscription),
+        Some(ConfirmationState::Confirmed { .. })
+    ));
+}
+
+#[test]
+fn get_my_subscriptions_snapshot_rejects_changed_provider_identity() {
+    let subscription = MarketSubscription {
+        instrument_id: "uid".into(),
+        kind: SubscriptionKind::LastPrice,
+    };
+    let mut registry = MarketSubscriptionRegistry::default();
+    registry
+        .insert(subscription)
+        .expect("valid desired subscription");
+    registry
+        .apply_command_response(
+            &last_price_subscription_response(v1::SubscriptionAction::Subscribe),
+            SubscriptionCommand::Subscribe,
+        )
+        .expect("matching subscribe acknowledgement");
+    let mut snapshot = last_price_subscription_response(v1::SubscriptionAction::Unspecified);
+    let Some(v1::market_data_response::Payload::SubscribeLastPriceResponse(response)) =
+        snapshot.payload.as_mut()
+    else {
+        unreachable!()
+    };
+    response.last_price_subscriptions[0].subscription_id =
+        "00000000-0000-0000-0000-000000000002".into();
+
+    assert_eq!(
+        registry.parse_active_snapshot_response(&snapshot),
+        Err(MarketDataError::InvalidActiveSnapshotIdentity)
+    );
+}
+
+#[test]
+fn command_ack_requires_context_action_but_supports_unsubscribe() {
+    let subscription = MarketSubscription {
+        instrument_id: "uid".into(),
+        kind: SubscriptionKind::LastPrice,
+    };
+    let mut registry = MarketSubscriptionRegistry::default();
+    registry
+        .insert(subscription.clone())
+        .expect("valid desired subscription");
+
+    assert_eq!(
+        registry.apply_command_response(
+            &last_price_subscription_response(v1::SubscriptionAction::Unspecified),
+            SubscriptionCommand::Subscribe,
+        ),
+        Err(MarketDataError::UnexpectedAcknowledgementAction(0))
+    );
+    registry
+        .apply_command_response(
+            &last_price_subscription_response(v1::SubscriptionAction::Subscribe),
+            SubscriptionCommand::Subscribe,
+        )
+        .expect("matching subscribe acknowledgement");
+    assert!(matches!(
+        registry.state(&subscription),
+        Some(ConfirmationState::Confirmed { .. })
+    ));
+    let acknowledgements = registry
+        .apply_command_response(
+            &last_price_subscription_response(v1::SubscriptionAction::Unsubscribe),
+            SubscriptionCommand::Unsubscribe,
+        )
+        .expect("matching unsubscribe acknowledgement");
+    assert_eq!(acknowledgements.len(), 1);
+    assert_eq!(
+        registry.state(&subscription),
+        Some(&ConfirmationState::Pending)
+    );
 }
 
 #[test]
@@ -451,13 +577,13 @@ fn generated_acknowledgements_apply_in_arbitrary_order() {
     };
     assert_eq!(
         registry
-            .apply_ack_response(&trade_ack)
+            .apply_command_response(&trade_ack, SubscriptionCommand::Subscribe)
             .map(|acknowledgements| acknowledgements.len()),
         Ok(1)
     );
     assert_eq!(
         registry
-            .apply_ack_response(&candle_ack)
+            .apply_command_response(&candle_ack, SubscriptionCommand::Subscribe)
             .map(|acknowledgements| acknowledgements.len()),
         Ok(1)
     );

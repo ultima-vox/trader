@@ -74,6 +74,14 @@ reference and error catalogue, with official OpenAPI used only as a REST compati
   with family, instrument UID, status, and tracking ID;
 - after initial ACK success, `GetMySubscriptions` must confirm every desired subscription from
   broker state before qualification is complete;
+- stream control context is explicit: command responses validate expected `SUBSCRIBE` or
+  `UNSUBSCRIBE` action, while `GetMySubscriptions` responses are authoritative snapshots and may
+  carry protobuf-default `SUBSCRIPTION_ACTION_UNSPECIFIED`; snapshots still require successful
+  status, exact family/options/instrument identity, stream ID, and UUID subscription ID;
+- pings and market events may interleave with command ACKs and snapshots; unexpected subscription
+  responses after broker-active state fail closed;
+- server-side streaming has one immutable initial subscription request and no command ACK,
+  unsubscribe, or active-snapshot control phase;
 - reconnect resets ACK and book-authority state, then replays desired subscriptions;
 - delays use bounded exponential backoff; zero-delay busy loops are rejected;
 - native ping setting accepts only official 5,000–180,000 ms range; stale timeout forces reconnect;

@@ -7,8 +7,8 @@ use vox_tinvest::generated::v1;
 use vox_tinvest::market_data::{
     CanonicalCandle, CanonicalClosePrice, CanonicalLastPrice, CanonicalMarketValueInstrument,
     CanonicalTechAnalysisValue, CanonicalTrade, CanonicalTradingStatusFact,
-    CanonicalUnaryOrderBook, MarketSubscription, MarketSubscriptionRegistry, SubscriptionKind,
-    get_my_subscriptions_request,
+    CanonicalUnaryOrderBook, MarketSubscription, MarketSubscriptionRegistry, SubscriptionCommand,
+    SubscriptionKind, get_my_subscriptions_request,
 };
 use vox_tinvest::reference::catalogue_request;
 use vox_tinvest::{SecretToken, TInvestGrpcClient};
@@ -212,7 +212,9 @@ async fn qualify_stream(
     tokio::time::timeout(Duration::from_secs(45), async {
         while !registry.all_confirmed() {
             let response = stream.message().await?.ok_or("provider closed stream")?;
-            for acknowledgement in registry.apply_ack_response(&response)? {
+            for acknowledgement in
+                registry.apply_command_response(&response, SubscriptionCommand::Subscribe)?
+            {
                 println!(
                     "ACK family={:?} instrument_uid={} status={} tracking_id={}",
                     acknowledgement.family,
@@ -232,7 +234,7 @@ async fn qualify_stream(
     tokio::time::timeout(Duration::from_secs(45), async {
         while !expected.is_subset(&broker_confirmed) {
             let response = stream.message().await?.ok_or("provider closed stream")?;
-            for acknowledgement in registry.apply_ack_response(&response)? {
+            for acknowledgement in registry.parse_active_snapshot_response(&response)? {
                 println!(
                     "ACTIVE family={:?} instrument_uid={} status={} tracking_id={}",
                     acknowledgement.family,
