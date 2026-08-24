@@ -5,9 +5,9 @@ use vox_tinvest::reference::{
     CriticalDataError, EmptyRequest, FavoriteGroupsRequest, FavoritesRequest,
     FindInstrumentRequest, IdRequest, InsiderDealsRequest, InstrumentExchange, InstrumentIdRequest,
     InstrumentIdType, InstrumentRequest, InstrumentStatus, InstrumentsRequest, NewsRequest,
-    OptionsByRequest, PageRequest, PagedRequest, PeriodRequest, ProviderInstrumentType,
-    RiskRatesRequest, Timestamp, TradingSchedulesError, TradingSchedulesRequest,
-    TradingSchedulesResult,
+    OptionsByRequest, PageRequest, PagedRequest, PeriodRequest, ProviderCurrentDate,
+    ProviderInstrumentType, RiskRatesRequest, Timestamp, TradingSchedulesError,
+    TradingSchedulesRequest, TradingSchedulesResult,
 };
 use vox_tinvest::{ProviderResponse, RestError, RestErrorKind, SecretToken, TInvestRestClient};
 
@@ -102,8 +102,9 @@ async fn current_reference_surface_decodes_live_read_only() -> Result<(), Box<dy
     };
     let from = Timestamp::parse("2025-01-01T00:00:00Z")?;
     let to = Timestamp::parse("2026-12-31T23:59:59Z")?;
-    let schedule_from = Timestamp::parse("2026-08-17T00:00:00Z")?;
-    let schedule_to = Timestamp::parse("2026-08-24T00:00:00Z")?;
+    let provider_current_date = ProviderCurrentDate::now_utc();
+    let schedule_from = provider_current_date.timestamp_after_days(1)?;
+    let schedule_to = provider_current_date.timestamp_after_days(8)?;
 
     let shares = qualified("Shares", client.shares(&catalogue).await, &mut capabilities)?
         .ok_or("Shares unexpectedly gated")?;

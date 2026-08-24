@@ -210,6 +210,12 @@ impl<'de> Deserialize<'de> for Timestamp {
     }
 }
 
+impl fmt::Display for Timestamp {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TimestampError;
 
@@ -1411,33 +1417,72 @@ mod tests {
         let seven_days = Timestamp::parse("2026-01-08T00:00:00Z")?;
         let exact_limit = Timestamp::parse("2026-01-15T00:00:00Z")?;
         let over_limit = Timestamp::parse("2026-01-15T00:00:01Z")?;
+        let provider_date = ProviderCurrentDate::from_utc_timestamp(&start);
 
-        let legal = trading_schedule_windows(&TradingSchedulesRequest {
-            exchange: None,
-            from: &start,
-            to: &seven_days,
-        })?;
+        let legal = trading_schedule_windows(
+            &TradingSchedulesRequest {
+                exchange: None,
+                from: &start,
+                to: &seven_days,
+            },
+            provider_date,
+        )?;
         assert_eq!(legal.len(), 1);
         assert_eq!(legal[0].from, start);
         assert_eq!(legal[0].to, seven_days);
 
-        let exact = trading_schedule_windows(&TradingSchedulesRequest {
-            exchange: Some("MOEX"),
-            from: &start,
-            to: &exact_limit,
-        })?;
+        let exact = trading_schedule_windows(
+            &TradingSchedulesRequest {
+                exchange: Some("MOEX"),
+                from: &start,
+                to: &exact_limit,
+            },
+            provider_date,
+        )?;
         assert_eq!(exact.len(), 1);
         assert_eq!(exact[0].to, exact_limit);
 
-        let split = trading_schedule_windows(&TradingSchedulesRequest {
-            exchange: None,
-            from: &start,
-            to: &over_limit,
-        })?;
+        let split = trading_schedule_windows(
+            &TradingSchedulesRequest {
+                exchange: None,
+                from: &start,
+                to: &over_limit,
+            },
+            provider_date,
+        )?;
         assert_eq!(split.len(), 2);
         assert_eq!(split[0].to, exact_limit);
         assert_eq!(split[1].from, exact_limit);
         assert_eq!(split[1].to, over_limit);
+        Ok(())
+    }
+
+    #[test]
+    fn trading_schedule_windows_reject_historical_range_without_clamping()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let provider_today = Timestamp::parse("2026-01-10T00:00:00Z")?;
+        let historical_from = Timestamp::parse("2026-01-10T02:59:59+03:00")?;
+        let requested_to = Timestamp::parse("2026-01-12T00:00:00Z")?;
+        let result = trading_schedule_windows(
+            &TradingSchedulesRequest {
+                exchange: None,
+                from: &historical_from,
+                to: &requested_to,
+            },
+            ProviderCurrentDate::from_utc_timestamp(&provider_today),
+        );
+
+        match result {
+            Err(TradingSchedulesError::HistoricalRangeUnsupported {
+                requested_from,
+                provider_current_date,
+            }) => {
+                assert_eq!(requested_from, historical_from);
+                assert_eq!(provider_current_date.to_string(), "2026-01-10");
+            }
+            Err(error) => panic!("unexpected validation error: {error}"),
+            Ok(_) => panic!("historical request must fail before dispatch"),
+        }
         Ok(())
     }
 
@@ -1455,8 +1500,8 @@ mod tests {
         }
 
         let first = day("2026-01-01T00:00:00Z")?;
-        let boundary = day("2026-01-15T00:00:00Z")?;
-        let last = day("2026-01-20T00:00:00Z")?;
+        let boundary = day("2026-01-02T00:00:00Z")?;
+        let last = day("2026-01-03T00:00:00Z")?;
         let mut merged = TradingSchedulesResponse {
             exchanges: vec![TradingSchedule {
                 exchange: Some("MOEX".to_owned()),
@@ -1482,7 +1527,7 @@ mod tests {
         assert_eq!(merged.exchanges[0].exchange.as_deref(), Some("MOEX"));
         assert_eq!(
             merged.exchanges[0].days,
-            vec![first.clone(), day("2026-01-15T00:00:00Z")?, last]
+            vec![first.clone(), day("2026-01-02T00:00:00Z")?, last]
         );
         assert_eq!(merged.exchanges[1].exchange.as_deref(), Some("SPB"));
         assert_eq!(merged.exchanges[1].days, vec![first]);
@@ -1497,11 +1542,14 @@ mod tests {
 
         let start = Timestamp::parse("2026-01-01T00:00:00Z")?;
         let finish = Timestamp::parse("2026-02-01T00:00:00Z")?;
-        let windows = trading_schedule_windows(&TradingSchedulesRequest {
-            exchange: None,
-            from: &start,
-            to: &finish,
-        })?;
+        let windows = trading_schedule_windows(
+            &TradingSchedulesRequest {
+                exchange: None,
+                from: &start,
+                to: &finish,
+            },
+            ProviderCurrentDate::from_utc_timestamp(&start),
+        )?;
         assert_eq!(windows.len(), 3);
 
         let calls = Arc::new(AtomicUsize::new(0));
@@ -2296,6 +2344,35 @@ pub struct TradingSchedulesRequest<'a> {
 
 const MAX_TRADING_SCHEDULE_PERIOD: Duration = Duration::days(14);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProviderCurrentDate(time::Date);
+
+impl ProviderCurrentDate {
+    #[must_use]
+    pub fn now_utc() -> Self {
+        Self(OffsetDateTime::now_utc().date())
+    }
+
+    #[must_use]
+    pub fn from_utc_timestamp(timestamp: &Timestamp) -> Self {
+        Self(timestamp.datetime().to_offset(time::UtcOffset::UTC).date())
+    }
+
+    pub fn timestamp_after_days(self, days: i64) -> Result<Timestamp, TradingSchedulesError> {
+        let date = self
+            .0
+            .checked_add(Duration::days(days))
+            .ok_or(TradingSchedulesError::DateOverflow)?;
+        Ok(Timestamp::from_datetime(date.midnight().assume_utc()))
+    }
+}
+
+impl fmt::Display for ProviderCurrentDate {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TradingSchedulesWindow {
     pub from: Timestamp,
@@ -2329,6 +2406,15 @@ pub enum TradingSchedulesError {
     #[error("trading-schedule range starts after it ends")]
     InvalidRange,
     #[error(
+        "historical TradingSchedules are unsupported: requested from {requested_from} before provider UTC date {provider_current_date}"
+    )]
+    HistoricalRangeUnsupported {
+        requested_from: Timestamp,
+        provider_current_date: ProviderCurrentDate,
+    },
+    #[error("trading-schedule UTC date arithmetic overflowed")]
+    DateOverflow,
+    #[error(
         "trading-schedule chunk {window_number}/{total_windows} failed after {completed_windows} complete windows"
     )]
     Partial {
@@ -2351,18 +2437,28 @@ impl TradingSchedulesError {
     pub fn rest_error(&self) -> Option<&RestError> {
         match self {
             Self::Partial { source, .. } => Some(source.as_ref()),
-            Self::InvalidRange | Self::ConflictingDay { .. } => None,
+            Self::InvalidRange
+            | Self::HistoricalRangeUnsupported { .. }
+            | Self::DateOverflow
+            | Self::ConflictingDay { .. } => None,
         }
     }
 }
 
 pub fn trading_schedule_windows(
     request: &TradingSchedulesRequest<'_>,
+    provider_current_date: ProviderCurrentDate,
 ) -> Result<Vec<TradingSchedulesWindow>, TradingSchedulesError> {
     let start = request.from.datetime();
     let finish = request.to.datetime();
     if start > finish {
         return Err(TradingSchedulesError::InvalidRange);
+    }
+    if start.to_offset(time::UtcOffset::UTC).date() < provider_current_date.0 {
+        return Err(TradingSchedulesError::HistoricalRangeUnsupported {
+            requested_from: request.from.clone(),
+            provider_current_date,
+        });
     }
 
     let mut windows = Vec::new();
@@ -2751,7 +2847,7 @@ impl TInvestRestClient {
         &self,
         request: &TradingSchedulesRequest<'_>,
     ) -> Result<TradingSchedulesResult, TradingSchedulesError> {
-        let windows = trading_schedule_windows(request)?;
+        let windows = trading_schedule_windows(request, ProviderCurrentDate::now_utc())?;
         let exchange = request.exchange.map(str::to_owned);
         execute_trading_schedule_windows(windows, |window| {
             let exchange = exchange.clone();
