@@ -102,6 +102,39 @@ where
     deserializer.deserialize_any(I64StringOrNumber)
 }
 
+/// Raw protobuf Timestamp shape used by T-Invest WebSocket JSON.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+pub struct ProtobufTimestamp {
+    #[serde(deserialize_with = "deserialize_i64_string_or_number")]
+    pub seconds: i64,
+    /// `None` preserves protobuf omission; conversion applies the protocol-defined zero default.
+    pub nanos: Option<i32>,
+}
+
+impl ProtobufTimestamp {
+    /// Validates protobuf invariants before converting wire data into internal UTC time.
+    pub fn to_offset_datetime(self) -> Result<OffsetDateTime, ProtobufTimestampError> {
+        let nanos = self.nanos.unwrap_or(0);
+        if !(0..1_000_000_000).contains(&nanos) {
+            return Err(ProtobufTimestampError::InvalidNanos(nanos));
+        }
+        let total_nanos = i128::from(self.seconds)
+            .checked_mul(1_000_000_000)
+            .and_then(|value| value.checked_add(i128::from(nanos)))
+            .ok_or(ProtobufTimestampError::OutOfRange)?;
+        OffsetDateTime::from_unix_timestamp_nanos(total_nanos)
+            .map_err(|_| ProtobufTimestampError::OutOfRange)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum ProtobufTimestampError {
+    #[error("protobuf Timestamp nanos must be in 0..1_000_000_000, got {0}")]
+    InvalidNanos(i32),
+    #[error("protobuf Timestamp is outside the supported UTC range")]
+    OutOfRange,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstrumentsRequest {
@@ -734,6 +767,7 @@ pub struct MarketDataStreamMessage {
     pub orderbook: Option<OrderBookMessage>,
     pub trading_status: Option<TradingStatusMessage>,
     pub last_price: Option<LastPriceMessage>,
+    pub open_interest: Option<OpenInterestMessage>,
     pub ping: Option<PingMessage>,
 }
 
@@ -831,31 +865,46 @@ pub struct SubscriptionStatus {
     pub figi: Option<String>,
     pub instrument_uid: Option<String>,
     pub subscription_status: String,
+    pub stream_id: Option<String>,
+    pub subscription_id: Option<String>,
+    pub subscription_action: Option<String>,
+    pub ticker: Option<String>,
+    pub class_code: Option<String>,
+    pub depth: Option<i32>,
+    pub order_book_type: Option<String>,
+    pub with_open_interest: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct TradeMessage {
-    pub figi: String,
+    pub figi: Option<String>,
     pub instrument_uid: String,
-    pub direction: String,
+    pub direction: Option<String>,
     pub price: Quotation,
     #[serde(deserialize_with = "deserialize_i64_string_or_number")]
     pub quantity: i64,
-    pub time: String,
-    pub trade_source: String,
+    pub time: ProtobufTimestamp,
+    pub trade_source: Option<String>,
+    pub ticker: Option<String>,
+    pub class_code: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct OrderBookMessage {
-    pub figi: String,
+    pub figi: Option<String>,
     pub instrument_uid: String,
     pub depth: u32,
     pub is_consistent: bool,
-    pub time: String,
+    pub time: ProtobufTimestamp,
     #[serde(default)]
     pub bids: Vec<OrderBookLevel>,
     #[serde(default)]
     pub asks: Vec<OrderBookLevel>,
+    pub limit_up: Option<Quotation>,
+    pub limit_down: Option<Quotation>,
+    pub order_book_type: Option<String>,
+    pub ticker: Option<String>,
+    pub class_code: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -867,25 +916,42 @@ pub struct OrderBookLevel {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct TradingStatusMessage {
-    pub figi: String,
+    pub figi: Option<String>,
     pub instrument_uid: String,
     pub trading_status: String,
-    pub time: String,
+    pub time: ProtobufTimestamp,
+    pub limit_order_available_flag: Option<bool>,
+    pub market_order_available_flag: Option<bool>,
+    pub ticker: Option<String>,
+    pub class_code: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct LastPriceMessage {
-    pub figi: String,
+    pub figi: Option<String>,
     pub instrument_uid: String,
     pub price: Quotation,
-    pub time: String,
+    pub time: ProtobufTimestamp,
+    pub ticker: Option<String>,
+    pub class_code: Option<String>,
+    pub last_price_type: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct PingMessage {
-    pub time: String,
+    pub time: ProtobufTimestamp,
     pub stream_id: Option<String>,
-    pub ping_request_time: Option<String>,
+    pub ping_request_time: Option<ProtobufTimestamp>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct OpenInterestMessage {
+    pub instrument_uid: String,
+    pub time: ProtobufTimestamp,
+    #[serde(deserialize_with = "deserialize_i64_string_or_number")]
+    pub open_interest: i64,
+    pub ticker: Option<String>,
+    pub class_code: Option<String>,
 }
 
 #[cfg(test)]
@@ -947,7 +1013,13 @@ mod tests {
                 "tracking_id": "track",
                 "trade_subscriptions": [{
                     "instrument_uid": "uid",
-                    "subscription_status": "SUBSCRIPTION_STATUS_SUCCESS"
+                    "subscription_status": "SUBSCRIPTION_STATUS_SUCCESS",
+                    "stream_id": "stream-1",
+                    "subscription_id": "subscription-1",
+                    "subscription_action": "SUBSCRIPTION_ACTION_SUBSCRIBE",
+                    "ticker": "SBER",
+                    "class_code": "TQBR",
+                    "with_open_interest": false
                 }]
             },
             "trade": {
@@ -956,7 +1028,7 @@ mod tests {
                 "direction": "TRADE_DIRECTION_BUY",
                 "price": {"units": "321", "nano": 500000000},
                 "quantity": "2",
-                "time": "2026-08-22T10:00:00Z",
+                "time": {"seconds": "1787392800", "nanos": 123456789},
                 "trade_source": "TRADE_SOURCE_ALL"
             }
         }));
@@ -970,11 +1042,120 @@ mod tests {
         );
         assert!(decoded.validate_acknowledgement_uids("uid").is_ok());
         assert!(decoded.validate_acknowledgement_uids("wrong-uid").is_err());
+        let ack = &decoded
+            .subscribe_trades_response
+            .as_ref()
+            .expect("typed ACK missing")
+            .trade_subscriptions[0];
+        assert_eq!(ack.stream_id.as_deref(), Some("stream-1"));
+        assert_eq!(ack.subscription_id.as_deref(), Some("subscription-1"));
+        assert_eq!(
+            ack.subscription_action.as_deref(),
+            Some("SUBSCRIPTION_ACTION_SUBSCRIBE")
+        );
+        assert_eq!(ack.ticker.as_deref(), Some("SBER"));
+        assert_eq!(ack.class_code.as_deref(), Some("TQBR"));
+        assert_eq!(ack.with_open_interest, Some(false));
         let trade = match decoded.trade {
             Some(trade) => trade,
             None => panic!("typed trade missing"),
         };
         assert_eq!(trade.price.fixed_point().total_nanos(), 321_500_000_000);
+        assert_eq!(trade.time.seconds, 1_787_392_800);
+        assert_eq!(trade.time.nanos, Some(123_456_789));
+        assert!(trade.time.to_offset_datetime().is_ok());
+    }
+
+    #[test]
+    fn all_rq2_stream_timestamps_use_lossless_protobuf_objects() {
+        let decoded = serde_json::from_value::<MarketDataStreamMessage>(json!({
+            "trade": {
+                "instrument_uid": "uid",
+                "price": {"units": "321", "nano": 500000000},
+                "quantity": "2",
+                "time": {"seconds": "1787392800", "nanos": 1}
+            },
+            "orderbook": {
+                "instrument_uid": "uid",
+                "depth": 10,
+                "is_consistent": true,
+                "time": {"seconds": "1787392801", "nanos": 2}
+            },
+            "trading_status": {
+                "instrument_uid": "uid",
+                "trading_status": "SECURITY_TRADING_STATUS_NORMAL_TRADING",
+                "time": {"seconds": "1787392802", "nanos": 3}
+            },
+            "last_price": {
+                "instrument_uid": "uid",
+                "price": {"units": "321", "nano": 500000000},
+                "time": {"seconds": "1787392803", "nanos": 4}
+            },
+            "ping": {
+                "time": {"seconds": "1787392804", "nanos": 5},
+                "ping_request_time": {"seconds": "1787392805", "nanos": 6}
+            }
+        }))
+        .expect("all provider protobuf Timestamp objects must decode");
+
+        assert_eq!(decoded.trade.expect("trade missing").time.nanos, Some(1));
+        assert_eq!(
+            decoded.orderbook.expect("order book missing").time.nanos,
+            Some(2)
+        );
+        assert_eq!(
+            decoded
+                .trading_status
+                .expect("trading status missing")
+                .time
+                .nanos,
+            Some(3)
+        );
+        assert_eq!(
+            decoded.last_price.expect("last price missing").time.nanos,
+            Some(4)
+        );
+        let ping = decoded.ping.expect("ping missing");
+        assert_eq!(ping.time.nanos, Some(5));
+        assert_eq!(
+            ping.ping_request_time
+                .expect("ping request time missing")
+                .nanos,
+            Some(6)
+        );
+    }
+
+    #[test]
+    fn protobuf_timestamp_validation_rejects_invalid_wire_values() {
+        assert_eq!(
+            ProtobufTimestamp {
+                seconds: 1,
+                nanos: Some(1_000_000_000),
+            }
+            .to_offset_datetime(),
+            Err(ProtobufTimestampError::InvalidNanos(1_000_000_000))
+        );
+        assert_eq!(
+            ProtobufTimestamp {
+                seconds: i64::MAX,
+                nanos: Some(0),
+            }
+            .to_offset_datetime(),
+            Err(ProtobufTimestampError::OutOfRange)
+        );
+
+        let omitted_nanos = serde_json::from_value::<ProtobufTimestamp>(json!({
+            "seconds": "1"
+        }))
+        .expect("protobuf-default nanos may be omitted");
+        assert_eq!(omitted_nanos.nanos, None);
+        assert_eq!(
+            omitted_nanos
+                .to_offset_datetime()
+                .expect("protobuf-default zero nanos must validate")
+                .unix_timestamp_nanos(),
+            1_000_000_000
+        );
     }
 
     #[test]
@@ -1000,6 +1181,27 @@ mod tests {
         assert!(diagnostic.contains("invalid type: map, expected a string"));
         assert!(!diagnostic.contains("public-instrument-uid"));
         assert!(!diagnostic.contains("unexpected"));
+    }
+
+    #[test]
+    fn malformed_timestamp_reports_exact_nested_path_without_payload() {
+        let message = ProviderMessage::new(json!({
+            "trading_status": {
+                "instrument_uid": "public-instrument-uid",
+                "trading_status": "SECURITY_TRADING_STATUS_NORMAL_TRADING",
+                "time": {"seconds": {"invalid": "secret-marker"}, "nanos": 0}
+            }
+        }));
+
+        let error = message
+            .decode_qualification_market_data()
+            .expect_err("message-shaped timestamp seconds must fail");
+        let diagnostic = error.to_string();
+
+        assert!(diagnostic.contains("trading_status.time.seconds"));
+        assert!(diagnostic.contains("invalid type: map"));
+        assert!(!diagnostic.contains("public-instrument-uid"));
+        assert!(!diagnostic.contains("secret-marker"));
     }
 
     #[test]

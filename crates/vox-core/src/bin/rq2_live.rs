@@ -122,20 +122,23 @@ fn validate_market_event(
         if trade.instrument_uid != expected_uid
             || trade.quantity <= 0
             || trade.price.fixed_point().total_nanos() <= 0
-            || trade.time.is_empty()
+            || trade.time.to_offset_datetime().is_err()
         {
             bail!("invalid typed trade event");
         }
         return Ok(true);
     }
     if let Some(book) = &message.orderbook {
-        if book.instrument_uid != expected_uid || !book.is_consistent || book.time.is_empty() {
+        if book.instrument_uid != expected_uid
+            || !book.is_consistent
+            || book.time.to_offset_datetime().is_err()
+        {
             bail!("non-authoritative or untimestamped order book event");
         }
         return Ok(true);
     }
     if let Some(status) = &message.trading_status {
-        if status.instrument_uid != expected_uid || status.time.is_empty() {
+        if status.instrument_uid != expected_uid || status.time.to_offset_datetime().is_err() {
             bail!("untimestamped trading status event");
         }
         return Ok(true);
@@ -143,7 +146,7 @@ fn validate_market_event(
     if let Some(last_price) = &message.last_price {
         if last_price.instrument_uid != expected_uid
             || last_price.price.fixed_point().total_nanos() <= 0
-            || last_price.time.is_empty()
+            || last_price.time.to_offset_datetime().is_err()
         {
             bail!("invalid typed last-price event");
         }
@@ -155,9 +158,9 @@ fn validate_market_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vox_tinvest::qualification::OrderBookMessage;
+    use vox_tinvest::qualification::{OrderBookMessage, ProtobufTimestamp};
 
-    fn stream_book(time: &str) -> MarketDataStreamMessage {
+    fn stream_book(time: ProtobufTimestamp) -> MarketDataStreamMessage {
         MarketDataStreamMessage {
             subscribe_trades_response: None,
             subscribe_order_book_response: None,
@@ -165,26 +168,47 @@ mod tests {
             subscribe_last_price_response: None,
             trade: None,
             orderbook: Some(OrderBookMessage {
-                figi: "BBG004730N88".to_string(),
+                figi: Some("BBG004730N88".to_string()),
                 instrument_uid: "uid".to_string(),
                 depth: 10,
                 is_consistent: true,
-                time: time.to_string(),
+                time,
                 bids: Vec::new(),
                 asks: Vec::new(),
+                limit_up: None,
+                limit_down: None,
+                order_book_type: None,
+                ticker: Some("SBER".to_string()),
+                class_code: Some("TQBR".to_string()),
             }),
             trading_status: None,
             last_price: None,
+            open_interest: None,
             ping: None,
         }
     }
 
     #[test]
     fn streaming_order_book_still_requires_provider_event_time() {
-        assert!(validate_market_event(&stream_book(""), "uid").is_err());
         assert!(
-            validate_market_event(&stream_book("2026-08-23T20:00:00Z"), "uid")
-                .expect("timestamped stream book must validate")
+            validate_market_event(
+                &stream_book(ProtobufTimestamp {
+                    seconds: 1,
+                    nanos: Some(-1),
+                }),
+                "uid"
+            )
+            .is_err()
+        );
+        assert!(
+            validate_market_event(
+                &stream_book(ProtobufTimestamp {
+                    seconds: 1_787_392_800,
+                    nanos: Some(123_456_789),
+                }),
+                "uid"
+            )
+            .expect("timestamped stream book must validate")
         );
     }
 }
