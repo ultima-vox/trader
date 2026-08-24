@@ -90,6 +90,10 @@ T-Invest public `Trade` has no venue trade ID or sequence. `derived_trade_compat
 - provider ping: 120 seconds.
 
 Credential stays only in `SecretToken`; logs/debug redact it. `GrpcConfig` keeps native-root certificate verification and request/message limits.
+`request_timeout` is encoded only on unary gRPC requests. Continuous `MarketDataStream` and
+`MarketDataServerSideStream` requests carry no finite gRPC deadline and no endpoint-wide timeout;
+their liveness is governed by provider ping semantics plus supervisor stale detection and bounded
+reconnect policy.
 
 ## Qualification order
 

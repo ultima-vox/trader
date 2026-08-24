@@ -181,7 +181,6 @@ impl TInvestGrpcClient {
             Endpoint::from_shared(config.endpoint.as_str().trim_end_matches('/').to_owned())
                 .map_err(|error| GrpcConfigError::Channel(error.to_string()))?
                 .connect_timeout(config.connect_timeout)
-                .timeout(config.request_timeout)
                 .user_agent("vox-trader/0.1 vox-tinvest")
                 .map_err(|error| GrpcConfigError::Channel(error.to_string()))?
                 .tls_config(ClientTlsConfig::new().with_native_roots())
@@ -229,7 +228,11 @@ impl TInvestGrpcClient {
             .max_decoding_message_size(self.config.max_response_bytes)
     }
 
-    fn request<T>(&self, body: T, request_id: Uuid) -> Result<Request<T>, GrpcErrorKind> {
+    fn authenticated_request<T>(
+        &self,
+        body: T,
+        request_id: Uuid,
+    ) -> Result<Request<T>, GrpcErrorKind> {
         let bearer = format!("Bearer {}", self.token.expose_secret());
         let authorization = AsciiMetadataValue::try_from(bearer)
             .map_err(|_| GrpcErrorKind::InvalidAuthorizationMetadata)?;
@@ -246,8 +249,17 @@ impl TInvestGrpcClient {
             "x-app-name",
             AsciiMetadataValue::from_static("ultima-vox.trader"),
         );
+        Ok(request)
+    }
+
+    fn unary_request<T>(&self, body: T, request_id: Uuid) -> Result<Request<T>, GrpcErrorKind> {
+        let mut request = self.authenticated_request(body, request_id)?;
         request.set_timeout(self.config.request_timeout);
         Ok(request)
+    }
+
+    fn stream_request<T>(&self, body: T, request_id: Uuid) -> Result<Request<T>, GrpcErrorKind> {
+        self.authenticated_request(body, request_id)
     }
 
     async fn safe_read<Req, Resp, Dispatch>(
@@ -270,7 +282,7 @@ impl TInvestGrpcClient {
                 mutation: false,
             };
             let request = self
-                .request(body.clone(), request_id)
+                .unary_request(body.clone(), request_id)
                 .map_err(|kind| GrpcError { metadata, kind })?;
             let mut client = self.generated_client();
             match dispatch(&mut client, request).await {
@@ -337,7 +349,7 @@ impl TInvestGrpcClient {
             });
         }
         let request = self
-            .request(body, request_id)
+            .unary_request(body, request_id)
             .map_err(|kind| GrpcError { metadata, kind })?;
         let mut client = self.generated_client();
         dispatch(&mut client, request)
@@ -370,7 +382,7 @@ impl TInvestGrpcClient {
                 mutation: false,
             };
             let request = self
-                .request(body.clone(), request_id)
+                .unary_request(body.clone(), request_id)
                 .map_err(|kind| GrpcError { metadata, kind })?;
             let mut client = self.market_generated_client();
             match dispatch(&mut client, request).await {
@@ -426,7 +438,7 @@ impl TInvestGrpcClient {
         }
         let (outbound, receiver) = mpsc::channel(outbound_capacity);
         let request = self
-            .request(ReceiverStream::new(receiver), request_id)
+            .stream_request(ReceiverStream::new(receiver), request_id)
             .map_err(|kind| GrpcError { metadata, kind })?;
         let mut client = self.market_stream_generated_client();
         let response = client
@@ -462,7 +474,7 @@ impl TInvestGrpcClient {
             mutation: false,
         };
         let request = self
-            .request(body, request_id)
+            .stream_request(body, request_id)
             .map_err(|kind| GrpcError { metadata, kind })?;
         let mut client = self.market_stream_generated_client();
         let response = client
@@ -1001,6 +1013,27 @@ mod tests {
         );
         assert_eq!(config.environment(), Environment::Live);
         assert!(TInvestGrpcClient::new(token(), config).is_ok());
+    }
+
+    #[tokio::test]
+    async fn unary_requests_have_deadline_but_stream_requests_do_not() {
+        let client = TInvestGrpcClient::new(token(), GrpcConfig::production())
+            .unwrap_or_else(|error| panic!("client failed: {error}"));
+        let unary = client
+            .unary_request((), Uuid::nil())
+            .expect("unary request metadata");
+        let stream = client
+            .stream_request((), Uuid::nil())
+            .expect("stream request metadata");
+
+        assert_eq!(
+            unary
+                .metadata()
+                .get("grpc-timeout")
+                .and_then(|value| value.to_str().ok()),
+            Some("20000000u")
+        );
+        assert!(stream.metadata().get("grpc-timeout").is_none());
     }
 
     #[test]
