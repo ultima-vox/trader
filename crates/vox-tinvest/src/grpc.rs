@@ -4,7 +4,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use prost::Message;
 use thiserror::Error;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::metadata::{AsciiMetadataValue, MetadataMap};
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::{Code, Request, Response, Status};
@@ -13,6 +16,7 @@ use uuid::Uuid;
 use vox_domain::{Environment, MutationAuthorization};
 
 use crate::generated::v1;
+use crate::market_data::{MarketDataRequestError, validate_get_candles_request};
 use crate::{
     NoopRetryObserver, RestOperation, RetryEvent, RetryObserver, RetryPolicy, RetryReason,
     SecretToken,
@@ -25,6 +29,9 @@ const DEFAULT_REQUEST_LIMIT: usize = 2 * 1024 * 1024;
 const DEFAULT_RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
 
 type GeneratedClient = v1::instruments_service_client::InstrumentsServiceClient<Channel>;
+type MarketGeneratedClient = v1::market_data_service_client::MarketDataServiceClient<Channel>;
+type MarketStreamGeneratedClient =
+    v1::market_data_stream_service_client::MarketDataStreamServiceClient<Channel>;
 type GrpcFuture<'a, T> = Pin<Box<dyn Future<Output = Result<Response<T>, Status>> + Send + 'a>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -175,7 +182,6 @@ impl TInvestGrpcClient {
             Endpoint::from_shared(config.endpoint.as_str().trim_end_matches('/').to_owned())
                 .map_err(|error| GrpcConfigError::Channel(error.to_string()))?
                 .connect_timeout(config.connect_timeout)
-                .timeout(config.request_timeout)
                 .user_agent("vox-trader/0.1 vox-tinvest")
                 .map_err(|error| GrpcConfigError::Channel(error.to_string()))?
                 .tls_config(ClientTlsConfig::new().with_native_roots())
@@ -211,7 +217,23 @@ impl TInvestGrpcClient {
             .max_decoding_message_size(self.config.max_response_bytes)
     }
 
-    fn request<T>(&self, body: T, request_id: Uuid) -> Result<Request<T>, GrpcErrorKind> {
+    fn market_generated_client(&self) -> MarketGeneratedClient {
+        MarketGeneratedClient::new(self.channel.clone())
+            .max_encoding_message_size(self.config.max_request_bytes)
+            .max_decoding_message_size(self.config.max_response_bytes)
+    }
+
+    fn market_stream_generated_client(&self) -> MarketStreamGeneratedClient {
+        MarketStreamGeneratedClient::new(self.channel.clone())
+            .max_encoding_message_size(self.config.max_request_bytes)
+            .max_decoding_message_size(self.config.max_response_bytes)
+    }
+
+    fn authenticated_request<T>(
+        &self,
+        body: T,
+        request_id: Uuid,
+    ) -> Result<Request<T>, GrpcErrorKind> {
         let bearer = format!("Bearer {}", self.token.expose_secret());
         let authorization = AsciiMetadataValue::try_from(bearer)
             .map_err(|_| GrpcErrorKind::InvalidAuthorizationMetadata)?;
@@ -228,8 +250,17 @@ impl TInvestGrpcClient {
             "x-app-name",
             AsciiMetadataValue::from_static("ultima-vox.trader"),
         );
+        Ok(request)
+    }
+
+    fn unary_request<T>(&self, body: T, request_id: Uuid) -> Result<Request<T>, GrpcErrorKind> {
+        let mut request = self.authenticated_request(body, request_id)?;
         request.set_timeout(self.config.request_timeout);
         Ok(request)
+    }
+
+    fn stream_request<T>(&self, body: T, request_id: Uuid) -> Result<Request<T>, GrpcErrorKind> {
+        self.authenticated_request(body, request_id)
     }
 
     async fn safe_read<Req, Resp, Dispatch>(
@@ -252,7 +283,7 @@ impl TInvestGrpcClient {
                 mutation: false,
             };
             let request = self
-                .request(body.clone(), request_id)
+                .unary_request(body.clone(), request_id)
                 .map_err(|kind| GrpcError { metadata, kind })?;
             let mut client = self.generated_client();
             match dispatch(&mut client, request).await {
@@ -319,7 +350,7 @@ impl TInvestGrpcClient {
             });
         }
         let request = self
-            .request(body, request_id)
+            .unary_request(body, request_id)
             .map_err(|kind| GrpcError { metadata, kind })?;
         let mut client = self.generated_client();
         dispatch(&mut client, request)
@@ -329,6 +360,241 @@ impl TInvestGrpcClient {
                 metadata,
                 kind: GrpcErrorKind::Provider(GrpcProviderError::from_status(status)),
             })
+    }
+
+    async fn safe_market_read<Req, Resp, Dispatch>(
+        &self,
+        method: &'static str,
+        body: Req,
+        mut dispatch: Dispatch,
+    ) -> Result<GrpcResponse<Resp>, GrpcError>
+    where
+        Req: Clone + Send + Sync + 'static,
+        Resp: Send + 'static,
+        Dispatch:
+            for<'a> FnMut(&'a mut MarketGeneratedClient, Request<Req>) -> GrpcFuture<'a, Resp>,
+    {
+        let request_id = Uuid::new_v4();
+        for attempt in 1..=self.config.retry_policy.max_attempts() {
+            let metadata = GrpcRequestMetadata {
+                request_id,
+                method,
+                attempt,
+                mutation: false,
+            };
+            let request = self
+                .unary_request(body.clone(), request_id)
+                .map_err(|kind| GrpcError { metadata, kind })?;
+            let mut client = self.market_generated_client();
+            match dispatch(&mut client, request).await {
+                Ok(response) => return Ok(GrpcResponse::from_tonic(request_id, attempt, response)),
+                Err(status)
+                    if attempt < self.config.retry_policy.max_attempts()
+                        && retryable_status(status.code()) =>
+                {
+                    let delay = self.config.retry_policy.delay_for(attempt, request_id);
+                    self.retry_observer.on_retry(&RetryEvent {
+                        operation: RestOperation::SafeRead,
+                        request_id,
+                        failed_attempt: attempt,
+                        next_attempt: attempt + 1,
+                        delay,
+                        server_retry_after: None,
+                        server_retry_after_raw: None,
+                        reason: match status.code() {
+                            Code::DeadlineExceeded => RetryReason::Timeout,
+                            _ => RetryReason::Transport,
+                        },
+                    });
+                    tokio::time::sleep(delay).await;
+                }
+                Err(status) => {
+                    return Err(GrpcError {
+                        metadata,
+                        kind: GrpcErrorKind::Provider(GrpcProviderError::from_status(status)),
+                    });
+                }
+            }
+        }
+        unreachable!("retry policy always has at least one attempt")
+    }
+
+    /// Opens verified, authenticated generated bidirectional market-data stream.
+    pub async fn open_market_data_stream(
+        &self,
+        outbound_capacity: usize,
+        initial_requests: Vec<v1::MarketDataRequest>,
+    ) -> Result<GrpcMarketDataStream, GrpcError> {
+        let request_id = Uuid::new_v4();
+        let metadata = GrpcRequestMetadata {
+            request_id,
+            method: "MarketDataStream",
+            attempt: 1,
+            mutation: false,
+        };
+        if outbound_capacity == 0 {
+            return Err(GrpcError {
+                metadata,
+                kind: GrpcErrorKind::InvalidStreamCapacity,
+            });
+        }
+        if initial_requests.is_empty() || initial_requests.len() > outbound_capacity {
+            return Err(GrpcError {
+                metadata,
+                kind: GrpcErrorKind::InvalidInitialStreamRequests,
+            });
+        }
+        let (outbound, receiver) = mpsc::channel(outbound_capacity);
+        for initial in initial_requests {
+            outbound.try_send(initial).map_err(|_| GrpcError {
+                metadata,
+                kind: GrpcErrorKind::InvalidInitialStreamRequests,
+            })?;
+        }
+        let request = self
+            .stream_request(ReceiverStream::new(receiver), request_id)
+            .map_err(|kind| GrpcError { metadata, kind })?;
+        let mut client = self.market_stream_generated_client();
+        let response = client
+            .market_data_stream(request)
+            .await
+            .map_err(|status| GrpcError {
+                metadata,
+                kind: GrpcErrorKind::Provider(GrpcProviderError::from_status(status)),
+            })?;
+        let tracking_id = metadata_text(response.metadata(), "x-tracking-id");
+        Ok(GrpcMarketDataStream {
+            outbound,
+            inbound: response.into_inner(),
+            metadata: GrpcResponseMetadata {
+                request_id,
+                tracking_id,
+                attempt: 1,
+            },
+        })
+    }
+
+    /// Opens generated server-side stream. Bidirectional stream remains production default because
+    /// only it supports runtime subscription changes and `GetMySubscriptions`.
+    pub async fn open_market_data_server_stream(
+        &self,
+        body: v1::MarketDataServerSideStreamRequest,
+    ) -> Result<GrpcMarketDataServerStream, GrpcError> {
+        let request_id = Uuid::new_v4();
+        let metadata = GrpcRequestMetadata {
+            request_id,
+            method: "MarketDataServerSideStream",
+            attempt: 1,
+            mutation: false,
+        };
+        let request = self
+            .stream_request(body, request_id)
+            .map_err(|kind| GrpcError { metadata, kind })?;
+        let mut client = self.market_stream_generated_client();
+        let response = client
+            .market_data_server_side_stream(request)
+            .await
+            .map_err(|status| GrpcError {
+                metadata,
+                kind: GrpcErrorKind::Provider(GrpcProviderError::from_status(status)),
+            })?;
+        let tracking_id = metadata_text(response.metadata(), "x-tracking-id");
+        Ok(GrpcMarketDataServerStream {
+            inbound: response.into_inner(),
+            metadata: GrpcResponseMetadata {
+                request_id,
+                tracking_id,
+                attempt: 1,
+            },
+        })
+    }
+}
+
+macro_rules! market_safe_reads {
+    ($(($name:ident, $provider_name:literal, $request:ty, $response:ty)),+ $(,)?) => {
+        impl TInvestGrpcClient {
+            $(
+                pub async fn $name(&self, request: $request) -> Result<GrpcResponse<$response>, GrpcError> {
+                    self.safe_market_read($provider_name, request, |client, request| {
+                        Box::pin(client.$name(request))
+                    }).await
+                }
+            )+
+        }
+    };
+}
+
+market_safe_reads!(
+    (
+        get_last_prices,
+        "GetLastPrices",
+        v1::GetLastPricesRequest,
+        v1::GetLastPricesResponse
+    ),
+    (
+        get_order_book,
+        "GetOrderBook",
+        v1::GetOrderBookRequest,
+        v1::GetOrderBookResponse
+    ),
+    (
+        get_trading_status,
+        "GetTradingStatus",
+        v1::GetTradingStatusRequest,
+        v1::GetTradingStatusResponse
+    ),
+    (
+        get_trading_statuses,
+        "GetTradingStatuses",
+        v1::GetTradingStatusesRequest,
+        v1::GetTradingStatusesResponse
+    ),
+    (
+        get_last_trades,
+        "GetLastTrades",
+        v1::GetLastTradesRequest,
+        v1::GetLastTradesResponse
+    ),
+    (
+        get_close_prices,
+        "GetClosePrices",
+        v1::GetClosePricesRequest,
+        v1::GetClosePricesResponse
+    ),
+    (
+        get_tech_analysis,
+        "GetTechAnalysis",
+        v1::GetTechAnalysisRequest,
+        v1::GetTechAnalysisResponse
+    ),
+    (
+        get_market_values,
+        "GetMarketValues",
+        v1::GetMarketValuesRequest,
+        v1::GetMarketValuesResponse
+    ),
+);
+
+impl TInvestGrpcClient {
+    pub async fn get_candles(
+        &self,
+        request: v1::GetCandlesRequest,
+    ) -> Result<GrpcResponse<v1::GetCandlesResponse>, GrpcError> {
+        if let Err(error) = validate_get_candles_request(&request) {
+            return Err(GrpcError {
+                metadata: GrpcRequestMetadata {
+                    request_id: Uuid::new_v4(),
+                    method: "GetCandles",
+                    attempt: 1,
+                    mutation: false,
+                },
+                kind: GrpcErrorKind::MarketDataRequest(error),
+            });
+        }
+        self.safe_market_read("GetCandles", request, |client, request| {
+            Box::pin(client.get_candles(request))
+        })
+        .await
     }
 }
 
@@ -612,6 +878,64 @@ pub struct GrpcResponse<T> {
     pub metadata: GrpcResponseMetadata,
 }
 
+/// Live generated gRPC stream with bounded outbound backpressure.
+pub struct GrpcMarketDataStream {
+    outbound: mpsc::Sender<v1::MarketDataRequest>,
+    inbound: tonic::Streaming<v1::MarketDataResponse>,
+    pub metadata: GrpcResponseMetadata,
+}
+
+pub struct GrpcMarketDataServerStream {
+    inbound: tonic::Streaming<v1::MarketDataResponse>,
+    pub metadata: GrpcResponseMetadata,
+}
+
+impl GrpcMarketDataServerStream {
+    pub async fn message(&mut self) -> Result<Option<v1::MarketDataResponse>, GrpcStreamError> {
+        self.inbound
+            .message()
+            .await
+            .map_err(GrpcStreamError::from_status)
+    }
+}
+
+impl GrpcMarketDataStream {
+    pub async fn send(&mut self, request: v1::MarketDataRequest) -> Result<(), GrpcStreamError> {
+        self.outbound
+            .send(request)
+            .await
+            .map_err(|_| GrpcStreamError::OutboundClosed)
+    }
+
+    pub async fn message(&mut self) -> Result<Option<v1::MarketDataResponse>, GrpcStreamError> {
+        self.inbound
+            .message()
+            .await
+            .map_err(GrpcStreamError::from_status)
+    }
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum GrpcStreamError {
+    #[error("market-data stream outbound channel closed")]
+    OutboundClosed,
+    #[error("provider error 80004: no active market-data subscriptions: {0}")]
+    NoActiveSubscriptions(GrpcProviderError),
+    #[error("{0}")]
+    Provider(GrpcProviderError),
+}
+
+impl GrpcStreamError {
+    fn from_status(status: Status) -> Self {
+        let provider = GrpcProviderError::from_status(status);
+        if provider.code == Code::ResourceExhausted && provider.has_provider_code("80004") {
+            Self::NoActiveSubscriptions(provider)
+        } else {
+            Self::Provider(provider)
+        }
+    }
+}
+
 impl<T> GrpcResponse<T> {
     fn from_tonic(request_id: Uuid, attempt: u32, response: Response<T>) -> Self {
         let tracking_id = metadata_text(response.metadata(), "x-tracking-id");
@@ -643,6 +967,25 @@ impl GrpcProviderError {
             tracking_id: metadata_text(status.metadata(), "x-tracking-id"),
         }
     }
+
+    fn has_provider_code(&self, expected: &str) -> bool {
+        if digit_tokens(&self.message).any(|token| token == expected) {
+            return true;
+        }
+        if let Ok(detail) = v1::ErrorDetail::decode(self.details.as_slice())
+            && detail.code == expected
+        {
+            return true;
+        }
+        let details = String::from_utf8_lossy(&self.details);
+        digit_tokens(&details).any(|token| token == expected)
+    }
+}
+
+fn digit_tokens(value: &str) -> impl Iterator<Item = &str> {
+    value
+        .split(|character: char| !character.is_ascii_digit())
+        .filter(|token| !token.is_empty())
 }
 
 impl fmt::Display for GrpcProviderError {
@@ -659,6 +1002,12 @@ pub enum GrpcErrorKind {
     InvalidAuthorizationMetadata,
     #[error("failed to encode request correlation metadata")]
     InvalidRequestMetadata,
+    #[error("market-data stream outbound capacity must be positive")]
+    InvalidStreamCapacity,
+    #[error("initial market-data stream requests must fit non-empty outbound capacity")]
+    InvalidInitialStreamRequests,
+    #[error("invalid market-data request: {0}")]
+    MarketDataRequest(MarketDataRequestError),
     #[error(
         "mutation authorization environment {authorized:?} does not match gRPC client environment {configured:?}"
     )]
@@ -714,6 +1063,27 @@ mod tests {
         assert!(TInvestGrpcClient::new(token(), config).is_ok());
     }
 
+    #[tokio::test]
+    async fn unary_requests_have_deadline_but_stream_requests_do_not() {
+        let client = TInvestGrpcClient::new(token(), GrpcConfig::production())
+            .unwrap_or_else(|error| panic!("client failed: {error}"));
+        let unary = client
+            .unary_request((), Uuid::nil())
+            .expect("unary request metadata");
+        let stream = client
+            .stream_request((), Uuid::nil())
+            .expect("stream request metadata");
+
+        assert_eq!(
+            unary
+                .metadata()
+                .get("grpc-timeout")
+                .and_then(|value| value.to_str().ok()),
+            Some("20000000u")
+        );
+        assert!(stream.metadata().get("grpc-timeout").is_none());
+    }
+
     #[test]
     fn insecure_or_credentialed_endpoint_is_rejected() {
         let insecure = Url::parse("http://example.test").expect("static URL");
@@ -743,5 +1113,53 @@ mod tests {
             error.kind,
             GrpcErrorKind::MutationEnvironmentMismatch { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn candle_source_with_limit_fails_before_dispatch() {
+        let client = TInvestGrpcClient::new(token(), GrpcConfig::production())
+            .unwrap_or_else(|error| panic!("client failed: {error}"));
+        let error = client
+            .get_candles(v1::GetCandlesRequest {
+                candle_source_type: Some(v1::get_candles_request::CandleSource::Exchange as i32),
+                limit: Some(60),
+                ..Default::default()
+            })
+            .await
+            .expect_err("provider error 30220 must fail locally");
+        assert_eq!(error.metadata.method, "GetCandles");
+        assert_eq!(
+            error.kind,
+            GrpcErrorKind::MarketDataRequest(MarketDataRequestError::CandleSourceWithLimit)
+        );
+    }
+
+    #[test]
+    fn provider_80004_has_typed_stream_classification() {
+        let error = GrpcStreamError::from_status(Status::resource_exhausted(
+            "80004: No active subscriptions",
+        ));
+        assert!(matches!(
+            error,
+            GrpcStreamError::NoActiveSubscriptions(GrpcProviderError {
+                code: Code::ResourceExhausted,
+                ..
+            })
+        ));
+        assert!(matches!(
+            GrpcStreamError::from_status(Status::resource_exhausted("quota exhausted")),
+            GrpcStreamError::Provider(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn bidirectional_stream_requires_seed_requests_before_dispatch() {
+        let client = TInvestGrpcClient::new(token(), GrpcConfig::production())
+            .unwrap_or_else(|error| panic!("client failed: {error}"));
+        let error = match client.open_market_data_stream(16, Vec::new()).await {
+            Err(error) => error,
+            Ok(_) => panic!("empty bootstrap would trigger provider 80004"),
+        };
+        assert_eq!(error.kind, GrpcErrorKind::InvalidInitialStreamRequests);
     }
 }

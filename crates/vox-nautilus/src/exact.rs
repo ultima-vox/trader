@@ -132,6 +132,18 @@ pub(crate) fn quantity_from_whole(
     .map_err(|error| remap_invalid_field(error, field))
 }
 
+pub(crate) fn quantity_from_nonnegative_whole(
+    value: u64,
+    field: &'static str,
+) -> Result<Quantity, MappingError> {
+    ExactDecimal {
+        coefficient: u128::from(value),
+        scale: 0,
+    }
+    .to_nautilus_quantity()
+    .map_err(|error| remap_invalid_field(error, field))
+}
+
 fn to_nautilus_price_named(value: FixedPoint, field: &'static str) -> Result<Price, MappingError> {
     let total_nanos = value.total_nanos();
     let precision = fixed_point_precision(total_nanos);

@@ -10,13 +10,16 @@ Vendored files:
 
 - `common.proto`
 - `instruments.proto`
+- `marketdata.proto`
 - `google/api/field_behavior.proto`
 
 SHA-256:
 
 - `common.proto`: `15ae831b2aed864abae862140a33738341a132dd3ef3369ec0311cae231f729f`
 - `instruments.proto`: `d167f7ae3ab680f589a4f74c40cc97e6b4325bdf8ec42eb10fa5a90eb75e8eec`
+- `marketdata.proto`: `60474e266b4e9f7c7a228728dc6da7bfa516a5cac4f85739e624d3ce4bebb263`
 - `google/api/field_behavior.proto`: `d6e56bfb1cede233ff3a62fed8ed1512af76ce234b3fee7a2ca5fdeab4571f9a`
 
-Rust provider types and `InstrumentsService` client are generated during build.
+Rust provider types and `InstrumentsService`, `MarketDataService`, and
+`MarketDataStreamService` clients are generated during build.
 Update requires an explicit revision change plus contract inventory tests.
