@@ -1,16 +1,26 @@
 #![forbid(unsafe_code)]
 
 pub mod qualification;
+pub mod reference;
 
+pub mod canonical;
+pub mod generated;
+
+mod grpc;
 mod rest;
 mod retry;
 mod secret;
 mod websocket;
 
+pub use grpc::{
+    DEFAULT_GRPC_ENDPOINT, DEFAULT_SANDBOX_GRPC_ENDPOINT, GrpcCertificatePolicy, GrpcConfig,
+    GrpcConfigError, GrpcError, GrpcErrorKind, GrpcProviderError, GrpcRequestMetadata,
+    GrpcResponse, GrpcResponseMetadata, TInvestGrpcClient,
+};
 pub use rest::{
-    DEFAULT_REST_BASE_URL, DispatchCertainty, ProviderError, ProviderResponse, RequestMetadata,
-    ResponseMetadata, RestCertificatePolicy, RestConfig, RestConfigError, RestError, RestErrorKind,
-    RestOperation, TInvestRestClient,
+    DEFAULT_REST_BASE_URL, DEFAULT_SANDBOX_REST_BASE_URL, DispatchCertainty, ProviderError,
+    ProviderResponse, RequestMetadata, ResponseMetadata, RestCertificatePolicy, RestConfig,
+    RestConfigError, RestError, RestErrorKind, RestOperation, TInvestRestClient,
 };
 pub use retry::{
     NoopRetryObserver, RetryEvent, RetryObserver, RetryPolicy, RetryPolicyError, RetryReason,

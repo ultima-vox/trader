@@ -17,6 +17,7 @@ use crate::SecretToken;
 use crate::retry::{NoopRetryObserver, RetryEvent, RetryObserver, RetryPolicy, RetryReason};
 
 pub const DEFAULT_REST_BASE_URL: &str = "https://invest-public-api.tbank.ru/rest";
+pub const DEFAULT_SANDBOX_REST_BASE_URL: &str = "https://sandbox-invest-public-api.tbank.ru/rest";
 const DEFAULT_REQUEST_LIMIT: usize = 2 * 1024 * 1024;
 const DEFAULT_RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
 const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
@@ -71,6 +72,15 @@ impl RestConfig {
             retry_policy: RetryPolicy::default(),
             certificate_policy: RestCertificatePolicy::NativeRoots,
         }
+    }
+
+    pub fn sandbox() -> Self {
+        let mut config = Self::production();
+        config.base_url = match Url::parse(DEFAULT_SANDBOX_REST_BASE_URL) {
+            Ok(url) => url,
+            Err(error) => unreachable!("built-in T-Invest sandbox URL is invalid: {error}"),
+        };
+        config
     }
 
     pub fn with_base_url(mut self, base_url: Url) -> Result<Self, RestConfigError> {
@@ -185,6 +195,10 @@ impl TInvestRestClient {
         Self::new(token, RestConfig::production())
     }
 
+    pub fn sandbox(token: SecretToken) -> Result<Self, RestConfigError> {
+        Self::new(token, RestConfig::sandbox())
+    }
+
     pub fn with_retry_observer<O>(mut self, observer: O) -> Self
     where
         O: RetryObserver + 'static,
@@ -217,13 +231,7 @@ impl TInvestRestClient {
             .await
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "sealed mutation primitive awaits typed order adapter"
-        )
-    )]
+    #[allow(dead_code)]
     pub(crate) async fn post_mutation<Request, Response>(
         &self,
         authorization: MutationAuthorization,
@@ -234,7 +242,11 @@ impl TInvestRestClient {
         Request: Serialize + Sync,
         Response: DeserializeOwned,
     {
-        if !mutation_path_matches_environment(authorization.environment(), method_path) {
+        if !mutation_path_matches_environment(
+            authorization.environment(),
+            &self.config.base_url,
+            method_path,
+        ) {
             return Err(RestError::new(
                 RequestMetadata {
                     request_id: Uuid::new_v4(),
@@ -735,11 +747,12 @@ pub enum RestErrorKind {
     ResponseDecode(#[source] serde_json::Error),
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by sealed mutation primitive")
-)]
-fn mutation_path_matches_environment(environment: Environment, method_path: &str) -> bool {
+#[allow(dead_code)]
+fn mutation_path_matches_environment(
+    environment: Environment,
+    base_url: &Url,
+    method_path: &str,
+) -> bool {
     let Some((service, method)) = provider_endpoint(method_path) else {
         return false;
     };
@@ -747,10 +760,19 @@ fn mutation_path_matches_environment(environment: Environment, method_path: &str
         return false;
     }
     let sandbox_method = service == "tinkoff.public.invest.api.contract.v1.SandboxService";
+    let sandbox_origin = base_url
+        .host_str()
+        .is_some_and(|host| host.starts_with("sandbox-"));
+    let shared_sandbox_mutation = service
+        == "tinkoff.public.invest.api.contract.v1.InstrumentsService"
+        && matches!(
+            method,
+            "EditFavorites" | "CreateFavoriteGroup" | "DeleteFavoriteGroup"
+        );
     match environment {
-        Environment::Sandbox => sandbox_method,
+        Environment::Sandbox => sandbox_method || (sandbox_origin && shared_sandbox_mutation),
         Environment::Paper => false,
-        Environment::Live => !sandbox_method,
+        Environment::Live => !sandbox_origin && !sandbox_method,
     }
 }
 
@@ -777,19 +799,38 @@ fn is_safe_read_method(method: &str) -> bool {
     method.starts_with("Get")
         || matches!(
             method,
-            "Shares" | "Bonds" | "Etfs" | "Currencies" | "Futures" | "OptionsBy"
+            "Shares"
+                | "ShareBy"
+                | "Bonds"
+                | "BondBy"
+                | "Etfs"
+                | "EtfBy"
+                | "Currencies"
+                | "CurrencyBy"
+                | "Futures"
+                | "FutureBy"
+                | "OptionsBy"
+                | "OptionBy"
+                | "StructuredNotes"
+                | "StructuredNoteBy"
+                | "Dfas"
+                | "DfaBy"
+                | "Indicatives"
+                | "FindInstrument"
+                | "TradingSchedules"
+                | "News"
         )
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by sealed mutation primitive")
-)]
+#[allow(dead_code)]
 fn is_mutation_method(method: &str) -> bool {
     ["Post", "Cancel", "Replace", "Open", "Close", "PayIn"]
         .iter()
         .any(|prefix| method.starts_with(prefix))
-        || method == "SandboxPayIn"
+        || matches!(
+            method,
+            "SandboxPayIn" | "EditFavorites" | "CreateFavoriteGroup" | "DeleteFavoriteGroup"
+        )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1019,6 +1060,33 @@ mod tests {
             Err(error)
                 if matches!(error.kind(), RestErrorKind::OperationMethodMismatch)
                     && error.dispatch_certainty() == DispatchCertainty::NotDispatched
+        ));
+    }
+
+    #[test]
+    fn favorite_mutations_require_matching_live_or_sandbox_origin() {
+        let production = RestConfig::production();
+        let sandbox = RestConfig::sandbox();
+        let method = "/tinkoff.public.invest.api.contract.v1.InstrumentsService/EditFavorites";
+        assert!(mutation_path_matches_environment(
+            Environment::Live,
+            production.base_url(),
+            method
+        ));
+        assert!(!mutation_path_matches_environment(
+            Environment::Sandbox,
+            production.base_url(),
+            method
+        ));
+        assert!(mutation_path_matches_environment(
+            Environment::Sandbox,
+            sandbox.base_url(),
+            method
+        ));
+        assert!(!mutation_path_matches_environment(
+            Environment::Live,
+            sandbox.base_url(),
+            method
         ));
     }
 
