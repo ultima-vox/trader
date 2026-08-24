@@ -2,12 +2,12 @@ use std::error::Error;
 
 use vox_tinvest::reference::{
     AssetFundamentalsRequest, AssetsRequest, BondEventsRequest, CapabilityRegistry,
-    CriticalDataError, EmptyRequest, FavoriteGroupsRequest, FavoritesRequest,
-    FindInstrumentRequest, IdRequest, InsiderDealsRequest, InstrumentExchange, InstrumentIdRequest,
-    InstrumentIdType, InstrumentRequest, InstrumentStatus, InstrumentsRequest, NewsRequest,
+    ConsensusForecastsResponse, CriticalDataError, EmptyRequest, FavoriteGroupsRequest,
+    FavoritesRequest, FindInstrumentRequest, IdRequest, InsiderDealsRequest, InstrumentExchange,
+    InstrumentIdRequest, InstrumentRequest, InstrumentStatus, InstrumentsRequest, NewsRequest,
     OptionsByRequest, PageRequest, PagedRequest, PeriodRequest, ProviderCurrentDate,
-    ProviderInstrumentType, RiskRatesRequest, Timestamp, TradingSchedulesError,
-    TradingSchedulesRequest, TradingSchedulesResult,
+    ProviderInstrumentType, RequiredPeriodRequest, RiskRatesRequest, Timestamp,
+    TradingSchedulesError, TradingSchedulesRequest, TradingSchedulesResult, next_page,
 };
 use vox_tinvest::{ProviderResponse, RestError, RestErrorKind, SecretToken, TInvestRestClient};
 
@@ -70,12 +70,10 @@ fn qualified_trading_schedules(
     }
 }
 
-fn by_uid(uid: &str) -> InstrumentRequest<'_> {
-    InstrumentRequest {
-        id_type: InstrumentIdType::InstrumentIdTypeUid,
-        class_code: None,
-        id: uid,
-    }
+fn by_uid(
+    uid: &str,
+) -> Result<InstrumentRequest<'_>, vox_tinvest::reference::RequestValidationError> {
+    InstrumentRequest::by_uid(uid)
 }
 
 fn required<'a>(
@@ -86,6 +84,48 @@ fn required<'a>(
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .ok_or(CriticalDataError::Missing(field))
+}
+
+fn present(value: &Option<String>) -> bool {
+    value
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn unavailable(method: &'static str, reason: &str, registry: &mut CapabilityRegistry) {
+    registry.mark_provider_data_unavailable(method);
+    println!("UNAVAILABLE {method}: {reason}");
+}
+
+fn forecast_sample(response: &ConsensusForecastsResponse) -> Option<&str> {
+    response
+        .items
+        .iter()
+        .filter_map(|item| item.uid.as_deref())
+        .find(|uid| !uid.trim().is_empty())
+}
+
+#[test]
+fn forecast_sample_uses_provider_consensus_uid() -> Result<(), serde_json::Error> {
+    let response: ConsensusForecastsResponse =
+        serde_json::from_str(r#"{"items":[{}, {"uid":"provider-forecast-uid"}]}"#)?;
+    assert_eq!(forecast_sample(&response), Some("provider-forecast-uid"));
+    Ok(())
+}
+
+#[test]
+fn empty_consensus_is_explicitly_unavailable() -> Result<(), serde_json::Error> {
+    let response: ConsensusForecastsResponse = serde_json::from_str(r#"{"items":[]}"#)?;
+    assert_eq!(forecast_sample(&response), None);
+    Ok(())
+}
+
+#[test]
+fn provider_sourced_forecast_404_is_not_capability_gated() {
+    assert_eq!(
+        vox_tinvest::reference::capability_state_for_http_status(404),
+        None
+    );
 }
 
 /// Opt-in current-contract qualification. Every call is a safe read. Gated
@@ -108,48 +148,59 @@ async fn current_reference_surface_decodes_live_read_only() -> Result<(), Box<dy
 
     let shares = qualified("Shares", client.shares(&catalogue).await, &mut capabilities)?
         .ok_or("Shares unexpectedly gated")?;
-    let share = shares.instruments.first().ok_or("empty Shares response")?;
+    let share = shares
+        .instruments
+        .iter()
+        .find(|instrument| present(&instrument.uid) && present(&instrument.ticker))
+        .ok_or("Shares has no row with UID and ticker")?;
     let share_uid = required(&share.uid, "share.uid")?;
     let share_ticker = required(&share.ticker, "share.ticker")?;
     qualified(
         "ShareBy",
-        client.share_by(&by_uid(share_uid)).await,
+        client.share_by(&by_uid(share_uid)?).await,
         &mut capabilities,
     )?;
     qualified(
         "GetInstrumentBy",
-        client.get_instrument_by(&by_uid(share_uid)).await,
+        client.get_instrument_by(&by_uid(share_uid)?).await,
         &mut capabilities,
     )?;
     qualified(
         "FindInstrument",
         client
-            .find_instrument(&FindInstrumentRequest {
-                query: share_ticker,
-                instrument_kind: Some(&ProviderInstrumentType::Share),
-                api_trade_available_flag: None,
-            })
+            .find_instrument(
+                &FindInstrumentRequest::new(share_ticker)?
+                    .with_instrument_kind(&ProviderInstrumentType::Share),
+            )
             .await,
         &mut capabilities,
     )?;
 
     let bonds = qualified("Bonds", client.bonds(&catalogue).await, &mut capabilities)?
         .ok_or("Bonds unexpectedly gated")?;
-    let bond = bonds.instruments.first().ok_or("empty Bonds response")?;
+    let bond = bonds
+        .instruments
+        .iter()
+        .find(|instrument| present(&instrument.uid))
+        .ok_or("Bonds has no row with UID")?;
     let bond_uid = required(&bond.uid, "bond.uid")?;
     qualified(
         "BondBy",
-        client.bond_by(&by_uid(bond_uid)).await,
+        client.bond_by(&by_uid(bond_uid)?).await,
         &mut capabilities,
     )?;
 
     let etfs = qualified("Etfs", client.etfs(&catalogue).await, &mut capabilities)?
         .ok_or("Etfs unexpectedly gated")?;
-    let etf = etfs.instruments.first().ok_or("empty Etfs response")?;
+    let etf = etfs
+        .instruments
+        .iter()
+        .find(|instrument| present(&instrument.uid))
+        .ok_or("Etfs has no row with UID")?;
     let etf_uid = required(&etf.uid, "etf.uid")?;
     qualified(
         "EtfBy",
-        client.etf_by(&by_uid(etf_uid)).await,
+        client.etf_by(&by_uid(etf_uid)?).await,
         &mut capabilities,
     )?;
 
@@ -161,12 +212,13 @@ async fn current_reference_surface_decodes_live_read_only() -> Result<(), Box<dy
     .ok_or("Currencies unexpectedly gated")?;
     let currency = currencies
         .instruments
-        .first()
-        .ok_or("empty Currencies response")?;
+        .iter()
+        .find(|instrument| present(&instrument.uid))
+        .ok_or("Currencies has no row with UID")?;
     let currency_uid = required(&currency.uid, "currency.uid")?;
     qualified(
         "CurrencyBy",
-        client.currency_by(&by_uid(currency_uid)).await,
+        client.currency_by(&by_uid(currency_uid)?).await,
         &mut capabilities,
     )?;
 
@@ -178,49 +230,62 @@ async fn current_reference_surface_decodes_live_read_only() -> Result<(), Box<dy
     .ok_or("Futures unexpectedly gated")?;
     let future = futures
         .instruments
-        .first()
-        .ok_or("empty Futures response")?;
+        .iter()
+        .find(|instrument| present(&instrument.uid))
+        .ok_or("Futures has no row with UID")?;
     let future_uid = required(&future.uid, "future.uid")?;
     qualified(
         "FutureBy",
-        client.future_by(&by_uid(future_uid)).await,
+        client.future_by(&by_uid(future_uid)?).await,
         &mut capabilities,
     )?;
     qualified(
         "GetFuturesMargin",
         client
-            .get_futures_margin(&InstrumentIdRequest {
-                instrument_id: future_uid,
-            })
+            .get_futures_margin(&InstrumentIdRequest::new(future_uid)?)
             .await,
         &mut capabilities,
     )?;
 
-    if let Some(notes) = qualified(
+    let notes = qualified(
         "StructuredNotes",
         client.structured_notes(&catalogue).await,
         &mut capabilities,
-    )? && let Some(note) = notes.instruments.first()
+    )?;
+    if let Some(note) = notes
+        .as_ref()
+        .and_then(|response| response.instruments.iter().find(|item| present(&item.uid)))
     {
         let note_uid = required(&note.uid, "structured_note.uid")?;
         qualified(
             "StructuredNoteBy",
-            client.structured_note_by(&by_uid(note_uid)).await,
+            client.structured_note_by(&by_uid(note_uid)?).await,
             &mut capabilities,
         )?;
+    } else {
+        unavailable(
+            "StructuredNoteBy",
+            "no provider-supplied structured-note UID",
+            &mut capabilities,
+        );
     }
-    if let Some(dfas) = qualified(
+    let dfas = qualified(
         "Dfas",
         client.dfas(&EmptyRequest::default()).await,
         &mut capabilities,
-    )? && let Some(dfa) = dfas.instruments.first()
+    )?;
+    if let Some(dfa) = dfas
+        .as_ref()
+        .and_then(|response| response.instruments.iter().find(|item| present(&item.uid)))
     {
         let dfa_uid = required(&dfa.uid, "dfa.uid")?;
         qualified(
             "DfaBy",
-            client.dfa_by(&by_uid(dfa_uid)).await,
+            client.dfa_by(&by_uid(dfa_uid)?).await,
             &mut capabilities,
         )?;
+    } else {
+        unavailable("DfaBy", "no provider-supplied DFA UID", &mut capabilities);
     }
     qualified(
         "Indicatives",
@@ -228,25 +293,52 @@ async fn current_reference_surface_decodes_live_read_only() -> Result<(), Box<dy
         &mut capabilities,
     )?;
 
-    let basic_asset_uid = share.asset_uid.as_deref().unwrap_or(share_uid);
-    if let Some(options) = qualified(
-        "OptionsBy",
-        client
-            .options_by(&OptionsByRequest {
-                basic_asset_uid,
-                basic_asset_position_uid: share.position_uid.as_deref(),
-                basic_instrument_id: Some(share_uid),
-            })
-            .await,
-        &mut capabilities,
-    )? && let Some(option) = options.instruments.first()
+    if let Some(option_source) = shares
+        .instruments
+        .iter()
+        .find(|instrument| present(&instrument.uid) && present(&instrument.asset_uid))
     {
-        let option_uid = required(&option.uid, "option.uid")?;
-        qualified(
-            "OptionBy",
-            client.option_by(&by_uid(option_uid)).await,
+        let option_source_uid = required(&option_source.uid, "option_source.uid")?;
+        let basic_asset_uid = required(&option_source.asset_uid, "option_source.asset_uid")?;
+        let options = qualified(
+            "OptionsBy",
+            client
+                .options_by(
+                    &OptionsByRequest::new(basic_asset_uid)?
+                        .with_basic_asset_position_uid(option_source.position_uid.as_deref())
+                        .with_basic_instrument_id(Some(option_source_uid)),
+                )
+                .await,
             &mut capabilities,
         )?;
+        if let Some(option) = options
+            .as_ref()
+            .and_then(|response| response.instruments.iter().find(|item| present(&item.uid)))
+        {
+            let option_uid = required(&option.uid, "option.uid")?;
+            qualified(
+                "OptionBy",
+                client.option_by(&by_uid(option_uid)?).await,
+                &mut capabilities,
+            )?;
+        } else {
+            unavailable(
+                "OptionBy",
+                "no provider-supplied option UID",
+                &mut capabilities,
+            );
+        }
+    } else {
+        unavailable(
+            "OptionsBy",
+            "share catalogue has no authoritative basic asset UID",
+            &mut capabilities,
+        );
+        unavailable(
+            "OptionBy",
+            "OptionsBy lacked authoritative basic asset UID",
+            &mut capabilities,
+        );
     }
 
     let assets = qualified(
@@ -260,16 +352,20 @@ async fn current_reference_surface_decodes_live_read_only() -> Result<(), Box<dy
         &mut capabilities,
     )?
     .ok_or("GetAssets unexpectedly gated")?;
-    let asset = assets.assets.first().ok_or("empty GetAssets response")?;
+    let asset = assets
+        .assets
+        .iter()
+        .find(|asset| present(&asset.uid))
+        .ok_or("GetAssets has no row with UID")?;
     let asset_uid = required(&asset.uid, "asset.uid")?;
     qualified(
         "GetAssetBy",
-        client.get_asset_by(&IdRequest { id: asset_uid }).await,
+        client.get_asset_by(&IdRequest::new(asset_uid)?).await,
         &mut capabilities,
     )?;
 
     let page = PageRequest::new(20, 0)?;
-    let brands = qualified(
+    let mut brands = qualified(
         "GetBrands",
         client
             .get_brands(&PagedRequest {
@@ -279,13 +375,33 @@ async fn current_reference_surface_decodes_live_read_only() -> Result<(), Box<dy
         &mut capabilities,
     )?
     .ok_or("GetBrands unexpectedly gated")?;
-    if let Some(brand) = brands.brands.first() {
+    if let Some(next) = brands
+        .paging
+        .as_ref()
+        .map(|paging| next_page(&page, paging))
+        .transpose()?
+        .flatten()
+        && let Some(mut second) = qualified(
+            "GetBrands",
+            client.get_brands(&PagedRequest { paging: next }).await,
+            &mut capabilities,
+        )?
+    {
+        brands.brands.append(&mut second.brands);
+    }
+    if let Some(brand) = brands.brands.iter().find(|brand| present(&brand.uid)) {
         let brand_uid = required(&brand.uid, "brand.uid")?;
         qualified(
             "GetBrandBy",
-            client.get_brand_by(&IdRequest { id: brand_uid }).await,
+            client.get_brand_by(&IdRequest::new(brand_uid)?).await,
             &mut capabilities,
         )?;
+    } else {
+        unavailable(
+            "GetBrandBy",
+            "no provider-supplied brand UID",
+            &mut capabilities,
+        );
     }
     qualified(
         "GetCountries",
@@ -303,23 +419,13 @@ async fn current_reference_surface_decodes_live_read_only() -> Result<(), Box<dy
         &mut capabilities,
     )?;
 
-    let share_period = PeriodRequest {
-        figi: None,
-        instrument_id: share_uid,
-        from: &from,
-        to: &to,
-    };
+    let share_period = PeriodRequest::new(share_uid, Some(&from), Some(&to))?;
     qualified(
         "GetDividends",
         client.get_dividends(&share_period).await,
         &mut capabilities,
     )?;
-    let bond_period = PeriodRequest {
-        figi: None,
-        instrument_id: bond_uid,
-        from: &from,
-        to: &to,
-    };
+    let bond_period = PeriodRequest::new(bond_uid, Some(&from), Some(&to))?;
     qualified(
         "GetBondCoupons",
         client.get_bond_coupons(&bond_period).await,
@@ -327,36 +433,34 @@ async fn current_reference_surface_decodes_live_read_only() -> Result<(), Box<dy
     )?;
     qualified(
         "GetAccruedInterests",
-        client.get_accrued_interests(&bond_period).await,
+        client
+            .get_accrued_interests(&RequiredPeriodRequest::new(bond_uid, &from, &to)?)
+            .await,
         &mut capabilities,
     )?;
     qualified(
         "GetBondEvents",
         client
-            .get_bond_events(&BondEventsRequest {
-                instrument_id: bond_uid,
-                from: &from,
-                to: &to,
-                event_type: "EVENT_TYPE_UNSPECIFIED",
-            })
+            .get_bond_events(&BondEventsRequest::new(
+                bond_uid,
+                Some(&from),
+                Some(&to),
+                "EVENT_TYPE_UNSPECIFIED",
+            )?)
             .await,
         &mut capabilities,
     )?;
     qualified(
         "GetRiskRates",
         client
-            .get_risk_rates(&RiskRatesRequest {
-                instrument_id: &[share_uid, future_uid],
-            })
+            .get_risk_rates(&RiskRatesRequest::new(&[share_uid, future_uid])?)
             .await,
         &mut capabilities,
     )?;
     qualified(
         "GetAssetFundamentals",
         client
-            .get_asset_fundamentals(&AssetFundamentalsRequest {
-                assets: &[asset_uid],
-            })
+            .get_asset_fundamentals(&AssetFundamentalsRequest::new(&[asset_uid])?)
             .await,
         &mut capabilities,
     )?;
@@ -366,43 +470,83 @@ async fn current_reference_surface_decodes_live_read_only() -> Result<(), Box<dy
         &mut capabilities,
     )?;
 
-    let consensus = qualified(
+    let consensus_page = PageRequest::new(20, 0)?;
+    let mut consensus = qualified(
         "GetConsensusForecasts",
         client
-            .get_consensus_forecasts(&PagedRequest { paging: page })
-            .await,
-        &mut capabilities,
-    )?;
-    let forecast_id = consensus
-        .as_ref()
-        .and_then(|response| response.items.first())
-        .and_then(|item| item.uid.as_deref())
-        .unwrap_or(share_uid);
-    qualified(
-        "GetForecastBy",
-        client
-            .get_forecast_by(&InstrumentIdRequest {
-                instrument_id: forecast_id,
+            .get_consensus_forecasts(&PagedRequest {
+                paging: consensus_page.clone(),
             })
             .await,
         &mut capabilities,
     )?;
-    qualified(
+    if let Some(first) = consensus.as_mut()
+        && let Some(next) = first
+            .page
+            .as_ref()
+            .map(|paging| next_page(&consensus_page, paging))
+            .transpose()?
+            .flatten()
+        && let Some(mut second) = qualified(
+            "GetConsensusForecasts",
+            client
+                .get_consensus_forecasts(&PagedRequest { paging: next })
+                .await,
+            &mut capabilities,
+        )?
+    {
+        first.items.append(&mut second.items);
+    }
+    if let Some(forecast_id) = consensus.as_ref().and_then(forecast_sample) {
+        qualified(
+            "GetForecastBy",
+            client
+                .get_forecast_by(&InstrumentIdRequest::new(forecast_id)?)
+                .await,
+            &mut capabilities,
+        )?;
+    } else {
+        unavailable(
+            "GetForecastBy",
+            "no provider-supplied consensus UID",
+            &mut capabilities,
+        );
+    }
+    let insider_request = InsiderDealsRequest::first(share_uid, 20)?;
+    let insider = qualified(
         "GetInsiderDeals",
-        client
-            .get_insider_deals(&InsiderDealsRequest {
-                instrument_id: share_uid,
-                limit: 20,
-                next_cursor: None,
-            })
-            .await,
+        client.get_insider_deals(&insider_request).await,
         &mut capabilities,
     )?;
-    qualified(
-        "News",
-        client.news(&NewsRequest::first(20)?).await,
-        &mut capabilities,
-    )?;
+    if let Some(cursor) = insider
+        .as_ref()
+        .and_then(|response| response.next_cursor.as_deref())
+        .filter(|cursor| !cursor.trim().is_empty())
+    {
+        qualified(
+            "GetInsiderDeals",
+            client
+                .get_insider_deals(&insider_request.after(cursor))
+                .await,
+            &mut capabilities,
+        )?;
+    }
+    let news_request = NewsRequest::first(20)?;
+    let news = qualified("News", client.news(&news_request).await, &mut capabilities)?;
+    if let Some(cursor) = news.as_ref().and_then(|response| {
+        response
+            .has_next
+            .unwrap_or(false)
+            .then_some(response.next_cursor.as_ref())
+            .flatten()
+            .cloned()
+    }) {
+        qualified(
+            "News",
+            client.news(&news_request.after(cursor)).await,
+            &mut capabilities,
+        )?;
+    }
     qualified(
         "GetFavorites",
         client

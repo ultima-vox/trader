@@ -263,27 +263,29 @@ impl<'de> Deserialize<'de> for ProviderValue {
     where
         D: Deserializer<'de>,
     {
-        fn convert(value: serde_json::Value) -> ProviderValue {
-            match value {
-                serde_json::Value::Null => ProviderValue::Null,
-                serde_json::Value::Bool(value) => ProviderValue::Bool(value),
-                serde_json::Value::Number(value) => {
-                    ProviderValue::Decimal(ExactDecimal(value.to_string()))
-                }
-                serde_json::Value::String(value) => ProviderValue::String(value),
-                serde_json::Value::Array(values) => {
-                    ProviderValue::Array(values.into_iter().map(convert).collect())
-                }
-                serde_json::Value::Object(values) => ProviderValue::Object(
-                    values
-                        .into_iter()
-                        .map(|(name, value)| (name, convert(value)))
-                        .collect(),
-                ),
-            }
-        }
+        serde_json::Value::deserialize(deserializer).map(Self::from_json)
+    }
+}
 
-        serde_json::Value::deserialize(deserializer).map(convert)
+impl ProviderValue {
+    fn from_json(value: serde_json::Value) -> Self {
+        match value {
+            serde_json::Value::Null => ProviderValue::Null,
+            serde_json::Value::Bool(value) => ProviderValue::Bool(value),
+            serde_json::Value::Number(value) => {
+                ProviderValue::Decimal(ExactDecimal(value.to_string()))
+            }
+            serde_json::Value::String(value) => ProviderValue::String(value),
+            serde_json::Value::Array(values) => {
+                ProviderValue::Array(values.into_iter().map(Self::from_json).collect())
+            }
+            serde_json::Value::Object(values) => ProviderValue::Object(
+                values
+                    .into_iter()
+                    .map(|(name, value)| (name, Self::from_json(value)))
+                    .collect(),
+            ),
+        }
     }
 }
 
@@ -526,7 +528,7 @@ impl fmt::Display for CriticalDataError {
 
 impl std::error::Error for CriticalDataError {}
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InstrumentIdType {
     InstrumentIdUnspecified,
@@ -540,10 +542,50 @@ pub enum InstrumentIdType {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstrumentRequest<'a> {
-    pub id_type: InstrumentIdType,
+    id_type: InstrumentIdType,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub class_code: Option<&'a str>,
-    pub id: &'a str,
+    class_code: Option<&'a str>,
+    id: &'a str,
+}
+
+impl<'a> InstrumentRequest<'a> {
+    pub fn new(
+        id_type: InstrumentIdType,
+        class_code: Option<&'a str>,
+        id: &'a str,
+    ) -> Result<Self, RequestValidationError> {
+        let request = Self {
+            id_type,
+            class_code,
+            id,
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    pub fn by_uid(id: &'a str) -> Result<Self, RequestValidationError> {
+        Self::new(InstrumentIdType::InstrumentIdTypeUid, None, id)
+    }
+
+    pub fn by_ticker(ticker: &'a str, class_code: &'a str) -> Result<Self, RequestValidationError> {
+        Self::new(
+            InstrumentIdType::InstrumentIdTypeTicker,
+            Some(class_code),
+            ticker,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), RequestValidationError> {
+        if self.id.trim().is_empty() {
+            return Err(RequestValidationError::MissingIdentifier);
+        }
+        if self.id_type == InstrumentIdType::InstrumentIdTypeTicker
+            && self.class_code.is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(RequestValidationError::TickerClassCode);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -580,11 +622,36 @@ impl Default for InstrumentsRequest {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OptionsByRequest<'a> {
-    pub basic_asset_uid: &'a str,
+    basic_asset_uid: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub basic_asset_position_uid: Option<&'a str>,
+    basic_asset_position_uid: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub basic_instrument_id: Option<&'a str>,
+    basic_instrument_id: Option<&'a str>,
+}
+
+impl<'a> OptionsByRequest<'a> {
+    pub fn new(basic_asset_uid: &'a str) -> Result<Self, RequestValidationError> {
+        if basic_asset_uid.trim().is_empty() {
+            return Err(RequestValidationError::MissingIdentifier);
+        }
+        Ok(Self {
+            basic_asset_uid,
+            basic_asset_position_uid: None,
+            basic_instrument_id: None,
+        })
+    }
+
+    #[must_use]
+    pub fn with_basic_asset_position_uid(mut self, value: Option<&'a str>) -> Self {
+        self.basic_asset_position_uid = value.filter(|value| !value.trim().is_empty());
+        self
+    }
+
+    #[must_use]
+    pub fn with_basic_instrument_id(mut self, value: Option<&'a str>) -> Self {
+        self.basic_instrument_id = value.filter(|value| !value.trim().is_empty());
+        self
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -733,6 +800,7 @@ impl TInvestRestClient {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CapabilityState {
     Supported,
+    ProviderDataUnavailable,
     UnsupportedByProvider,
     UnsupportedInEnvironment,
     PermissionDenied,
@@ -1033,6 +1101,10 @@ impl CapabilityRegistry {
         self.set(method, CapabilityState::UnsupportedInEnvironment)
     }
 
+    pub fn mark_provider_data_unavailable(&mut self, method: &str) -> bool {
+        self.set(method, CapabilityState::ProviderDataUnavailable)
+    }
+
     pub fn record_provider_http(&mut self, method: &str, status: u16) -> bool {
         let Some(state) = capability_state_for_http_status(status) else {
             return false;
@@ -1156,7 +1228,8 @@ mod tests {
     }
 
     #[test]
-    fn every_legal_instrument_id_type_has_exact_request_shape() -> Result<(), serde_json::Error> {
+    fn every_legal_instrument_id_type_has_exact_request_shape()
+    -> Result<(), Box<dyn std::error::Error>> {
         let cases = [
             (
                 InstrumentIdType::InstrumentIdUnspecified,
@@ -1184,14 +1257,14 @@ mod tests {
             ),
         ];
         for (id_type, wire) in cases {
-            assert_eq!(
-                serde_json::to_value(InstrumentRequest {
-                    id_type,
-                    class_code: None,
-                    id: "IDENTIFIER",
-                })?,
-                json!({"idType":wire,"id":"IDENTIFIER"})
-            );
+            let class_code =
+                (id_type == InstrumentIdType::InstrumentIdTypeTicker).then_some("TQBR");
+            let request = InstrumentRequest::new(id_type, class_code, "IDENTIFIER")?;
+            let mut expected = json!({"idType":wire,"id":"IDENTIFIER"});
+            if let Some(class_code) = class_code {
+                expected["classCode"] = json!(class_code);
+            }
+            assert_eq!(serde_json::to_value(request)?, expected);
         }
         Ok(())
     }
@@ -1496,6 +1569,7 @@ mod tests {
                 start_time: None,
                 end_time: None,
                 intervals: Vec::new(),
+                ..TradingDay::default()
             })
         }
 
@@ -1604,15 +1678,33 @@ mod tests {
     #[test]
     fn pagination_is_bounded_and_monotonic() -> Result<(), PaginationError> {
         let page = PageRequest::new(100, 0)?.next()?;
-        assert_eq!(
-            page,
-            PageRequest {
-                limit: 100,
-                page_number: 1
-            }
-        );
+        assert_eq!(page, PageRequest::new(100, 1)?);
         assert!(PageRequest::new(0, 0).is_err());
         assert!(PageRequest::new(1, -1).is_err());
+
+        let current = PageRequest::new(20, 0)?;
+        assert_eq!(
+            next_page(
+                &current,
+                &PageResponse {
+                    limit: None,
+                    page_number: None,
+                    total_count: Some(21),
+                },
+            )?,
+            Some(PageRequest::new(20, 1)?)
+        );
+        assert_eq!(
+            next_page(
+                &PageRequest::new(20, 1)?,
+                &PageResponse {
+                    limit: Some(20),
+                    page_number: Some(1),
+                    total_count: Some(21),
+                },
+            )?,
+            None
+        );
         Ok(())
     }
 
@@ -1634,6 +1726,21 @@ mod tests {
     }
 
     #[test]
+    fn unknown_nonnumeric_fundamental_field_does_not_poison_collection()
+    -> Result<(), serde_json::Error> {
+        let response: FundamentalsResponse = serde_json::from_str(
+            r#"{"fundamentals":[{"assetUid":"A","futureLabel":"value"},{"assetUid":"B","beta":"1.25"}]}"#,
+        )?;
+        assert_eq!(response.fundamentals.len(), 2);
+        assert_eq!(
+            response.fundamentals[0].additional_fields["futureLabel"],
+            ProviderValue::String("value".to_owned())
+        );
+        assert_eq!(response.fundamentals[1].metrics[0].value.as_str(), "1.25");
+        Ok(())
+    }
+
+    #[test]
     fn current_request_shapes_match_provider_contract() -> Result<(), Box<dyn std::error::Error>> {
         let page = PageRequest::new(50, 0)?;
         assert_eq!(
@@ -1641,8 +1748,39 @@ mod tests {
             json!({"paging":{"limit":50,"pageNumber":0}})
         );
         assert_eq!(
-            serde_json::to_value(AssetFundamentalsRequest { assets: &["ASSET"] })?,
+            serde_json::to_value(AssetFundamentalsRequest::new(&["ASSET"])?)?,
             json!({"assets":["ASSET"]})
+        );
+        assert!(AssetFundamentalsRequest::new(&[]).is_err());
+        assert!(IdRequest::new("").is_err());
+        assert!(InstrumentIdRequest::new("").is_err());
+        assert!(FindInstrumentRequest::new("").is_err());
+        assert!(OptionsByRequest::new("").is_err());
+        assert!(RiskRatesRequest::new(&[]).is_err());
+        assert!(InsiderDealsRequest::first("", 20).is_err());
+        assert!(InsiderDealsRequest::first("UID", 0).is_err());
+        assert!(InstrumentRequest::by_uid("").is_err());
+        assert!(InstrumentRequest::by_ticker("SBER", "").is_err());
+        let from = Timestamp::parse("2026-08-25T00:00:00Z")?;
+        let to = Timestamp::parse("2026-08-24T00:00:00Z")?;
+        assert_eq!(
+            PeriodRequest::new("UID", Some(&from), Some(&to))
+                .expect_err("reversed optional period must fail"),
+            RequestValidationError::InvalidRange
+        );
+        assert_eq!(
+            RequiredPeriodRequest::new("UID", &from, &to)
+                .expect_err("reversed required period must fail"),
+            RequestValidationError::InvalidRange
+        );
+        assert_eq!(
+            BondEventsRequest::new("UID", Some(&from), Some(&to), "EVENT_TYPE_UNSPECIFIED")
+                .expect_err("reversed bond-event period must fail"),
+            RequestValidationError::InvalidRange
+        );
+        assert_eq!(
+            serde_json::to_value(InstrumentRequest::by_ticker("SBER", "TQBR")?)?,
+            json!({"idType":"INSTRUMENT_ID_TYPE_TICKER","classCode":"TQBR","id":"SBER"})
         );
         assert_eq!(
             serde_json::to_value(CreateFavoriteGroupRequest {
@@ -1651,6 +1789,38 @@ mod tests {
                 note: "core",
             })?,
             json!({"groupName":"Long term","groupColor":"00AAFF","note":"core"})
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn current_reference_contract_drift_fields_are_preserved() -> Result<(), serde_json::Error> {
+        let day: TradingDay = serde_json::from_value(json!({
+            "date":"2026-08-25T00:00:00Z",
+            "openingAuctionStartTime":"2026-08-25T06:50:00Z",
+            "closingAuctionEndTime":"2026-08-25T15:50:00Z"
+        }))?;
+        assert!(day.opening_auction_start_time.is_some());
+        assert!(day.closing_auction_end_time.is_some());
+
+        let short: InstrumentShort = serde_json::from_value(json!({
+            "uid":"UID",
+            "first1minCandleDate":"2020-01-01T00:00:00Z",
+            "first1dayCandleDate":"2019-01-01T00:00:00Z"
+        }))?;
+        assert!(short.first_1min_candle_date.is_some());
+        assert!(short.first_1day_candle_date.is_some());
+
+        let favorite: FavoriteInstrument = serde_json::from_value(json!({
+            "uid":"UID",
+            "isin":"ISIN",
+            "instrumentKind":"INSTRUMENT_TYPE_SHARE"
+        }))?;
+        assert_eq!(favorite.uid.as_deref(), Some("UID"));
+        assert_eq!(favorite.isin.as_deref(), Some("ISIN"));
+        assert_eq!(
+            favorite.instrument_kind,
+            Some(ProviderInstrumentType::Share)
         );
         Ok(())
     }
@@ -1691,6 +1861,12 @@ mod tests {
         );
         assert!(!registry.record_provider_http("Options", 503));
         assert_eq!(registry.state("Options"), Some(CapabilityState::Deprecated));
+        assert!(registry.mark_provider_data_unavailable("GetForecastBy"));
+        assert_eq!(
+            registry.state("GetForecastBy"),
+            Some(CapabilityState::ProviderDataUnavailable)
+        );
+        assert!(!registry.record_provider_http("GetForecastBy", 404));
     }
 }
 
@@ -1700,23 +1876,99 @@ pub struct EmptyRequest {}
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IdRequest<'a> {
-    pub id: &'a str,
+    id: &'a str,
+}
+
+impl<'a> IdRequest<'a> {
+    pub fn new(id: &'a str) -> Result<Self, RequestValidationError> {
+        if id.trim().is_empty() {
+            return Err(RequestValidationError::MissingIdentifier);
+        }
+        Ok(Self { id })
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstrumentIdRequest<'a> {
-    pub instrument_id: &'a str,
+    instrument_id: &'a str,
+}
+
+impl<'a> InstrumentIdRequest<'a> {
+    pub fn new(instrument_id: &'a str) -> Result<Self, RequestValidationError> {
+        if instrument_id.trim().is_empty() {
+            return Err(RequestValidationError::MissingIdentifier);
+        }
+        Ok(Self { instrument_id })
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PeriodRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub figi: Option<&'a str>,
-    pub instrument_id: &'a str,
-    pub from: &'a Timestamp,
-    pub to: &'a Timestamp,
+    figi: Option<&'a str>,
+    instrument_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from: Option<&'a Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    to: Option<&'a Timestamp>,
+}
+
+impl<'a> PeriodRequest<'a> {
+    pub fn new(
+        instrument_id: &'a str,
+        from: Option<&'a Timestamp>,
+        to: Option<&'a Timestamp>,
+    ) -> Result<Self, RequestValidationError> {
+        validate_period(instrument_id, from, to)?;
+        Ok(Self {
+            figi: None,
+            instrument_id,
+            from,
+            to,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequiredPeriodRequest<'a> {
+    instrument_id: &'a str,
+    from: &'a Timestamp,
+    to: &'a Timestamp,
+}
+
+impl<'a> RequiredPeriodRequest<'a> {
+    pub fn new(
+        instrument_id: &'a str,
+        from: &'a Timestamp,
+        to: &'a Timestamp,
+    ) -> Result<Self, RequestValidationError> {
+        validate_period(instrument_id, Some(from), Some(to))?;
+        Ok(Self {
+            instrument_id,
+            from,
+            to,
+        })
+    }
+}
+
+fn validate_period(
+    instrument_id: &str,
+    from: Option<&Timestamp>,
+    to: Option<&Timestamp>,
+) -> Result<(), RequestValidationError> {
+    if instrument_id.trim().is_empty() {
+        return Err(RequestValidationError::MissingIdentifier);
+    }
+    if from
+        .zip(to)
+        .is_some_and(|(from, to)| from.datetime() > to.datetime())
+    {
+        return Err(RequestValidationError::InvalidRange);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -1755,24 +2007,43 @@ impl<'de> Deserialize<'de> for ProtoInt64 {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BondEventsRequest<'a> {
-    pub instrument_id: &'a str,
-    pub from: &'a Timestamp,
-    pub to: &'a Timestamp,
+    instrument_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from: Option<&'a Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    to: Option<&'a Timestamp>,
     #[serde(rename = "type")]
-    pub event_type: &'a str,
+    event_type: &'a str,
+}
+
+impl<'a> BondEventsRequest<'a> {
+    pub fn new(
+        instrument_id: &'a str,
+        from: Option<&'a Timestamp>,
+        to: Option<&'a Timestamp>,
+        event_type: &'a str,
+    ) -> Result<Self, RequestValidationError> {
+        validate_period(instrument_id, from, to)?;
+        Ok(Self {
+            instrument_id,
+            from,
+            to,
+            event_type,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageRequest {
-    pub limit: i32,
-    pub page_number: i32,
+    limit: i32,
+    page_number: i32,
 }
 
 impl PageRequest {
     pub fn new(limit: i32, page_number: i32) -> Result<Self, PaginationError> {
         if limit <= 0 || page_number < 0 {
-            return Err(PaginationError);
+            return Err(PaginationError::InvalidRequest);
         }
         Ok(Self { limit, page_number })
     }
@@ -1780,17 +2051,29 @@ impl PageRequest {
     pub fn next(&self) -> Result<Self, PaginationError> {
         Self::new(
             self.limit,
-            self.page_number.checked_add(1).ok_or(PaginationError)?,
+            self.page_number
+                .checked_add(1)
+                .ok_or(PaginationError::InvalidRequest)?,
         )
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PaginationError;
+pub enum PaginationError {
+    InvalidRequest,
+    InvalidProviderResponse,
+}
 
 impl fmt::Display for PaginationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("page limit must be positive and page number non-negative")
+        match self {
+            Self::InvalidRequest => {
+                formatter.write_str("page limit must be positive and page number non-negative")
+            }
+            Self::InvalidProviderResponse => {
+                formatter.write_str("provider returned invalid pagination metadata")
+            }
+        }
     }
 }
 
@@ -1802,6 +2085,39 @@ pub struct PageResponse {
     pub limit: Option<i32>,
     pub page_number: Option<i32>,
     pub total_count: Option<i32>,
+}
+
+pub fn next_page(
+    current: &PageRequest,
+    response: &PageResponse,
+) -> Result<Option<PageRequest>, PaginationError> {
+    let Some(total_count) = response.total_count else {
+        return Ok(None);
+    };
+    let limit = response.limit.unwrap_or(current.limit);
+    let page_number = response.page_number.unwrap_or(current.page_number);
+    if limit <= 0
+        || page_number < 0
+        || total_count < 0
+        || limit != current.limit
+        || page_number != current.page_number
+    {
+        return Err(PaginationError::InvalidProviderResponse);
+    }
+    let consumed = page_number
+        .checked_add(1)
+        .and_then(|pages| pages.checked_mul(limit))
+        .ok_or(PaginationError::InvalidProviderResponse)?;
+    if consumed >= total_count {
+        return Ok(None);
+    }
+    PageRequest::new(
+        limit,
+        page_number
+            .checked_add(1)
+            .ok_or(PaginationError::InvalidProviderResponse)?,
+    )
+    .map(Some)
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -1993,11 +2309,21 @@ pub struct AssetInstrument {
     pub ticker: Option<String>,
     pub class_code: Option<String>,
     #[serde(default)]
+    pub links: Vec<InstrumentLink>,
+    #[serde(default)]
     pub position_uid: Option<String>,
     #[serde(default)]
     pub instrument_kind: Option<ProviderInstrumentType>,
     #[serde(flatten)]
     pub additional_fields: BTreeMap<String, ProviderValue>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct InstrumentLink {
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    pub instrument_uid: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -2081,6 +2407,8 @@ pub struct InstrumentShort {
     pub instrument_kind: Option<ProviderInstrumentType>,
     pub api_trade_available_flag: Option<bool>,
     pub for_iis_flag: Option<bool>,
+    pub first_1min_candle_date: Option<Timestamp>,
+    pub first_1day_candle_date: Option<Timestamp>,
     pub for_qual_investor_flag: Option<bool>,
     pub weekend_flag: Option<bool>,
     pub blocked_tca_flag: Option<bool>,
@@ -2144,6 +2472,7 @@ pub struct Fundamental {
     pub fiscal_period_start_date: Option<Timestamp>,
     pub fiscal_period_end_date: Option<Timestamp>,
     pub metrics: Vec<FundamentalMetric>,
+    pub additional_fields: BTreeMap<String, ProviderValue>,
 }
 
 impl<'de> Deserialize<'de> for Fundamental {
@@ -2158,14 +2487,16 @@ impl<'de> Deserialize<'de> for Fundamental {
         let ex_dividend_date = take_optional(&mut fields, "exDividendDate")?;
         let fiscal_period_start_date = take_optional(&mut fields, "fiscalPeriodStartDate")?;
         let fiscal_period_end_date = take_optional(&mut fields, "fiscalPeriodEndDate")?;
-        let metrics = fields
-            .into_iter()
-            .map(|(name, value)| {
-                serde_json::from_value(value)
-                    .map(|value| FundamentalMetric { name, value })
-                    .map_err(de::Error::custom)
-            })
-            .collect::<Result<_, _>>()?;
+        let mut metrics = Vec::new();
+        let mut additional_fields = BTreeMap::new();
+        for (name, value) in fields {
+            match serde_json::from_value(value.clone()) {
+                Ok(value) => metrics.push(FundamentalMetric { name, value }),
+                Err(_) => {
+                    additional_fields.insert(name, ProviderValue::from_json(value));
+                }
+            }
+        }
         Ok(Self {
             asset_uid,
             currency,
@@ -2174,6 +2505,7 @@ impl<'de> Deserialize<'de> for Fundamental {
             fiscal_period_start_date,
             fiscal_period_end_date,
             metrics,
+            additional_fields,
         })
     }
 }
@@ -2290,7 +2622,16 @@ pub struct RiskRatesResponse {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RiskRatesRequest<'a> {
-    pub instrument_id: &'a [&'a str],
+    instrument_id: &'a [&'a str],
+}
+
+impl<'a> RiskRatesRequest<'a> {
+    pub fn new(instrument_id: &'a [&'a str]) -> Result<Self, RequestValidationError> {
+        if instrument_id.is_empty() || instrument_id.iter().any(|id| id.trim().is_empty()) {
+            return Err(RequestValidationError::MissingIdentifier);
+        }
+        Ok(Self { instrument_id })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -2308,7 +2649,7 @@ pub struct TimeInterval {
     pub end_ts: Option<Timestamp>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TradingDay {
     pub date: Option<Timestamp>,
@@ -2317,6 +2658,17 @@ pub struct TradingDay {
     pub start_time: Option<Timestamp>,
     #[serde(default)]
     pub end_time: Option<Timestamp>,
+    pub opening_auction_start_time: Option<Timestamp>,
+    pub closing_auction_end_time: Option<Timestamp>,
+    pub evening_opening_auction_start_time: Option<Timestamp>,
+    pub evening_start_time: Option<Timestamp>,
+    pub evening_end_time: Option<Timestamp>,
+    pub clearing_start_time: Option<Timestamp>,
+    pub clearing_end_time: Option<Timestamp>,
+    pub premarket_start_time: Option<Timestamp>,
+    pub premarket_end_time: Option<Timestamp>,
+    pub closing_auction_start_time: Option<Timestamp>,
+    pub opening_auction_end_time: Option<Timestamp>,
     #[serde(default)]
     pub intervals: Vec<TradingInterval>,
 }
@@ -2568,25 +2920,50 @@ enum ChunkExecutionError<E> {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FindInstrumentRequest<'a> {
-    pub query: &'a str,
+    query: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub instrument_kind: Option<&'a ProviderInstrumentType>,
+    instrument_kind: Option<&'a ProviderInstrumentType>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_trade_available_flag: Option<bool>,
+    api_trade_available_flag: Option<bool>,
+}
+
+impl<'a> FindInstrumentRequest<'a> {
+    pub fn new(query: &'a str) -> Result<Self, RequestValidationError> {
+        if query.trim().is_empty() {
+            return Err(RequestValidationError::MissingQuery);
+        }
+        Ok(Self {
+            query,
+            instrument_kind: None,
+            api_trade_available_flag: None,
+        })
+    }
+
+    #[must_use]
+    pub fn with_instrument_kind(mut self, instrument_kind: &'a ProviderInstrumentType) -> Self {
+        self.instrument_kind = Some(instrument_kind);
+        self
+    }
+
+    #[must_use]
+    pub fn with_api_trade_available(mut self, value: Option<bool>) -> Self {
+        self.api_trade_available_flag = value;
+        self
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewsRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<ProtoInt64>,
-    pub limit: i32,
+    cursor: Option<ProtoInt64>,
+    limit: i32,
 }
 
 impl NewsRequest {
     pub fn first(limit: i32) -> Result<Self, PaginationError> {
         if limit <= 0 {
-            return Err(PaginationError);
+            return Err(PaginationError::InvalidRequest);
         }
         Ok(Self {
             cursor: None,
@@ -2625,16 +3002,66 @@ pub struct PagedRequest {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AssetFundamentalsRequest<'a> {
-    pub assets: &'a [&'a str],
+    assets: &'a [&'a str],
+}
+
+impl<'a> AssetFundamentalsRequest<'a> {
+    pub fn new(assets: &'a [&'a str]) -> Result<Self, RequestValidationError> {
+        if assets.is_empty() || assets.len() > 100 || assets.iter().any(|id| id.trim().is_empty()) {
+            return Err(RequestValidationError::AssetCount);
+        }
+        Ok(Self { assets })
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InsiderDealsRequest<'a> {
-    pub instrument_id: &'a str,
-    pub limit: i32,
+    instrument_id: &'a str,
+    limit: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<&'a str>,
+    next_cursor: Option<&'a str>,
+}
+
+impl<'a> InsiderDealsRequest<'a> {
+    pub fn first(instrument_id: &'a str, limit: i32) -> Result<Self, RequestValidationError> {
+        if instrument_id.trim().is_empty() {
+            return Err(RequestValidationError::MissingIdentifier);
+        }
+        if limit <= 0 {
+            return Err(RequestValidationError::InvalidLimit);
+        }
+        Ok(Self {
+            instrument_id,
+            limit,
+            next_cursor: None,
+        })
+    }
+
+    #[must_use]
+    pub fn after(&self, next_cursor: &'a str) -> Self {
+        Self {
+            instrument_id: self.instrument_id,
+            limit: self.limit,
+            next_cursor: Some(next_cursor),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum RequestValidationError {
+    #[error("required identifier is empty")]
+    MissingIdentifier,
+    #[error("required search query is empty")]
+    MissingQuery,
+    #[error("ticker lookup requires non-empty class_code")]
+    TickerClassCode,
+    #[error("limit must be positive")]
+    InvalidLimit,
+    #[error("request period starts after it ends")]
+    InvalidRange,
+    #[error("fundamentals request requires 1..=100 non-empty asset identifiers")]
+    AssetCount,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -2712,9 +3139,13 @@ pub struct FavoriteInstrument {
     pub figi: Option<String>,
     pub ticker: Option<String>,
     pub class_code: Option<String>,
-    pub instrument_uid: Option<String>,
-    #[serde(default)]
-    pub position_uid: Option<String>,
+    pub isin: Option<String>,
+    pub instrument_type: Option<String>,
+    pub name: Option<String>,
+    pub uid: Option<String>,
+    pub otc_flag: Option<bool>,
+    pub api_trade_available_flag: Option<bool>,
+    pub instrument_kind: Option<ProviderInstrumentType>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -2828,7 +3259,7 @@ read_methods!(
     (get_countries, "GetCountries", EmptyRequest, CountriesResponse),
     (get_dividends, "GetDividends", PeriodRequest<'_>, DividendsResponse),
     (get_bond_coupons, "GetBondCoupons", PeriodRequest<'_>, BondCouponsResponse),
-    (get_accrued_interests, "GetAccruedInterests", PeriodRequest<'_>, AccruedInterestsResponse),
+    (get_accrued_interests, "GetAccruedInterests", RequiredPeriodRequest<'_>, AccruedInterestsResponse),
     (get_bond_events, "GetBondEvents", BondEventsRequest<'_>, BondEventsResponse),
     (get_futures_margin, "GetFuturesMargin", InstrumentIdRequest<'_>, FuturesMarginResponse),
     (get_risk_rates, "GetRiskRates", RiskRatesRequest<'_>, RiskRatesResponse),
