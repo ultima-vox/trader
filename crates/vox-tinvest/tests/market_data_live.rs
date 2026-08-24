@@ -41,7 +41,9 @@ async fn complete_market_data_surface_qualifies_over_generated_grpc() -> Result<
             interval: v1::CandleInterval::CandleInterval1Min as i32,
             instrument_id: Some(instrument_uid.clone()),
             candle_source_type: Some(v1::get_candles_request::CandleSource::Exchange as i32),
-            limit: Some(60),
+            // Keep explicit exchange-source qualification. T-Invest error 30220 forbids sending
+            // candle_source_type together with limit; the one-hour range bounds this response.
+            limit: None,
             ..Default::default()
         })
         .await?

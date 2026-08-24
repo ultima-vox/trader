@@ -234,6 +234,33 @@ pub enum MarketDataError {
     InvalidAcknowledgementIdentity,
 }
 
+/// Documented provider request failures rejected before consuming broker quota.
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum MarketDataRequestError {
+    #[error("provider error 30220: candle_source_type cannot be specified together with limit")]
+    CandleSourceWithLimit,
+}
+
+impl MarketDataRequestError {
+    #[must_use]
+    pub const fn provider_code(self) -> i32 {
+        match self {
+            Self::CandleSourceWithLimit => 30_220,
+        }
+    }
+}
+
+/// Validates constraints which exist in the provider error contract but cannot be expressed by
+/// proto3 field types. Presence matters: even `Some(0)` is a supplied candle source.
+pub fn validate_get_candles_request(
+    request: &v1::GetCandlesRequest,
+) -> Result<(), MarketDataRequestError> {
+    if request.limit.is_some() && request.candle_source_type.is_some() {
+        return Err(MarketDataRequestError::CandleSourceWithLimit);
+    }
+    Ok(())
+}
+
 fn quotation(
     value: Option<v1::Quotation>,
     field: &'static str,

@@ -10,15 +10,15 @@
     "rest_role": "compatibility-cross-check-only"
   },
   "unary_methods": [
-    {"method":"GetCandles","request":"GetCandlesRequest","response":"GetCandlesResponse","retry":"safe-read","canonical":"CanonicalCandle","constraints":"interval-span-limit; deterministic chunk+dedup"},
-    {"method":"GetLastPrices","request":"GetLastPricesRequest","response":"GetLastPricesResponse","retry":"safe-read","canonical":"last-price fact; never quote"},
-    {"method":"GetOrderBook","request":"GetOrderBookRequest","response":"GetOrderBookResponse","retry":"safe-read","canonical":"CanonicalOrderBook"},
-    {"method":"GetTradingStatus","request":"GetTradingStatusRequest","response":"GetTradingStatusResponse","retry":"safe-read","canonical":"provider status + flags"},
-    {"method":"GetTradingStatuses","request":"GetTradingStatusesRequest","response":"GetTradingStatusesResponse","retry":"safe-read","canonical":"provider status + flags"},
-    {"method":"GetLastTrades","request":"GetLastTradesRequest","response":"GetLastTradesResponse","retry":"safe-read","canonical":"CanonicalTrade","constraints":"provider guarantees last hour"},
-    {"method":"GetClosePrices","request":"GetClosePricesRequest","response":"GetClosePricesResponse","retry":"safe-read","canonical":"exact close facts"},
-    {"method":"GetTechAnalysis","request":"GetTechAnalysisRequest","response":"GetTechAnalysisResponse","retry":"safe-read","canonical":"exact optional indicator values"},
-    {"method":"GetMarketValues","request":"GetMarketValuesRequest","response":"GetMarketValuesResponse","retry":"safe-read","canonical":"typed provider values"}
+    {"method":"GetCandles","request":"GetCandlesRequest","response":"GetCandlesResponse","retry":"safe-read","canonical":"CanonicalCandle","constraints":"required from/to/interval; interval span+limit; range exceeds timeframe; maximum one calendar year; candle_source_type mutually exclusive with limit (30220, local typed rejection); deterministic chunk+dedup"},
+    {"method":"GetLastPrices","request":"GetLastPricesRequest","response":"GetLastPricesResponse","retry":"safe-read","canonical":"last-price fact; never quote","constraints":"empty identifiers means all available; generated price-type/status enums; maximum 3000 instruments (30218)"},
+    {"method":"GetOrderBook","request":"GetOrderBookRequest","response":"GetOrderBookResponse","retry":"safe-read","canonical":"CanonicalOrderBook","constraints":"required instrument identifier; depth one of 1,10,20,30,40,50 (30031/30032)"},
+    {"method":"GetTradingStatus","request":"GetTradingStatusRequest","response":"GetTradingStatusResponse","retry":"safe-read","canonical":"provider status + flags","constraints":"required instrument identifier"},
+    {"method":"GetTradingStatuses","request":"GetTradingStatusesRequest","response":"GetTradingStatusesResponse","retry":"safe-read","canonical":"provider status + flags","constraints":"identifier array; maximum 3000 instruments (30218)"},
+    {"method":"GetLastTrades","request":"GetLastTradesRequest","response":"GetLastTradesResponse","retry":"safe-read","canonical":"CanonicalTrade","constraints":"required instrument/from/to; increasing range; generated trade-source enum; provider guarantees last hour"},
+    {"method":"GetClosePrices","request":"GetClosePricesRequest","response":"GetClosePricesResponse","retry":"safe-read","canonical":"exact close facts","constraints":"empty instruments means all available; non-empty supplied identifiers; generated optional status enum"},
+    {"method":"GetTechAnalysis","request":"GetTechAnalysisRequest","response":"GetTechAnalysisResponse","retry":"safe-read","canonical":"exact optional indicator values","constraints":"required indicator/uid/from/to/interval/price type; indicator-specific length/deviation/smoothing (30213-30217)"},
+    {"method":"GetMarketValues","request":"GetMarketValuesRequest","response":"GetMarketValuesResponse","retry":"safe-read","canonical":"typed provider values","constraints":"generated identifier/value arrays and enums; open-interest futures-only; theoretical-price options-only"}
   ],
   "stream_methods": [
     {"method":"MarketDataStream","shape":"bidirectional","production":true,"recovery":"adapter desired-state resubscribe"},

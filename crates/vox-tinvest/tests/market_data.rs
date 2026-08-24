@@ -3,9 +3,9 @@ use vox_tinvest::generated::v1;
 use vox_tinvest::market_data::{
     CanonicalCandle, CanonicalClosePrice, CanonicalMarketValue, CanonicalOrderBook,
     CanonicalTechAnalysisValue, CanonicalTrade, ConfirmationState, MarketDataError,
-    MarketSubscription, MarketSubscriptionRegistry, SubscriptionKind, candle_request_constraint,
-    derived_trade_compatibility_id, lots_to_units, merge_historic_candles, plan_candle_history,
-    validate_ping_delay,
+    MarketDataRequestError, MarketSubscription, MarketSubscriptionRegistry, SubscriptionKind,
+    candle_request_constraint, derived_trade_compatibility_id, lots_to_units,
+    merge_historic_candles, plan_candle_history, validate_get_candles_request, validate_ping_delay,
 };
 
 fn quotation(units: i64, nano: i32) -> v1::Quotation {
@@ -141,6 +141,24 @@ fn history_is_chunked_without_silent_truncation() {
         candle_request_constraint(15).expect("10 sec").max_limit,
         1250
     );
+}
+
+#[test]
+fn get_candles_rejects_provider_error_30220_before_dispatch() {
+    let mut request = v1::GetCandlesRequest {
+        candle_source_type: Some(v1::get_candles_request::CandleSource::Exchange as i32),
+        limit: Some(60),
+        ..Default::default()
+    };
+    let error = validate_get_candles_request(&request).expect_err("30220 combination must fail");
+    assert_eq!(error, MarketDataRequestError::CandleSourceWithLimit);
+    assert_eq!(error.provider_code(), 30_220);
+
+    request.limit = None;
+    assert_eq!(validate_get_candles_request(&request), Ok(()));
+    request.candle_source_type = None;
+    request.limit = Some(60);
+    assert_eq!(validate_get_candles_request(&request), Ok(()));
 }
 
 #[test]

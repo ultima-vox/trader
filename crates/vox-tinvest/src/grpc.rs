@@ -15,6 +15,7 @@ use uuid::Uuid;
 use vox_domain::{Environment, MutationAuthorization};
 
 use crate::generated::v1;
+use crate::market_data::{MarketDataRequestError, validate_get_candles_request};
 use crate::{
     NoopRetryObserver, RestOperation, RetryEvent, RetryObserver, RetryPolicy, RetryReason,
     SecretToken,
@@ -499,12 +500,6 @@ macro_rules! market_safe_reads {
 
 market_safe_reads!(
     (
-        get_candles,
-        "GetCandles",
-        v1::GetCandlesRequest,
-        v1::GetCandlesResponse
-    ),
-    (
         get_last_prices,
         "GetLastPrices",
         v1::GetLastPricesRequest,
@@ -553,6 +548,29 @@ market_safe_reads!(
         v1::GetMarketValuesResponse
     ),
 );
+
+impl TInvestGrpcClient {
+    pub async fn get_candles(
+        &self,
+        request: v1::GetCandlesRequest,
+    ) -> Result<GrpcResponse<v1::GetCandlesResponse>, GrpcError> {
+        if let Err(error) = validate_get_candles_request(&request) {
+            return Err(GrpcError {
+                metadata: GrpcRequestMetadata {
+                    request_id: Uuid::new_v4(),
+                    method: "GetCandles",
+                    attempt: 1,
+                    mutation: false,
+                },
+                kind: GrpcErrorKind::MarketDataRequest(error),
+            });
+        }
+        self.safe_market_read("GetCandles", request, |client, request| {
+            Box::pin(client.get_candles(request))
+        })
+        .await
+    }
+}
 
 fn retryable_status(code: Code) -> bool {
     matches!(
@@ -928,6 +946,8 @@ pub enum GrpcErrorKind {
     InvalidRequestMetadata,
     #[error("market-data stream outbound capacity must be positive")]
     InvalidStreamCapacity,
+    #[error("invalid market-data request: {0}")]
+    MarketDataRequest(MarketDataRequestError),
     #[error(
         "mutation authorization environment {authorized:?} does not match gRPC client environment {configured:?}"
     )]
@@ -1012,5 +1032,24 @@ mod tests {
             error.kind,
             GrpcErrorKind::MutationEnvironmentMismatch { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn candle_source_with_limit_fails_before_dispatch() {
+        let client = TInvestGrpcClient::new(token(), GrpcConfig::production())
+            .unwrap_or_else(|error| panic!("client failed: {error}"));
+        let error = client
+            .get_candles(v1::GetCandlesRequest {
+                candle_source_type: Some(v1::get_candles_request::CandleSource::Exchange as i32),
+                limit: Some(60),
+                ..Default::default()
+            })
+            .await
+            .expect_err("provider error 30220 must fail locally");
+        assert_eq!(error.metadata.method, "GetCandles");
+        assert_eq!(
+            error.kind,
+            GrpcErrorKind::MarketDataRequest(MarketDataRequestError::CandleSourceWithLimit)
+        );
     }
 }
