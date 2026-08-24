@@ -11,38 +11,55 @@ This document defines the provider surface Trader 2.0 intends to support from T-
 - `deprecated-do-not-use` — provider has a replacement; production code must use the replacement.
 - `environment-limited` — supported where T-Invest exposes it, with explicit sandbox/live capability differences.
 
-## Instruments and reference data
+## Instruments and reference data — method inventory
 
-| Capability | T-Invest surface | Trader 2.0 status |
-| --- | --- | --- |
-| Shares | `Shares`, `ShareBy` | required |
-| Bonds | `Bonds`, `BondBy` | required |
-| ETFs/funds | `Etfs`, `EtfBy` | required |
-| Currencies | `Currencies`, `CurrencyBy` | required |
-| Futures | `Futures`, `FutureBy`, `GetFuturesMargin` | required |
-| Options | `OptionsBy`, `OptionBy` | required |
-| Legacy options list | `Options` | deprecated-do-not-use |
-| Structured notes | `StructuredNotes`, `StructuredNoteBy` | required |
-| Digital financial assets | `Dfas`, `DfaBy` | required |
-| Indicatives | `Indicatives` | required |
-| Generic instrument lookup | `GetInstrumentBy`, `FindInstrument` | required |
-| Assets | `GetAssets`, `GetAssetBy` | required |
-| Brands | `GetBrands`, `GetBrandBy` | required |
-| Countries | `GetCountries` | required |
-| Trading schedules | `TradingSchedules` | required |
-| Dividends | `GetDividends` | required |
-| Bond coupons | `GetBondCoupons` | required |
-| Bond accrued interest | `GetAccruedInterests` | required |
-| Bond events | `GetBondEvents` | required |
-| Risk rates | `GetRiskRates` | required |
-| Fundamentals | `GetAssetFundamentals` | required |
-| Issuer report calendar | `GetAssetReports` | required |
-| Analyst consensus | `GetConsensusForecasts` | required |
-| Forecast detail | `GetForecastBy` | required |
-| Insider deals | `GetInsiderDeals` | required |
-| News | `News` | required |
-| Favorites | `GetFavorites`, `EditFavorites` | required for product UX |
-| Favorite groups | create/get/delete group methods | required for product UX |
+Official `InstrumentsService` contract checked 2026-08-24. `reference` below means `vox_tinvest::reference`. Unit evidence covers typed decoding, identity, exact decimals, enum evolution, pagination, capabilities and mutation classification. Live qualification is read-only and opt-in; favorites mutations are never part of live qualification.
+
+| Service | Method | Class | Requirements | Rust module/state | Routing | Exact Nautilus target | Tests/live evidence | Deprecated replacement | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| InstrumentsService | `TradingSchedules` | read | token | `reference` / supported | `TRADER_ONLY` | — | unit; read-only live eligible | — | UTC intervals retained |
+| InstrumentsService | `BondBy` | read | token | `reference` / supported | `TRADER_AND_NAUTILUS` | `nautilus_model::instruments::Bond` | unit; read-only live eligible | — | mapping only when exact |
+| InstrumentsService | `Bonds` | read | token | `reference` / supported | `TRADER_AND_NAUTILUS` | `nautilus_model::instruments::Bond` | every-family unit; read-only live eligible | — | provider catalogue retained |
+| InstrumentsService | `GetBondCoupons` | read | token | `reference` / supported | `TRADER_ONLY` | — | DTO unit; read-only live eligible | — | exact money/quotation |
+| InstrumentsService | `GetBondEvents` | read | token; rollout may vary | `reference` / supported | `TRADER_ONLY` | — | DTO unit; read-only live eligible | — | provider event enum retained |
+| InstrumentsService | `CurrencyBy` | read | token | `reference` / supported | `TRADER_AND_NAUTILUS` | `nautilus_model::instruments::CurrencyPair` | unit; read-only live eligible | — | mapping only when pair semantics faithful |
+| InstrumentsService | `Currencies` | read | token | `reference` / supported | `TRADER_AND_NAUTILUS` | `nautilus_model::instruments::CurrencyPair` | every-family unit; read-only live eligible | — | provider catalogue retained |
+| InstrumentsService | `EtfBy` | read | token | `reference` / supported | `TRADER_AND_NAUTILUS` | `nautilus_model::instruments::Equity` | unit; read-only live eligible | — | fund identity retained before mapping |
+| InstrumentsService | `Etfs` | read | token | `reference` / supported | `TRADER_AND_NAUTILUS` | `nautilus_model::instruments::Equity` | every-family unit; read-only live eligible | — | fund identity retained before mapping |
+| InstrumentsService | `FutureBy` | read | token | `reference` / supported | `TRADER_AND_NAUTILUS` | `nautilus_model::instruments::FuturesContract` | exact economics unit; read-only live eligible | — | margin cross-check required before mapping |
+| InstrumentsService | `Futures` | read | token | `reference` / supported | `TRADER_AND_NAUTILUS` | `nautilus_model::instruments::FuturesContract` | every-family/exact economics unit; Q1 live evidence | — | no approximated tick economics |
+| InstrumentsService | `OptionBy` | read | token | `reference` / supported | `TRADER_AND_NAUTILUS` | `nautilus_model::instruments::OptionsContract` | option fail-closed unit; read-only live eligible | — | strike/expiry/type required before mapping |
+| InstrumentsService | `Options` | read | do not call | `reference` / deprecated | `TRADER_ONLY` | — | registry unit | `OptionsBy` | no production method exposed |
+| InstrumentsService | `OptionsBy` | read | token; basic asset filter | `reference` / supported | `TRADER_AND_NAUTILUS` | `nautilus_model::instruments::OptionsContract` | every-family/option unit; read-only live eligible | — | current list method |
+| InstrumentsService | `ShareBy` | read | token | `reference` / supported | `TRADER_AND_NAUTILUS` | `nautilus_model::instruments::Equity` | identity unit; read-only live eligible | — | exact lot/tick required before mapping |
+| InstrumentsService | `Shares` | read | token | `reference` / supported | `TRADER_AND_NAUTILUS` | `nautilus_model::instruments::Equity` | every-family unit; Q1 live evidence | — | provider catalogue retained |
+| InstrumentsService | `Indicatives` | read | token | `reference` / supported | `TRADER_ONLY` | — | family/index-weight unit; read-only live eligible | — | index/commodity catalogue retained |
+| InstrumentsService | `DfaBy` | read | token; rollout may vary | `reference` / supported | `TRADER_ONLY` | — | family DTO unit; read-only live eligible | — | no forced Nautilus type |
+| InstrumentsService | `Dfas` | read | token; rollout may vary | `reference` / supported | `TRADER_ONLY` | — | every-family DTO unit; read-only live eligible | — | exact nominal/yield retained |
+| InstrumentsService | `GetAccruedInterests` | read | token | `reference` / supported | `TRADER_ONLY` | — | DTO unit; read-only live eligible | — | exact quotation |
+| InstrumentsService | `GetFuturesMargin` | read | token | `reference` / supported | `TRADER_ONLY` | — | exact margin/economics unit; Q1 live evidence | — | catalogue tick must match margin tick |
+| InstrumentsService | `GetInstrumentBy` | read | token | `reference` / supported | `TRADER_ONLY` | — | by-ID/identity unit; read-only live eligible | — | UID/FIGI/ticker/class/position distinct |
+| InstrumentsService | `GetDividends` | read | token | `reference` / supported | `TRADER_ONLY` | — | DTO unit; read-only live eligible | — | exact money/quotation |
+| InstrumentsService | `GetAssetBy` | read | token | `reference` / supported | `TRADER_ONLY` | — | DTO unit; read-only live eligible | — | derivatives excluded by provider |
+| InstrumentsService | `GetAssets` | read | token | `reference` / supported | `TRADER_ONLY` | — | DTO unit; read-only live eligible | — | optional type/status filters |
+| InstrumentsService | `GetFavorites` | read | token; account | `reference` / supported | `TRADER_ONLY` | — | identity DTO unit; read-only live eligible | — | optional group ID |
+| InstrumentsService | `EditFavorites` | mutation | account; explicit mutation authorization | `reference` / supported | `TRADER_ONLY` | — | single-attempt/environment unit; no live run | — | never retried |
+| InstrumentsService | `CreateFavoriteGroup` | mutation | account; explicit mutation authorization | `reference` / supported | `TRADER_ONLY` | — | single-attempt/environment unit; no live run | — | never retried |
+| InstrumentsService | `DeleteFavoriteGroup` | mutation | account; explicit mutation authorization | `reference` / supported | `TRADER_ONLY` | — | single-attempt/environment unit; no live run | — | never retried |
+| InstrumentsService | `GetFavoriteGroups` | read | token; account | `reference` / supported | `TRADER_ONLY` | — | DTO unit; read-only live eligible | — | filters preserve IDs |
+| InstrumentsService | `GetCountries` | read | token | `reference` / supported | `TRADER_ONLY` | — | DTO unit; read-only live eligible | — | provider spelling `alfa_*` retained |
+| InstrumentsService | `FindInstrument` | read | token | `reference` / supported | `TRADER_ONLY` | — | search/identity unit; read-only live eligible | — | optional kind/tradable filters |
+| InstrumentsService | `GetBrands` | read | token | `reference` / supported | `TRADER_ONLY` | — | pagination unit; read-only live eligible | — | page traversal adapter-owned |
+| InstrumentsService | `GetBrandBy` | read | token | `reference` / supported | `TRADER_ONLY` | — | DTO unit; read-only live eligible | — | brand UID lookup |
+| InstrumentsService | `GetAssetFundamentals` | read | token; rollout/tariff may vary | `reference` / supported | `TRADER_ONLY` | — | exact-decimal/capability unit; read-only live eligible | — | provider double fields retained lexically; no float API |
+| InstrumentsService | `GetAssetReports` | read | token; rollout/tariff may vary | `reference` / supported | `TRADER_ONLY` | — | period/DTO unit; read-only live eligible | — | issuer calendar |
+| InstrumentsService | `GetConsensusForecasts` | read | token; rollout/tariff may vary | `reference` / supported | `TRADER_ONLY` | — | pagination/enum unit; read-only live eligible | — | page traversal adapter-owned |
+| InstrumentsService | `GetForecastBy` | read | token; rollout/tariff may vary | `reference` / supported | `TRADER_ONLY` | — | DTO/enum unit; read-only live eligible | — | recommendation unknowns retained |
+| InstrumentsService | `GetInsiderDeals` | read | token; rollout/tariff may vary | `reference` / supported | `TRADER_ONLY` | — | cursor/exact-decimal unit; read-only live eligible | — | string cursor adapter-owned |
+| InstrumentsService | `StructuredNoteBy` | read | token; rollout may vary | `reference` / supported | `TRADER_ONLY` | — | family DTO unit; read-only live eligible | — | no forced Nautilus type |
+| InstrumentsService | `StructuredNotes` | read | token; rollout may vary | `reference` / supported | `TRADER_ONLY` | — | every-family DTO unit; read-only live eligible | — | exact provider catalogue retained |
+| InstrumentsService | `News` | read | token; rollout/tariff may vary | `reference` / supported | `TRADER_ONLY` | — | cursor unit; read-only live eligible | — | int64 cursor; safe-read retries |
+| InstrumentsService | `GetRiskRates` | read | token; account risk profile | `reference` / supported | `TRADER_ONLY` | — | exact rate/capability unit; read-only live eligible | — | per-instrument errors preserved |
 
 ## Market data
 

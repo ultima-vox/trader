@@ -21,7 +21,7 @@ futures-util = "0.3"
 nautilus-model = { version = "=0.62.0", default-features = false, features = ["high-precision"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["arbitrary_precision"] }
 serde_path_to_error = "0.1"
 thiserror = "2.0"
 time = { version = "0.3", features = ["parsing"] }
