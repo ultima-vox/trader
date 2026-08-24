@@ -8,4 +8,6 @@ Provider catalogue remains complete even where Nautilus has no faithful instrume
 
 Missing trading-critical identity or economics fails mapping closed. Unknown provider enum strings remain explicit. Permission, environment, rollout and temporary failures update only affected method capability; they do not fabricate success or remove unrelated readiness.
 
+Reference wire DTO optionality follows proto3 JSON presence, not business expectations. Any unset singular scalar, enum, timestamp, money, quotation, or nested message may be omitted by REST transcoding and is retained as `None`; repeated fields remain empty vectors. `Quotation` and `MoneyValue` also retain omitted `units`, `nano`, and `currency` components. Consumers must call explicit validators such as `try_identity`, `require_option_economics`, or `FuturesMargin::require_economics`; missing or invalid trading-critical data fails closed and is never converted to zero.
+
 Current documented response fields have method-specific DTOs. Catalogue/asset records also retain future provider additions in `ProviderValue`: recursive Vox-owned values with exact decimal spelling, never `serde_json::Value` outside private decoding. This prevents silent field loss while keeping unknown schema evolution separate from known typed fields.

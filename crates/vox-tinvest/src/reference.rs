@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Number;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use vox_domain::{InstrumentIdentity, InstrumentIdentityError, MutationAuthorization, UnitsNano};
+use vox_domain::{InstrumentIdentity, MutationAuthorization, UnitsNano};
 
 use crate::{ProviderResponse, RestError, TInvestRestClient};
 
@@ -20,18 +20,33 @@ fn path(method: &str) -> String {
     format!("/{SERVICE}/{method}")
 }
 
-/// Exact protobuf `Quotation` value. REST encodes `units` as decimal string.
+/// Exact protobuf `Quotation` wire value.
+///
+/// Proto3 JSON may omit either scalar when it has its default value. Absence
+/// stays distinct from an explicit zero until a consumer validates economics.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct Quotation(UnitsNano);
+pub struct Quotation {
+    pub units: Option<i64>,
+    pub nano: Option<i32>,
+}
 
 impl Quotation {
     pub fn new(units: i64, nano: i32) -> Result<Self, vox_domain::FixedPointError> {
-        UnitsNano::new(units, nano).map(Self)
+        UnitsNano::new(units, nano)?;
+        Ok(Self {
+            units: Some(units),
+            nano: Some(nano),
+        })
     }
 
-    #[must_use]
-    pub const fn value(self) -> UnitsNano {
-        self.0
+    pub fn value(self) -> Result<UnitsNano, CriticalDataError> {
+        let units = self
+            .units
+            .ok_or(CriticalDataError::Missing("quotation.units"))?;
+        let nano = self
+            .nano
+            .ok_or(CriticalDataError::Missing("quotation.nano"))?;
+        UnitsNano::new(units, nano).map_err(|_| CriticalDataError::Invalid("quotation units/nano"))
     }
 }
 
@@ -42,14 +57,15 @@ impl Serialize for Quotation {
     {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
-        struct Wire<'a> {
-            units: &'a str,
-            nano: i32,
+        struct Wire {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            units: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            nano: Option<i32>,
         }
-        let units = self.0.units().to_string();
         Wire {
-            units: &units,
-            nano: self.0.nano(),
+            units: self.units.map(|value| value.to_string()),
+            nano: self.nano,
         }
         .serialize(serializer)
     }
@@ -62,12 +78,42 @@ impl<'de> Deserialize<'de> for Quotation {
     {
         #[derive(Deserialize)]
         struct Wire {
-            #[serde(deserialize_with = "deserialize_i64")]
-            units: i64,
-            nano: i32,
+            #[serde(default, deserialize_with = "deserialize_optional_i64")]
+            units: Option<i64>,
+            #[serde(default)]
+            nano: Option<i32>,
         }
         let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.units, wire.nano).map_err(de::Error::custom)
+        if let (Some(units), Some(nano)) = (wire.units, wire.nano) {
+            Self::new(units, nano).map_err(de::Error::custom)
+        } else {
+            Ok(Self {
+                units: wire.units,
+                nano: wire.nano,
+            })
+        }
+    }
+}
+
+fn deserialize_optional_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<serde_json::Value>::deserialize(deserializer)?
+        .map(|value| serde_json::from_value(value).and_then(parse_i64_value))
+        .transpose()
+        .map_err(de::Error::custom)
+}
+
+fn parse_i64_value(value: serde_json::Value) -> Result<i64, serde_json::Error> {
+    match value {
+        serde_json::Value::Number(value) => value
+            .as_i64()
+            .ok_or_else(|| serde::de::Error::custom("protobuf int64 is out of range")),
+        serde_json::Value::String(value) => value.parse().map_err(serde::de::Error::custom),
+        _ => Err(serde::de::Error::custom(
+            "protobuf int64 must be a number or decimal string",
+        )),
     }
 }
 
@@ -90,15 +136,28 @@ where
 /// Exact monetary amount with provider currency code kept separately.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MoneyValue {
-    pub currency: String,
-    #[serde(deserialize_with = "deserialize_i64", serialize_with = "serialize_i64")]
-    pub units: i64,
-    pub nano: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_i64",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub units: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nano: Option<i32>,
 }
 
 impl MoneyValue {
-    pub fn amount(&self) -> Result<UnitsNano, vox_domain::FixedPointError> {
-        UnitsNano::new(self.units, self.nano)
+    pub fn amount(&self) -> Result<UnitsNano, CriticalDataError> {
+        let units = self
+            .units
+            .ok_or(CriticalDataError::Missing("money_value.units"))?;
+        let nano = self
+            .nano
+            .ok_or(CriticalDataError::Missing("money_value.nano"))?;
+        UnitsNano::new(units, nano)
+            .map_err(|_| CriticalDataError::Invalid("money_value units/nano"))
     }
 }
 
@@ -320,16 +379,16 @@ impl<'de> Deserialize<'de> for ProviderInstrumentType {
 pub struct Instrument {
     #[serde(default)]
     pub figi: Option<String>,
-    pub ticker: String,
-    pub class_code: String,
-    pub uid: String,
+    pub ticker: Option<String>,
+    pub class_code: Option<String>,
+    pub uid: Option<String>,
     #[serde(default)]
     pub position_uid: Option<String>,
     #[serde(default)]
     pub asset_uid: Option<String>,
     #[serde(default)]
     pub isin: Option<String>,
-    pub name: String,
+    pub name: Option<String>,
     #[serde(default)]
     pub instrument_kind: Option<ProviderInstrumentType>,
     #[serde(default)]
@@ -379,14 +438,18 @@ pub struct Instrument {
 }
 
 impl Instrument {
-    pub fn try_identity(&self) -> Result<InstrumentIdentity, InstrumentIdentityError> {
+    pub fn try_identity(&self) -> Result<InstrumentIdentity, CriticalDataError> {
+        let uid = required_text("uid", self.uid.as_deref())?;
+        let ticker = required_text("ticker", self.ticker.as_deref())?;
+        let class_code = required_text("class_code", self.class_code.as_deref())?;
         InstrumentIdentity::new(
             "tinvest",
-            self.uid.clone(),
+            uid.to_owned(),
             self.figi.clone(),
-            self.ticker.clone(),
-            self.class_code.clone(),
+            ticker.to_owned(),
+            class_code.to_owned(),
         )
+        .map_err(|_| CriticalDataError::Invalid("instrument identity"))
     }
 
     pub fn require_option_economics(&self) -> Result<OptionEconomics<'_>, CriticalDataError> {
@@ -428,12 +491,14 @@ pub struct OptionEconomics<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CriticalDataError {
     Missing(&'static str),
+    Invalid(&'static str),
 }
 
 impl fmt::Display for CriticalDataError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Missing(field) => write!(formatter, "missing trading-critical field {field}"),
+            Self::Invalid(field) => write!(formatter, "invalid trading-critical field {field}"),
         }
     }
 }
@@ -509,41 +574,32 @@ pub struct InstrumentsResponse {
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct InstrumentResponse {
-    pub instrument: Instrument,
+    pub instrument: Option<Instrument>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Dfa {
-    pub uid: String,
-    pub ticker: String,
-    pub name: String,
-    pub position_uid: String,
-    pub min_price_increment: Quotation,
-    pub lot: i32,
-    pub nominal: MoneyValue,
-    pub currency: String,
-    pub maturity_date: Timestamp,
-    #[serde(default)]
-    pub short_enabled_flag: bool,
-    #[serde(default)]
-    pub api_trade_available_flag: bool,
-    #[serde(default)]
-    pub buy_available_flag: bool,
-    #[serde(default)]
-    pub sell_available_flag: bool,
-    #[serde(default)]
-    pub limit_order_available_flag: bool,
-    #[serde(default)]
-    pub market_order_available_flag: bool,
-    #[serde(default)]
-    pub bestprice_order_available_flag: bool,
-    #[serde(default)]
-    pub for_iis_flag: bool,
-    #[serde(default)]
-    pub for_qual_investor_flag: bool,
+    pub uid: Option<String>,
+    pub ticker: Option<String>,
+    pub name: Option<String>,
+    pub position_uid: Option<String>,
+    pub min_price_increment: Option<Quotation>,
+    pub lot: Option<i32>,
+    pub nominal: Option<MoneyValue>,
+    pub currency: Option<String>,
+    pub maturity_date: Option<Timestamp>,
+    pub short_enabled_flag: Option<bool>,
+    pub api_trade_available_flag: Option<bool>,
+    pub buy_available_flag: Option<bool>,
+    pub sell_available_flag: Option<bool>,
+    pub limit_order_available_flag: Option<bool>,
+    pub market_order_available_flag: Option<bool>,
+    pub bestprice_order_available_flag: Option<bool>,
+    pub for_iis_flag: Option<bool>,
+    pub for_qual_investor_flag: Option<bool>,
     #[serde(rename = "type")]
-    pub kind: String,
+    pub kind: Option<String>,
     #[serde(default)]
     pub basic_assets: Vec<DfaBasicAsset>,
     #[serde(default)]
@@ -562,14 +618,14 @@ pub struct Dfa {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct DfaBasicAsset {
-    pub uid: String,
+    pub uid: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DfaForecastYield {
-    pub min_value: Quotation,
-    pub max_value: Quotation,
+    pub min_value: Option<Quotation>,
+    pub max_value: Option<Quotation>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -580,23 +636,23 @@ pub struct DfasResponse {
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct IndexInstrument {
-    pub uid: String,
-    pub weight: Quotation,
+    pub uid: Option<String>,
+    pub weight: Option<Quotation>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Indicative {
-    pub figi: String,
-    pub ticker: String,
-    pub class_code: String,
-    pub currency: String,
-    pub instrument_kind: ProviderInstrumentType,
-    pub name: String,
-    pub exchange: String,
-    pub uid: String,
-    pub buy_available_flag: bool,
-    pub sell_available_flag: bool,
+    pub figi: Option<String>,
+    pub ticker: Option<String>,
+    pub class_code: Option<String>,
+    pub currency: Option<String>,
+    pub instrument_kind: Option<ProviderInstrumentType>,
+    pub name: Option<String>,
+    pub exchange: Option<String>,
+    pub uid: Option<String>,
+    pub buy_available_flag: Option<bool>,
+    pub sell_available_flag: Option<bool>,
     #[serde(default)]
     pub index_composition: Vec<IndexInstrument>,
 }
@@ -1013,7 +1069,10 @@ mod tests {
             assert_eq!(identity.uid(), "UID");
             assert_eq!(identity.figi(), Some("FIGI"));
             assert_eq!(
-                instrument.min_price_increment.map(Quotation::value),
+                instrument
+                    .min_price_increment
+                    .map(Quotation::value)
+                    .transpose()?,
                 Some(UnitsNano::new(12, 345_678_901)?)
             );
         }
@@ -1133,7 +1192,7 @@ mod tests {
             "couponPeriod":184,"couponInterestRate":{"units":"8","nano":9}
         }]}))?;
         let event = &response.events[0];
-        assert_eq!(event.instrument_id, "BOND");
+        assert_eq!(event.instrument_id.as_deref(), Some("BOND"));
         assert_eq!(
             event
                 .pay_one_bond
@@ -1142,10 +1201,10 @@ mod tests {
                 .transpose(),
             Ok(Some(UnitsNano::new(12, 3).expect("valid fixture")))
         );
-        assert_eq!(event.convert_to_fin_tool_id, "NEXT");
+        assert_eq!(event.convert_to_fin_tool_id.as_deref(), Some("NEXT"));
         assert_eq!(
-            event.coupon_interest_rate.value(),
-            UnitsNano::new(8, 9).expect("valid fixture")
+            event.coupon_interest_rate.expect("coupon rate").value(),
+            Ok(UnitsNano::new(8, 9).expect("valid fixture"))
         );
         Ok(())
     }
@@ -1160,7 +1219,7 @@ mod tests {
             "closePrice":{"currency":"rub","units":"300","nano":4},
             "yieldValue":{"units":"5","nano":6},"createdAt":"2026-01-01T01:00:00Z"
         }]}))?;
-        assert_eq!(dividends.dividends[0].regularity, "Annual");
+        assert_eq!(dividends.dividends[0].regularity.as_deref(), Some("Annual"));
 
         let coupons: BondCouponsResponse = serde_json::from_value(json!({"events":[{
             "figi":"FIGI","couponDate":"2026-02-01T00:00:00Z","couponNumber":"17",
@@ -1168,20 +1227,31 @@ mod tests {
             "couponType":"COUPON_TYPE_FLOATING","couponStartDate":"2025-08-01T00:00:00Z",
             "couponEndDate":"2026-02-01T00:00:00Z","couponPeriod":184
         }]}))?;
-        assert_eq!(coupons.events[0].coupon_number.get(), 17);
+        assert_eq!(
+            coupons.events[0].coupon_number.map(ProtoInt64::get),
+            Some(17)
+        );
 
         let accrued: AccruedInterestsResponse =
             serde_json::from_value(json!({"accruedInterests":[{
                 "date":"2026-01-01T00:00:00Z","value":{"units":"2","nano":3},
                 "valuePercent":{"units":"4","nano":5},"nominal":{"units":"1000","nano":0}
             }]}))?;
-        assert_eq!(accrued.accrued_interests[0].nominal.value().units(), 1000);
+        assert_eq!(
+            accrued.accrued_interests[0]
+                .nominal
+                .expect("nominal")
+                .value()
+                .expect("complete quotation")
+                .units(),
+            1000
+        );
 
         let reports: AssetReportsResponse = serde_json::from_value(json!({"events":[{
             "instrumentId":"UID","reportDate":"2026-04-01T00:00:00Z","periodYear":2025,
             "periodNum":4,"periodType":"PERIOD_TYPE_ANNUAL","createdAt":"2026-01-01T00:00:00Z"
         }]}))?;
-        assert_eq!(reports.events[0].period_year, 2025);
+        assert_eq!(reports.events[0].period_year, Some(2025));
 
         let forecasts: ConsensusForecastsResponse = serde_json::from_value(json!({
             "items":[{"uid":"UID","assetUid":"ASSET","createdAt":"2026-01-01T00:00:00Z",
@@ -1191,7 +1261,7 @@ mod tests {
                 "consensus":"RECOMMENDATION_BUY","prognosisDate":"2026-06-01T00:00:00Z"}],
             "page":{"limit":20,"pageNumber":0,"totalCount":1}
         }))?;
-        assert_eq!(forecasts.items[0].total_hold_recommend, 5);
+        assert_eq!(forecasts.items[0].total_hold_recommend, Some(5));
 
         let forecast: ForecastResponse = serde_json::from_value(json!({
             "targets":[{"uid":"UID","ticker":"TICK","company":"House",
@@ -1205,7 +1275,7 @@ mod tests {
                 "maxTarget":{"units":"3","nano":0},"priceChange":{"units":"1","nano":1},
                 "priceChangeRel":{"units":"100","nano":0}}
         }))?;
-        assert_eq!(forecast.targets[0].company, "House");
+        assert_eq!(forecast.targets[0].company.as_deref(), Some("House"));
 
         let insider: InsiderDealsResponse = serde_json::from_value(json!({
             "insiderDeals":[{"tradeId":"9","direction":"TRADE_DIRECTION_BUY","currency":"rub",
@@ -1214,14 +1284,108 @@ mod tests {
                 "investorPosition":"Director","percentage":0.123456789,"isOptionExecution":false,
                 "disclosureDate":"2026-01-02T00:00:00Z"}],"nextCursor":"CURSOR"
         }))?;
-        assert_eq!(insider.insider_deals[0].percentage.as_str(), "0.123456789");
+        assert_eq!(
+            insider.insider_deals[0]
+                .percentage
+                .as_ref()
+                .map(ExactDecimal::as_str),
+            Some("0.123456789")
+        );
 
         let news: NewsResponse = serde_json::from_value(json!({"hasNext":true,"nextCursor":"42",
             "items":[{"id":"41","source":"T","title":"Title","content":"Body","summary":"Summary",
                 "tables":[{"table":"a|b"}],"instrumentId":[{"instrument":{"instrumentUid":"UID",
                 "ticker":"TICK","classCode":"TQBR"}}],"priority":true,"ts":"2026-01-01T00:00:00Z"}]
         }))?;
-        assert_eq!(news.items[0].instrument_id[0].instrument.class_code, "TQBR");
+        assert_eq!(
+            news.items[0].instrument_id[0]
+                .instrument
+                .as_ref()
+                .and_then(|instrument| instrument.class_code.as_deref()),
+            Some("TQBR")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn futures_margin_omission_stays_none_and_economics_fail_closed()
+    -> Result<(), serde_json::Error> {
+        let response: FuturesMarginResponse = serde_json::from_value(json!({
+            "initialMarginOnSell":{"currency":"rub","units":"15000","nano":0},
+            "minPriceIncrement":{"units":"1","nano":0},
+            "minPriceIncrementAmount":{"units":"10","nano":0}
+        }))?;
+
+        assert_eq!(response.initial_margin_on_buy, None);
+        assert_eq!(
+            response.require_economics(),
+            Err(CriticalDataError::Missing("initial_margin_on_buy"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn proto3_json_omission_decodes_across_complete_reference_wire_surface()
+    -> Result<(), serde_json::Error> {
+        fn empty<T: serde::de::DeserializeOwned>() -> Result<T, serde_json::Error> {
+            serde_json::from_value(json!({}))
+        }
+
+        let quotation: Quotation = empty()?;
+        assert_eq!(quotation.units, None);
+        assert_eq!(quotation.nano, None);
+        assert_eq!(
+            quotation.value(),
+            Err(CriticalDataError::Missing("quotation.units"))
+        );
+
+        let money: MoneyValue = empty()?;
+        assert_eq!(money.currency, None);
+        assert_eq!(
+            money.amount(),
+            Err(CriticalDataError::Missing("money_value.units"))
+        );
+
+        let _: Instrument = empty()?;
+        let _: InstrumentResponse = empty()?;
+        let _: Dfa = empty()?;
+        let _: DfaBasicAsset = empty()?;
+        let _: DfaForecastYield = empty()?;
+        let _: IndexInstrument = empty()?;
+        let _: Indicative = empty()?;
+        let _: PageResponse = empty()?;
+        let _: Dividend = empty()?;
+        let _: Coupon = empty()?;
+        let _: AccruedInterest = empty()?;
+        let _: BondEvent = empty()?;
+        let _: AssetReport = empty()?;
+        let _: ConsensusForecast = empty()?;
+        let _: ForecastTarget = empty()?;
+        let _: ForecastConsensus = empty()?;
+        let _: AssetInstrument = empty()?;
+        let _: Asset = empty()?;
+        let _: AssetResponse = empty()?;
+        let _: Brand = empty()?;
+        let _: Country = empty()?;
+        let _: InstrumentShort = empty()?;
+        let _: Fundamental = empty()?;
+        let _: FuturesMarginResponse = empty()?;
+        let _: RiskRate = empty()?;
+        let _: RiskRateResult = empty()?;
+        let _: TradingInterval = empty()?;
+        let _: TimeInterval = empty()?;
+        let _: TradingDay = empty()?;
+        let _: TradingSchedule = empty()?;
+        let _: InsiderDealsResponse = empty()?;
+        let _: InsiderDeal = empty()?;
+        let _: NewsResponse = empty()?;
+        let _: NewsItem = empty()?;
+        let _: NewsTable = empty()?;
+        let _: NewsInstrument = empty()?;
+        let _: NewsInstrumentInfo = empty()?;
+        let _: FavoriteInstrument = empty()?;
+        let _: FavoriteGroup = empty()?;
+        let _: FavoriteGroupMutationResponse = empty()?;
         Ok(())
     }
 
@@ -1423,24 +1587,24 @@ impl std::error::Error for PaginationError {}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PageResponse {
-    pub limit: i32,
-    pub page_number: i32,
-    pub total_count: i32,
+    pub limit: Option<i32>,
+    pub page_number: Option<i32>,
+    pub total_count: Option<i32>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Dividend {
-    pub dividend_net: MoneyValue,
-    pub payment_date: Timestamp,
-    pub declared_date: Timestamp,
-    pub last_buy_date: Timestamp,
-    pub dividend_type: String,
-    pub record_date: Timestamp,
-    pub regularity: String,
-    pub close_price: MoneyValue,
-    pub yield_value: Quotation,
-    pub created_at: Timestamp,
+    pub dividend_net: Option<MoneyValue>,
+    pub payment_date: Option<Timestamp>,
+    pub declared_date: Option<Timestamp>,
+    pub last_buy_date: Option<Timestamp>,
+    pub dividend_type: Option<String>,
+    pub record_date: Option<Timestamp>,
+    pub regularity: Option<String>,
+    pub close_price: Option<MoneyValue>,
+    pub yield_value: Option<Quotation>,
+    pub created_at: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -1452,16 +1616,16 @@ pub struct DividendsResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Coupon {
-    pub figi: String,
-    pub coupon_date: Timestamp,
-    pub coupon_number: ProtoInt64,
+    pub figi: Option<String>,
+    pub coupon_date: Option<Timestamp>,
+    pub coupon_number: Option<ProtoInt64>,
     #[serde(default)]
     pub fix_date: Option<Timestamp>,
-    pub pay_one_bond: MoneyValue,
-    pub coupon_type: ProviderEnum,
-    pub coupon_start_date: Timestamp,
-    pub coupon_end_date: Timestamp,
-    pub coupon_period: i32,
+    pub pay_one_bond: Option<MoneyValue>,
+    pub coupon_type: Option<ProviderEnum>,
+    pub coupon_start_date: Option<Timestamp>,
+    pub coupon_end_date: Option<Timestamp>,
+    pub coupon_period: Option<i32>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -1473,10 +1637,10 @@ pub struct BondCouponsResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AccruedInterest {
-    pub date: Timestamp,
-    pub value: Quotation,
-    pub value_percent: Quotation,
-    pub nominal: Quotation,
+    pub date: Option<Timestamp>,
+    pub value: Option<Quotation>,
+    pub value_percent: Option<Quotation>,
+    pub nominal: Option<Quotation>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -1489,11 +1653,11 @@ pub struct AccruedInterestsResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BondEvent {
-    pub instrument_id: String,
-    pub event_number: i32,
-    pub event_date: Timestamp,
-    pub event_type: ProviderEnum,
-    pub event_total_vol: Quotation,
+    pub instrument_id: Option<String>,
+    pub event_number: Option<i32>,
+    pub event_date: Option<Timestamp>,
+    pub event_type: Option<ProviderEnum>,
+    pub event_total_vol: Option<Quotation>,
     #[serde(default)]
     pub fix_date: Option<Timestamp>,
     #[serde(default)]
@@ -1508,17 +1672,17 @@ pub struct BondEvent {
     pub pay_one_bond: Option<MoneyValue>,
     #[serde(default)]
     pub money_flow_val: Option<MoneyValue>,
-    pub execution: String,
-    pub operation_type: String,
-    pub value: Quotation,
-    pub note: String,
-    pub convert_to_fin_tool_id: String,
+    pub execution: Option<String>,
+    pub operation_type: Option<String>,
+    pub value: Option<Quotation>,
+    pub note: Option<String>,
+    pub convert_to_fin_tool_id: Option<String>,
     #[serde(default)]
     pub coupon_start_date: Option<Timestamp>,
     #[serde(default)]
     pub coupon_end_date: Option<Timestamp>,
-    pub coupon_period: i32,
-    pub coupon_interest_rate: Quotation,
+    pub coupon_period: Option<i32>,
+    pub coupon_interest_rate: Option<Quotation>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -1530,12 +1694,12 @@ pub struct BondEventsResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetReport {
-    pub instrument_id: String,
-    pub report_date: Timestamp,
-    pub period_year: i32,
-    pub period_num: i32,
-    pub period_type: ProviderEnum,
-    pub created_at: Timestamp,
+    pub instrument_id: Option<String>,
+    pub report_date: Option<Timestamp>,
+    pub period_year: Option<i32>,
+    pub period_num: Option<i32>,
+    pub period_type: Option<ProviderEnum>,
+    pub created_at: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -1547,56 +1711,56 @@ pub struct AssetReportsResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsensusForecast {
-    pub uid: String,
-    pub asset_uid: String,
-    pub created_at: Timestamp,
-    pub best_target_price: Quotation,
-    pub best_target_low: Quotation,
-    pub best_target_high: Quotation,
-    pub total_buy_recommend: i32,
-    pub total_hold_recommend: i32,
-    pub total_sell_recommend: i32,
-    pub currency: String,
-    pub consensus: ProviderEnum,
-    pub prognosis_date: Timestamp,
+    pub uid: Option<String>,
+    pub asset_uid: Option<String>,
+    pub created_at: Option<Timestamp>,
+    pub best_target_price: Option<Quotation>,
+    pub best_target_low: Option<Quotation>,
+    pub best_target_high: Option<Quotation>,
+    pub total_buy_recommend: Option<i32>,
+    pub total_hold_recommend: Option<i32>,
+    pub total_sell_recommend: Option<i32>,
+    pub currency: Option<String>,
+    pub consensus: Option<ProviderEnum>,
+    pub prognosis_date: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct ConsensusForecastsResponse {
     #[serde(default)]
     pub items: Vec<ConsensusForecast>,
-    pub page: PageResponse,
+    pub page: Option<PageResponse>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ForecastTarget {
-    pub uid: String,
-    pub ticker: String,
-    pub company: String,
-    pub recommendation: ProviderEnum,
-    pub recommendation_date: Timestamp,
-    pub currency: String,
-    pub current_price: Quotation,
-    pub target_price: Quotation,
-    pub price_change: Quotation,
-    pub price_change_rel: Quotation,
-    pub show_name: String,
+    pub uid: Option<String>,
+    pub ticker: Option<String>,
+    pub company: Option<String>,
+    pub recommendation: Option<ProviderEnum>,
+    pub recommendation_date: Option<Timestamp>,
+    pub currency: Option<String>,
+    pub current_price: Option<Quotation>,
+    pub target_price: Option<Quotation>,
+    pub price_change: Option<Quotation>,
+    pub price_change_rel: Option<Quotation>,
+    pub show_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ForecastConsensus {
-    pub uid: String,
-    pub ticker: String,
-    pub recommendation: ProviderEnum,
-    pub currency: String,
-    pub current_price: Quotation,
-    pub consensus: Quotation,
-    pub min_target: Quotation,
-    pub max_target: Quotation,
-    pub price_change: Quotation,
-    pub price_change_rel: Quotation,
+    pub uid: Option<String>,
+    pub ticker: Option<String>,
+    pub recommendation: Option<ProviderEnum>,
+    pub currency: Option<String>,
+    pub current_price: Option<Quotation>,
+    pub consensus: Option<Quotation>,
+    pub min_target: Option<Quotation>,
+    pub max_target: Option<Quotation>,
+    pub price_change: Option<Quotation>,
+    pub price_change_rel: Option<Quotation>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -1610,12 +1774,12 @@ pub struct ForecastResponse {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetInstrument {
-    pub uid: String,
+    pub uid: Option<String>,
     #[serde(default)]
     pub figi: Option<String>,
-    pub instrument_type: String,
-    pub ticker: String,
-    pub class_code: String,
+    pub instrument_type: Option<String>,
+    pub ticker: Option<String>,
+    pub class_code: Option<String>,
     #[serde(default)]
     pub position_uid: Option<String>,
     #[serde(default)]
@@ -1627,10 +1791,10 @@ pub struct AssetInstrument {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Asset {
-    pub uid: String,
+    pub uid: Option<String>,
     #[serde(rename = "type")]
-    pub kind: ProviderEnum,
-    pub name: String,
+    pub kind: Option<ProviderEnum>,
+    pub name: Option<String>,
     #[serde(default)]
     pub name_brief: Option<String>,
     #[serde(default)]
@@ -1651,41 +1815,35 @@ pub struct AssetsResponse {
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct AssetResponse {
-    pub asset: Asset,
+    pub asset: Option<Asset>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Brand {
-    pub uid: String,
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub info: String,
-    #[serde(default)]
-    pub company: String,
-    #[serde(default)]
-    pub sector: String,
-    #[serde(default)]
-    pub country_of_risk: String,
-    #[serde(default)]
-    pub country_of_risk_name: String,
+    pub uid: Option<String>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub info: Option<String>,
+    pub company: Option<String>,
+    pub sector: Option<String>,
+    pub country_of_risk: Option<String>,
+    pub country_of_risk_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct BrandsResponse {
     #[serde(default)]
     pub brands: Vec<Brand>,
-    pub paging: PageResponse,
+    pub paging: Option<PageResponse>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct Country {
-    pub alfa_two: String,
-    pub alfa_three: String,
-    pub name: String,
-    pub name_brief: String,
+    pub alfa_two: Option<String>,
+    pub alfa_three: Option<String>,
+    pub name: Option<String>,
+    pub name_brief: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -1701,26 +1859,20 @@ pub struct InstrumentShort {
     pub isin: Option<String>,
     #[serde(default)]
     pub figi: Option<String>,
-    pub ticker: String,
-    pub class_code: String,
-    pub instrument_type: String,
-    pub name: String,
-    pub uid: String,
+    pub ticker: Option<String>,
+    pub class_code: Option<String>,
+    pub instrument_type: Option<String>,
+    pub name: Option<String>,
+    pub uid: Option<String>,
     #[serde(default)]
     pub position_uid: Option<String>,
-    pub instrument_kind: ProviderInstrumentType,
-    #[serde(default)]
-    pub api_trade_available_flag: bool,
-    #[serde(default)]
-    pub for_iis_flag: bool,
-    #[serde(default)]
-    pub for_qual_investor_flag: bool,
-    #[serde(default)]
-    pub weekend_flag: bool,
-    #[serde(default)]
-    pub blocked_tca_flag: bool,
-    #[serde(default)]
-    pub lot: i32,
+    pub instrument_kind: Option<ProviderInstrumentType>,
+    pub api_trade_available_flag: Option<bool>,
+    pub for_iis_flag: Option<bool>,
+    pub for_qual_investor_flag: Option<bool>,
+    pub weekend_flag: Option<bool>,
+    pub blocked_tca_flag: Option<bool>,
+    pub lot: Option<i32>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -1773,8 +1925,8 @@ pub struct FundamentalMetric {
 /// JSON decimal spelling and exposes no `f32`/`f64` conversion.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Fundamental {
-    pub asset_uid: String,
-    pub currency: String,
+    pub asset_uid: Option<String>,
+    pub currency: Option<String>,
     pub domicile_indicator_code: Option<String>,
     pub ex_dividend_date: Option<Timestamp>,
     pub fiscal_period_start_date: Option<Timestamp>,
@@ -1788,8 +1940,8 @@ impl<'de> Deserialize<'de> for Fundamental {
         D: Deserializer<'de>,
     {
         let mut fields = BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
-        let asset_uid = take_required::<String, D::Error>(&mut fields, "assetUid")?;
-        let currency = take_required::<String, D::Error>(&mut fields, "currency")?;
+        let asset_uid = take_optional(&mut fields, "assetUid")?;
+        let currency = take_optional(&mut fields, "currency")?;
         let domicile_indicator_code = take_optional(&mut fields, "domicileIndicatorCode")?;
         let ex_dividend_date = take_optional(&mut fields, "exDividendDate")?;
         let fiscal_period_start_date = take_optional(&mut fields, "fiscalPeriodStartDate")?;
@@ -1812,20 +1964,6 @@ impl<'de> Deserialize<'de> for Fundamental {
             metrics,
         })
     }
-}
-
-fn take_required<T, E>(
-    fields: &mut BTreeMap<String, serde_json::Value>,
-    name: &'static str,
-) -> Result<T, E>
-where
-    T: serde::de::DeserializeOwned,
-    E: de::Error,
-{
-    fields
-        .remove(name)
-        .ok_or_else(|| E::missing_field(name))
-        .and_then(|value| serde_json::from_value(value).map_err(E::custom))
 }
 
 fn take_optional<T, E>(
@@ -1852,31 +1990,73 @@ pub struct FundamentalsResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FuturesMargin {
-    pub initial_margin_on_buy: MoneyValue,
-    pub initial_margin_on_sell: MoneyValue,
-    pub min_price_increment: Quotation,
-    pub min_price_increment_amount: Quotation,
+    pub initial_margin_on_buy: Option<MoneyValue>,
+    pub initial_margin_on_sell: Option<MoneyValue>,
+    pub min_price_increment: Option<Quotation>,
+    pub min_price_increment_amount: Option<Quotation>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-pub struct FuturesMarginResponse {
-    pub initial_margin_on_buy: MoneyValue,
-    pub initial_margin_on_sell: MoneyValue,
-    pub min_price_increment: Quotation,
-    pub min_price_increment_amount: Quotation,
+pub type FuturesMarginResponse = FuturesMargin;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RequiredMoneyValue<'a> {
+    pub currency: &'a str,
+    pub amount: UnitsNano,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FuturesMarginEconomics<'a> {
+    pub initial_margin_on_buy: RequiredMoneyValue<'a>,
+    pub initial_margin_on_sell: RequiredMoneyValue<'a>,
+    pub min_price_increment: UnitsNano,
+    pub min_price_increment_amount: UnitsNano,
+}
+
+impl FuturesMargin {
+    pub fn require_economics(&self) -> Result<FuturesMarginEconomics<'_>, CriticalDataError> {
+        fn require_money<'a>(
+            field: &'static str,
+            value: Option<&'a MoneyValue>,
+        ) -> Result<RequiredMoneyValue<'a>, CriticalDataError> {
+            let value = value.ok_or(CriticalDataError::Missing(field))?;
+            Ok(RequiredMoneyValue {
+                currency: required_text("money_value.currency", value.currency.as_deref())?,
+                amount: value.amount()?,
+            })
+        }
+
+        Ok(FuturesMarginEconomics {
+            initial_margin_on_buy: require_money(
+                "initial_margin_on_buy",
+                self.initial_margin_on_buy.as_ref(),
+            )?,
+            initial_margin_on_sell: require_money(
+                "initial_margin_on_sell",
+                self.initial_margin_on_sell.as_ref(),
+            )?,
+            min_price_increment: self
+                .min_price_increment
+                .ok_or(CriticalDataError::Missing("min_price_increment"))?
+                .value()?,
+            min_price_increment_amount: self
+                .min_price_increment_amount
+                .ok_or(CriticalDataError::Missing("min_price_increment_amount"))?
+                .value()?,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RiskRate {
-    pub risk_level_code: String,
-    pub value: Quotation,
+    pub risk_level_code: Option<String>,
+    pub value: Option<Quotation>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RiskRateResult {
-    pub instrument_uid: String,
+    pub instrument_uid: Option<String>,
     #[serde(default)]
     pub short_risk_rate: Option<RiskRate>,
     #[serde(default)]
@@ -1885,8 +2065,7 @@ pub struct RiskRateResult {
     pub short_risk_rates: Vec<RiskRate>,
     #[serde(default)]
     pub long_risk_rates: Vec<RiskRate>,
-    #[serde(default)]
-    pub error: String,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -1906,22 +2085,22 @@ pub struct RiskRatesRequest<'a> {
 #[serde(rename_all = "camelCase")]
 pub struct TradingInterval {
     #[serde(rename = "type")]
-    pub kind: String,
-    pub interval: TimeInterval,
+    pub kind: Option<String>,
+    pub interval: Option<TimeInterval>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TimeInterval {
-    pub start_ts: Timestamp,
-    pub end_ts: Timestamp,
+    pub start_ts: Option<Timestamp>,
+    pub end_ts: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TradingDay {
-    pub date: Timestamp,
-    pub is_trading_day: bool,
+    pub date: Option<Timestamp>,
+    pub is_trading_day: Option<bool>,
     #[serde(default)]
     pub start_time: Option<Timestamp>,
     #[serde(default)]
@@ -1932,7 +2111,7 @@ pub struct TradingDay {
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct TradingSchedule {
-    pub exchange: String,
+    pub exchange: Option<String>,
     #[serde(default)]
     pub days: Vec<TradingDay>,
 }
@@ -2028,33 +2207,32 @@ pub struct InsiderDealsRequest<'a> {
 pub struct InsiderDealsResponse {
     #[serde(default)]
     pub insider_deals: Vec<InsiderDeal>,
-    pub next_cursor: String,
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct InsiderDeal {
-    pub trade_id: ProtoInt64,
-    pub direction: ProviderEnum,
-    pub currency: String,
-    pub date: Timestamp,
-    pub quantity: ProtoInt64,
-    pub price: Quotation,
-    pub instrument_uid: String,
-    pub ticker: String,
-    pub investor_name: String,
-    pub investor_position: String,
-    pub percentage: ExactDecimal,
-    #[serde(default)]
-    pub is_option_execution: bool,
-    pub disclosure_date: Timestamp,
+    pub trade_id: Option<ProtoInt64>,
+    pub direction: Option<ProviderEnum>,
+    pub currency: Option<String>,
+    pub date: Option<Timestamp>,
+    pub quantity: Option<ProtoInt64>,
+    pub price: Option<Quotation>,
+    pub instrument_uid: Option<String>,
+    pub ticker: Option<String>,
+    pub investor_name: Option<String>,
+    pub investor_position: Option<String>,
+    pub percentage: Option<ExactDecimal>,
+    pub is_option_execution: Option<bool>,
+    pub disclosure_date: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct NewsResponse {
-    pub has_next: bool,
-    pub next_cursor: ProtoInt64,
+    pub has_next: Option<bool>,
+    pub next_cursor: Option<ProtoInt64>,
     #[serde(default)]
     pub items: Vec<NewsItem>,
 }
@@ -2062,45 +2240,44 @@ pub struct NewsResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct NewsItem {
-    pub id: ProtoInt64,
-    pub source: String,
-    pub title: String,
-    pub content: String,
-    pub summary: String,
+    pub id: Option<ProtoInt64>,
+    pub source: Option<String>,
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub summary: Option<String>,
     #[serde(default)]
     pub tables: Vec<NewsTable>,
     #[serde(default)]
     pub instrument_id: Vec<NewsInstrument>,
-    #[serde(default)]
-    pub priority: bool,
-    pub ts: Timestamp,
+    pub priority: Option<bool>,
+    pub ts: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct NewsTable {
-    pub table: String,
+    pub table: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct NewsInstrument {
-    pub instrument: NewsInstrumentInfo,
+    pub instrument: Option<NewsInstrumentInfo>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct NewsInstrumentInfo {
-    pub instrument_uid: String,
-    pub ticker: String,
-    pub class_code: String,
+    pub instrument_uid: Option<String>,
+    pub ticker: Option<String>,
+    pub class_code: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FavoriteInstrument {
-    pub figi: String,
-    pub ticker: String,
-    pub class_code: String,
-    pub instrument_uid: String,
+    pub figi: Option<String>,
+    pub ticker: Option<String>,
+    pub class_code: Option<String>,
+    pub instrument_uid: Option<String>,
     #[serde(default)]
     pub position_uid: Option<String>,
 }
@@ -2108,13 +2285,11 @@ pub struct FavoriteInstrument {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FavoriteGroup {
-    pub group_id: String,
-    pub group_name: String,
-    pub color: String,
-    #[serde(default)]
-    pub size: i32,
-    #[serde(default)]
-    pub contains_instrument: bool,
+    pub group_id: Option<String>,
+    pub group_name: Option<String>,
+    pub color: Option<String>,
+    pub size: Option<i32>,
+    pub contains_instrument: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
