@@ -7,3 +7,5 @@ Status: **ACTIVE**
 Provider catalogue remains complete even where Nautilus has no faithful instrument class. `vox-nautilus` alone may map validated shares, bonds, funds, currency pairs, futures and options into exact Nautilus runtime types. DFA, structured notes, indicatives, assets, issuer data, analytics, news and favorites remain Trader-owned reference data.
 
 Missing trading-critical identity or economics fails mapping closed. Unknown provider enum strings remain explicit. Permission, environment, rollout and temporary failures update only affected method capability; they do not fabricate success or remove unrelated readiness.
+
+Current documented response fields have method-specific DTOs. Catalogue/asset records also retain future provider additions in `ProviderValue`: recursive Vox-owned values with exact decimal spelling, never `serde_json::Value` outside private decoding. This prevents silent field loss while keeping unknown schema evolution separate from known typed fields.

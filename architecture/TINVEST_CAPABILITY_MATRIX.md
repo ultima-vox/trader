@@ -13,7 +13,7 @@ This document defines the provider surface Trader 2.0 intends to support from T-
 
 ## Instruments and reference data — method inventory
 
-Official `InstrumentsService` contract checked 2026-08-24. `reference` below means `vox_tinvest::reference`. Unit evidence covers typed decoding, identity, exact decimals, enum evolution, pagination, capabilities and mutation classification. Live qualification is read-only and opt-in; favorites mutations are never part of live qualification.
+Official `InstrumentsService` contract checked 2026-08-24. `reference` below means `vox_tinvest::reference`. Unit evidence uses complete method-specific current-contract fixtures, identity checks, exact decimals, enum evolution, pagination, capabilities and mutation classification. Expanded live qualification covers every non-deprecated safe read and is opt-in; favorites mutations are never part of live qualification. "Live eligible" means covered by that runner, not credentialed evidence already captured.
 
 | Service | Method | Class | Requirements | Rust module/state | Routing | Exact Nautilus target | Tests/live evidence | Deprecated replacement | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -60,6 +60,25 @@ Official `InstrumentsService` contract checked 2026-08-24. `reference` below mea
 | InstrumentsService | `StructuredNotes` | read | token; rollout may vary | `reference` / supported | `TRADER_ONLY` | — | every-family DTO unit; read-only live eligible | — | exact provider catalogue retained |
 | InstrumentsService | `News` | read | token; rollout/tariff may vary | `reference` / supported | `TRADER_ONLY` | — | cursor unit; read-only live eligible | — | int64 cursor; safe-read retries |
 | InstrumentsService | `GetRiskRates` | read | token; account risk profile | `reference` / supported | `TRADER_ONLY` | — | exact rate/capability unit; read-only live eligible | — | per-instrument errors preserved |
+
+### Instrument-type routing
+
+Unknown future `InstrumentType` values remain explicit and default to `TRADER_ONLY`; they are never collapsed into a known family.
+
+| Current `InstrumentType` | Vox representation | Routing decision |
+| --- | --- | --- |
+| `INSTRUMENT_TYPE_UNSPECIFIED` | `ProviderInstrumentType::Unspecified` | `TRADER_ONLY` |
+| `INSTRUMENT_TYPE_BOND` | `ProviderInstrumentType::Bond` | `TRADER_AND_NAUTILUS` → `nautilus_model::instruments::Bond` when mapping is exact |
+| `INSTRUMENT_TYPE_SHARE` | `ProviderInstrumentType::Share` | `TRADER_AND_NAUTILUS` → `nautilus_model::instruments::Equity` |
+| `INSTRUMENT_TYPE_CURRENCY` | `ProviderInstrumentType::Currency` | `TRADER_AND_NAUTILUS` → `nautilus_model::instruments::CurrencyPair` only with faithful pair semantics |
+| `INSTRUMENT_TYPE_ETF` | `ProviderInstrumentType::Etf` | `TRADER_AND_NAUTILUS` → `nautilus_model::instruments::Equity` |
+| `INSTRUMENT_TYPE_FUTURES` | `ProviderInstrumentType::Futures` | `TRADER_AND_NAUTILUS` → `nautilus_model::instruments::FuturesContract` after exact economics checks |
+| `INSTRUMENT_TYPE_SP` | `ProviderInstrumentType::StructuredNote` | `TRADER_ONLY` |
+| `INSTRUMENT_TYPE_OPTION` | `ProviderInstrumentType::Option` | `TRADER_AND_NAUTILUS` → `nautilus_model::instruments::OptionsContract` after exact economics checks |
+| `INSTRUMENT_TYPE_CLEARING_CERTIFICATE` | `ProviderInstrumentType::ClearingCertificate` | `TRADER_ONLY` |
+| `INSTRUMENT_TYPE_INDEX` | `ProviderInstrumentType::Index` | `TRADER_ONLY` |
+| `INSTRUMENT_TYPE_COMMODITY` | `ProviderInstrumentType::Commodity` | `TRADER_ONLY` |
+| `INSTRUMENT_TYPE_DFA` | `ProviderInstrumentType::Dfa` | `TRADER_ONLY` |
 
 ## Market data
 
