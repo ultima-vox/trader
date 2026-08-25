@@ -1,0 +1,133 @@
+/*
+ * Vox Trader — primitives
+ * Text, Icon, Divider, Surface, Stack, Grid, ScrollArea, Tooltip, Popover.
+ * Depends on ../tokens/tokens.css. Tokens only — no raw HEX in this file.
+ */
+
+.vox-root {
+  background: var(--vox-bg-canvas);
+  color: var(--vox-text-primary);
+  font-family: var(--vox-font-ui);
+  font-size: var(--vox-text-13);
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+}
+.vox-root *, .vox-root *::before, .vox-root *::after { box-sizing: border-box; }
+
+/* ---------- Text ---------- */
+.vox-text { color: var(--vox-text-primary); }
+.vox-text--secondary { color: var(--vox-text-secondary); }
+.vox-text--tertiary { color: var(--vox-text-tertiary); }
+.vox-text--disabled { color: var(--vox-text-disabled); }
+.vox-text--caption { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+.vox-text--dense { font-size: var(--vox-text-12); }
+.vox-text--title { font-size: var(--vox-text-16); font-weight: var(--vox-weight-medium); }
+.vox-text--headline { font-size: var(--vox-text-18); font-weight: var(--vox-weight-semibold); }
+.vox-text--metric { font-size: var(--vox-text-22); font-weight: var(--vox-weight-medium); }
+.vox-text--metric-xl { font-size: var(--vox-text-28); font-weight: var(--vox-weight-semibold); }
+.vox-text--mono { font-family: var(--vox-font-mono); font-size: var(--vox-text-11); }
+.vox-text--label {
+  font-family: var(--vox-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--vox-text-tertiary);
+  text-transform: uppercase;
+}
+
+/* Every market number goes through .vox-num — tabular, right-aligned. */
+.vox-num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.vox-num--positive { color: var(--vox-positive-base); }
+.vox-num--negative { color: var(--vox-negative-base); }
+.vox-num--neutral { color: var(--vox-text-secondary); }
+.vox-num--unknown { color: var(--vox-unknown-base); }
+.vox-unit { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+
+/* ---------- Icon ---------- */
+/* Single icon family (Lucide) behind an abstraction. stroke 1.5–1.75, never mixed. */
+.vox-icon { display: inline-block; flex: 0 0 auto; stroke-width: 1.75; fill: none; stroke: currentColor; }
+.vox-icon--12 { width: 12px; height: 12px; }
+.vox-icon--14 { width: 14px; height: 14px; }
+.vox-icon--16 { width: 16px; height: 16px; }
+.vox-icon--18 { width: 18px; height: 18px; stroke-width: 1.5; }
+.vox-icon--20 { width: 20px; height: 20px; stroke-width: 1.5; }
+
+/* ---------- Divider ---------- */
+.vox-divider { height: 1px; background: var(--vox-border-subtle); border: 0; }
+.vox-divider--vertical { width: 1px; height: 100%; background: var(--vox-border-subtle); }
+
+/* ---------- Surface ---------- */
+/* Adjacent regions are separated by a border first, not by large gaps. */
+.vox-surface {
+  background: var(--vox-bg-surface);
+  border: 1px solid var(--vox-border-subtle);
+  border-radius: var(--vox-radius-md);
+}
+.vox-surface--workspace { background: var(--vox-bg-workspace); }
+.vox-surface--elevated { background: var(--vox-bg-elevated); border-color: var(--vox-border-default); }
+.vox-surface--active { border-color: var(--vox-border-default); }
+.vox-surface--flat { border-radius: 0; }
+
+/* ---------- Stack / Grid ---------- */
+.vox-stack { display: flex; flex-direction: column; }
+.vox-row { display: flex; flex-direction: row; align-items: center; }
+.vox-gap-1 { gap: var(--vox-space-1); }
+.vox-gap-2 { gap: var(--vox-space-2); }
+.vox-gap-3 { gap: var(--vox-space-3); }
+.vox-gap-4 { gap: var(--vox-space-4); }
+.vox-grow { flex: 1 1 auto; min-width: 0; }
+.vox-grid-12 { display: grid; grid-template-columns: repeat(12, 1fr); gap: var(--vox-space-2); }
+
+/* ---------- ScrollArea ---------- */
+.vox-scroll { overflow: auto; scrollbar-width: thin; }
+.vox-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.vox-scroll::-webkit-scrollbar-track { background: var(--vox-bg-canvas); }
+.vox-scroll::-webkit-scrollbar-thumb {
+  background: var(--vox-border-default);
+  border: 2px solid var(--vox-bg-canvas);
+  border-radius: 5px;
+}
+.vox-scroll::-webkit-scrollbar-thumb:hover { background: var(--vox-border-strong); }
+
+/* ---------- Tooltip / Popover (the only shadow-bearing layers) ---------- */
+.vox-tooltip {
+  background: var(--vox-bg-elevated);
+  border: 1px solid var(--vox-border-strong);
+  border-radius: var(--vox-radius-sm);
+  box-shadow: var(--vox-shadow-dropdown);
+  padding: var(--vox-space-2) var(--vox-space-3);
+  font-size: var(--vox-text-11);
+  color: var(--vox-text-primary);
+  max-width: 320px;
+}
+.vox-popover {
+  background: var(--vox-bg-elevated);
+  border: 1px solid var(--vox-border-strong);
+  border-radius: var(--vox-radius-sm);
+  box-shadow: var(--vox-shadow-modal);
+  overflow: hidden;
+}
+
+/* ---------- Focus ---------- */
+.vox-root :focus-visible {
+  outline: none;
+  border-color: var(--vox-border-focus);
+  box-shadow: var(--vox-focus-ring);
+}
+
+/* ---------- Motion ---------- */
+@keyframes voxFlashUp { from { background: rgba(39, 176, 125, 0.28); } to { background: transparent; } }
+@keyframes voxFlashDown { from { background: rgba(228, 88, 88, 0.28); } to { background: transparent; } }
+@keyframes voxSkeleton { 0% { opacity: 0.35; } 50% { opacity: 0.75; } 100% { opacity: 0.35; } }
+@keyframes voxSpin { to { transform: rotate(360deg); } }
+@keyframes voxPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .vox-root *, .vox-root *::before, .vox-root *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
