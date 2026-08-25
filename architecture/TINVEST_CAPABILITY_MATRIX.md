@@ -106,7 +106,7 @@ requirements live in `qualification/tinvest_account_contracts.json`.
 
 | Capability | T-Invest surface | Trader 2.0 status |
 | --- | --- | --- |
-| Accounts/bank accounts | `GetAccounts`, `GetBankAccounts` | supported: exact canonical catalogue |
+| Accounts/bank accounts | `GetAccounts`, `GetBankAccounts` | supported in production and sandbox: exact canonical catalogue; exhausted `70001/INTERNAL` remains `FAILED_PROVIDER_INTERNAL` with retry/tracking evidence |
 | User/tariff/qualification info | `GetInfo`, `GetUserTariff` | supported: broker-authoritative capability facts |
 | Margin attributes | `GetMarginAttributes` | supported: optional economics preserved; unavailable values never become zero |
 | Additional account values | `GetAccountValues` | supported: multiple accounts, raw enum values, optional exact money |

@@ -268,6 +268,86 @@ fn account_read_method(method: &str) -> bool {
 pub enum Evidence {
     Qualified(String),
     GatedUnavailable(String),
+    BlockedByPrerequisite(String),
+    Failed(FailureEvidence),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FailureClass {
+    ProviderInternal,
+    Provider,
+    Adapter,
+}
+
+impl FailureClass {
+    #[must_use]
+    pub const fn wire_name(&self) -> &'static str {
+        match self {
+            Self::ProviderInternal => "FAILED_PROVIDER_INTERNAL",
+            Self::Provider => "FAILED_PROVIDER",
+            Self::Adapter => "FAILED_ADAPTER",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FailureEvidence {
+    pub class: FailureClass,
+    pub grpc_status: Option<Code>,
+    pub provider_code: Option<String>,
+    pub method: &'static str,
+    pub attempt: Option<u32>,
+    pub tracking_id: Option<String>,
+    pub detail: String,
+}
+
+#[must_use]
+pub fn grpc_failure(method: &'static str, error: &GrpcError) -> FailureEvidence {
+    match &error.kind {
+        GrpcErrorKind::Provider(provider) => {
+            let provider_code = provider.provider_code();
+            let class = if provider.code == Code::Internal
+                && provider_code
+                    .as_deref()
+                    .is_some_and(|code| matches!(code, "70001" | "70002" | "70003"))
+            {
+                FailureClass::ProviderInternal
+            } else {
+                FailureClass::Provider
+            };
+            FailureEvidence {
+                class,
+                grpc_status: Some(provider.code),
+                provider_code,
+                method,
+                attempt: Some(error.metadata.attempt),
+                tracking_id: provider.tracking_id.clone(),
+                detail: "provider request failed after bounded safe-read policy".into(),
+            }
+        }
+        kind => FailureEvidence {
+            class: FailureClass::Adapter,
+            grpc_status: None,
+            provider_code: None,
+            method,
+            attempt: Some(error.metadata.attempt),
+            tracking_id: None,
+            detail: kind.to_string(),
+        },
+    }
+}
+
+#[must_use]
+pub fn adapter_failure(method: &'static str, detail: impl Into<String>) -> FailureEvidence {
+    FailureEvidence {
+        class: FailureClass::Adapter,
+        grpc_status: None,
+        provider_code: None,
+        method,
+        attempt: None,
+        tracking_id: None,
+        detail: detail.into(),
+    }
 }
 
 #[derive(Debug, Default)]
@@ -306,6 +386,47 @@ impl QualificationLedger {
             .collect())
     }
 }
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct QualificationSummary {
+    pub qualified: Vec<&'static str>,
+    pub gated: Vec<&'static str>,
+    pub blocked: Vec<&'static str>,
+    pub failed: Vec<&'static str>,
+}
+
+impl QualificationSummary {
+    #[must_use]
+    pub fn from_rows(rows: &[(&'static str, Evidence)]) -> Self {
+        let mut summary = Self::default();
+        for (method, evidence) in rows {
+            match evidence {
+                Evidence::Qualified(_) => summary.qualified.push(*method),
+                Evidence::GatedUnavailable(_) => summary.gated.push(*method),
+                Evidence::BlockedByPrerequisite(_) => summary.blocked.push(*method),
+                Evidence::Failed(_) => summary.failed.push(*method),
+            }
+        }
+        summary
+    }
+
+    #[must_use]
+    pub fn has_failures(&self) -> bool {
+        !self.failed.is_empty()
+    }
+
+    pub fn ensure_success(&self) -> Result<(), QualificationFailures> {
+        if self.failed.is_empty() {
+            Ok(())
+        } else {
+            Err(QualificationFailures(self.failed.clone()))
+        }
+    }
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+#[error("qualification completed with FAILED rows: {0:?}")]
+pub struct QualificationFailures(pub Vec<&'static str>);
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum LedgerError {
@@ -493,5 +614,41 @@ mod tests {
         assert_eq!(rows.len(), 38);
         assert_eq!(rows[0].0, "GetAccounts");
         assert_eq!(rows[37].0, "CancelSandboxStopOrder");
+    }
+
+    #[test]
+    fn ledger_continues_after_failure_and_summary_fails_closed() {
+        let mut ledger = QualificationLedger::default();
+        for method in ACCOUNT_INVENTORY_METHODS {
+            let evidence = match method {
+                "GetBankAccounts" => Evidence::Failed(adapter_failure(method, "persistent 70001")),
+                "GetPortfolio" => Evidence::BlockedByPrerequisite("GetAccounts failed".into()),
+                _ => Evidence::Qualified("continued".into()),
+            };
+            ledger.record(method, evidence).expect("unique row");
+        }
+        let rows = ledger.finish().expect("complete aggregate ledger");
+        let summary = QualificationSummary::from_rows(&rows);
+        assert!(summary.has_failures());
+        assert!(summary.ensure_success().is_err());
+        assert_eq!(summary.failed, ["GetBankAccounts"]);
+        assert_eq!(summary.blocked, ["GetPortfolio"]);
+        assert_eq!(summary.qualified.len(), 36);
+    }
+
+    #[test]
+    fn persistent_provider_internal_keeps_code_attempt_and_tracking() {
+        let mut error = grpc_error(Code::Internal, "70001");
+        error.metadata.attempt = 3;
+        let GrpcErrorKind::Provider(provider) = &mut error.kind else {
+            panic!("provider fixture");
+        };
+        provider.tracking_id = Some("tracking-70001".into());
+        let failed = grpc_failure("GetBankAccounts", &error);
+        assert_eq!(failed.class, FailureClass::ProviderInternal);
+        assert_eq!(failed.grpc_status, Some(Code::Internal));
+        assert_eq!(failed.provider_code.as_deref(), Some("70001"));
+        assert_eq!(failed.attempt, Some(3));
+        assert_eq!(failed.tracking_id.as_deref(), Some("tracking-70001"));
     }
 }

@@ -10,7 +10,8 @@ use vox_tinvest::account::{
 };
 use vox_tinvest::account_qualification::{
     AccountPurpose, Evidence, PreflightFailure, QualificationLedger, QualificationMode,
-    classify_method_gate, classify_preflight, select_accounts, select_qualification_mode,
+    QualificationSummary, adapter_failure, classify_method_gate, classify_preflight, grpc_failure,
+    select_accounts, select_qualification_mode,
 };
 use vox_tinvest::generated::v1;
 use vox_tinvest::operations::{
@@ -39,19 +40,33 @@ fn optional_env(name: &str) -> Result<Option<String>, std::env::VarError> {
     }
 }
 
-fn qualified<T>(
+fn qualified<T, D, E, Decode>(
     ledger: &mut QualificationLedger,
     method: &'static str,
     result: Result<GrpcResponse<T>, GrpcError>,
-) -> Result<Option<T>, Box<dyn Error>> {
+    decode: Decode,
+) -> Result<Option<D>, Box<dyn Error>>
+where
+    E: std::fmt::Display,
+    Decode: FnOnce(T) -> Result<D, E>,
+{
     match result {
-        Ok(response) => {
-            ledger.record(
-                method,
-                Evidence::Qualified("provider read + canonical decode".into()),
-            )?;
-            Ok(Some(response.body))
-        }
+        Ok(response) => match decode(response.body) {
+            Ok(decoded) => {
+                ledger.record(
+                    method,
+                    Evidence::Qualified("provider read + canonical decode".into()),
+                )?;
+                Ok(Some(decoded))
+            }
+            Err(error) => {
+                ledger.record(
+                    method,
+                    Evidence::Failed(adapter_failure(method, error.to_string())),
+                )?;
+                Ok(None)
+            }
+        },
         Err(error) => match &error.kind {
             GrpcErrorKind::Provider(provider) => {
                 if let Some(gate) = classify_method_gate(method, provider) {
@@ -61,10 +76,14 @@ fn qualified<T>(
                     )?;
                     Ok(None)
                 } else {
-                    Err(Box::new(error))
+                    ledger.record(method, Evidence::Failed(grpc_failure(method, &error)))?;
+                    Ok(None)
                 }
             }
-            _ => Err(Box::new(error)),
+            _ => {
+                ledger.record(method, Evidence::Failed(grpc_failure(method, &error)))?;
+                Ok(None)
+            }
         },
     }
 }
@@ -121,18 +140,17 @@ fn record_deferred_rows(ledger: &mut QualificationLedger) -> Result<(), Box<dyn 
     Ok(())
 }
 
-fn report_gate_or_error(
-    method: &'static str,
-    error: GrpcError,
-) -> Result<Evidence, Box<dyn Error>> {
+fn grpc_observation(method: &'static str, error: GrpcError) -> Evidence {
     if let GrpcErrorKind::Provider(provider) = &error.kind
         && let Some(gate) = classify_method_gate(method, provider)
     {
-        return Ok(Evidence::GatedUnavailable(format!(
-            "{gate:?}; provider contract code"
-        )));
+        return Evidence::GatedUnavailable(format!("{gate:?}; provider contract code"));
     }
-    Err(Box::new(error))
+    Evidence::Failed(grpc_failure(method, &error))
+}
+
+fn aggregate_result(method: &'static str, result: Result<Evidence, Box<dyn Error>>) -> Evidence {
+    result.unwrap_or_else(|error| Evidence::Failed(adapter_failure(method, error.to_string())))
 }
 
 fn task_pending(error: &GrpcError) -> bool {
@@ -155,16 +173,21 @@ fn pagination_result(
             history.items.len()
         ))),
         Err(failure) => match &failure.cause {
-            PaginationFailureCause::Provider(GrpcError {
-                kind: GrpcErrorKind::Provider(provider),
-                ..
-            }) => match classify_method_gate(method, provider) {
+            PaginationFailureCause::Provider(
+                error @ GrpcError {
+                    kind: GrpcErrorKind::Provider(provider),
+                    ..
+                },
+            ) => match classify_method_gate(method, provider) {
                 Some(gate) => Ok(Evidence::GatedUnavailable(format!(
                     "{gate:?}; provider contract code"
                 ))),
-                None => Err(Box::new(failure)),
+                None => Ok(Evidence::Failed(grpc_failure(method, error))),
             },
-            _ => Err(Box::new(failure)),
+            _ => Ok(Evidence::Failed(adapter_failure(
+                method,
+                failure.to_string(),
+            ))),
         },
     }
 }
@@ -207,7 +230,7 @@ fn stream_error(method: &'static str, error: GrpcStreamError) -> Result<Evidence
             "{gate:?}; provider contract code"
         )));
     }
-    Err(Box::new(error))
+    Ok(Evidence::Failed(adapter_failure(method, error.to_string())))
 }
 
 async fn qualify_portfolio_stream(
@@ -224,7 +247,7 @@ async fn qualify_portfolio_stream(
         .await
     {
         Ok(stream) => stream,
-        Err(error) => return report_gate_or_error("PortfolioStream", error),
+        Err(error) => return Ok(grpc_observation("PortfolioStream", error)),
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut subscribed = false;
@@ -275,7 +298,7 @@ async fn qualify_positions_stream(
         .await
     {
         Ok(stream) => stream,
-        Err(error) => return report_gate_or_error("PositionsStream", error),
+        Err(error) => return Ok(grpc_observation("PositionsStream", error)),
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut subscribed = false;
@@ -332,7 +355,7 @@ async fn qualify_broker_report(
         .await
     {
         Ok(response) => BrokerReportState::try_from(response.body)?,
-        Err(error) => return report_gate_or_error("GetBrokerReport", error),
+        Err(error) => return Ok(grpc_observation("GetBrokerReport", error)),
     };
     let BrokerReportState::Generating { task_id } = generated else {
         return Err(failure("GetBrokerReport generation omitted task_id state"));
@@ -357,7 +380,7 @@ async fn qualify_broker_report(
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 continue;
             }
-            Err(error) => return Err(Box::new(error)),
+            Err(error) => return Ok(grpc_observation("GetBrokerReport", error)),
         };
         let BrokerReportState::Ready(page) = BrokerReportState::try_from(body)? else {
             return Err(failure(
@@ -397,7 +420,7 @@ async fn qualify_foreign_report(
         .await
     {
         Ok(response) => ForeignIssuerReportState::try_from(response.body)?,
-        Err(error) => return report_gate_or_error("GetDividendsForeignIssuer", error),
+        Err(error) => return Ok(grpc_observation("GetDividendsForeignIssuer", error)),
     };
     let ForeignIssuerReportState::Generating { task_id } = generated else {
         return Err(failure(
@@ -426,7 +449,9 @@ async fn qualify_foreign_report(
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 continue;
             }
-            Err(error) => return Err(Box::new(error)),
+            Err(error) => {
+                return Ok(grpc_observation("GetDividendsForeignIssuer", error));
+            }
         };
         let ForeignIssuerReportState::Ready(page) = ForeignIssuerReportState::try_from(body)?
         else {
@@ -441,6 +466,56 @@ async fn qualify_foreign_report(
             )));
         }
     }
+}
+
+async fn qualify_operations_stream(
+    client: &TInvestGrpcClient,
+    accounts: Vec<String>,
+) -> Result<Evidence, Box<dyn Error>> {
+    let supervisor = OperationsStreamSupervisor::new(
+        client.clone(),
+        OperationsStreamConfig {
+            ping_delay_ms: 5_000,
+            stale_timeout: Duration::from_secs(20),
+            ..Default::default()
+        },
+    )?;
+    let mut stream = supervisor.start(accounts.clone())?;
+    let mut subscribed = false;
+    let result = loop {
+        let event = tokio::time::timeout(Duration::from_secs(30), stream.recv())
+            .await?
+            .ok_or_else(|| failure("operations stream event channel closed"))?;
+        match event {
+            OperationsStreamEvent::Subscribed {
+                accounts: observed, ..
+            } => {
+                if observed != accounts {
+                    break Err(failure("OperationsStream ACK account set mismatch"));
+                }
+                subscribed = true;
+            }
+            OperationsStreamEvent::Ping { .. } if subscribed => {
+                break Ok(Evidence::Qualified(
+                    "eligible account set + exact ACK + provider ping + reconnect state".into(),
+                ));
+            }
+            OperationsStreamEvent::Fault(OperationsStreamError::SubscriptionRejected {
+                status: 2,
+            }) => {
+                break Ok(Evidence::GatedUnavailable(
+                    "subscription status ACCOUNT_NOT_FOUND_OR_INSUFFICIENT_RIGHTS".into(),
+                ));
+            }
+            OperationsStreamEvent::Fault(OperationsStreamError::Connect(error)) => {
+                break Ok(grpc_observation("OperationsStream", error));
+            }
+            OperationsStreamEvent::Fault(error) => break Err(Box::new(error)),
+            _ => {}
+        }
+    };
+    stream.stop();
+    result
 }
 
 #[test]
@@ -501,16 +576,25 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
         })
         .await
     {
-        Ok(response) => {
-            ledger.record(
-                "GetAccounts",
-                Evidence::Qualified(format!(
-                    "{} credential preflight; OPEN accounts",
-                    mode.wire_name()
-                )),
-            )?;
-            AccountCatalogue::try_from(response.body)?
-        }
+        Ok(response) => match AccountCatalogue::try_from(response.body) {
+            Ok(accounts) => {
+                ledger.record(
+                    "GetAccounts",
+                    Evidence::Qualified(format!(
+                        "{} credential preflight; OPEN accounts",
+                        mode.wire_name()
+                    )),
+                )?;
+                Some(accounts)
+            }
+            Err(error) => {
+                ledger.record(
+                    "GetAccounts",
+                    Evidence::Failed(adapter_failure("GetAccounts", error.to_string())),
+                )?;
+                None
+            }
+        },
         Err(error) => match classify_preflight(&error) {
             PreflightFailure::CredentialInvalidOrInactive => {
                 return Err(failure(format!(
@@ -518,20 +602,24 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                     mode.wire_name()
                 )));
             }
-            PreflightFailure::InsufficientPermission => {
-                return Err(failure(format!(
-                    "CREDENTIAL_INSUFFICIENT_PERMISSION environment={} provider_code=40002",
-                    mode.wire_name()
-                )));
+            PreflightFailure::InsufficientPermission | PreflightFailure::Other => {
+                ledger.record(
+                    "GetAccounts",
+                    Evidence::Failed(grpc_failure("GetAccounts", &error)),
+                )?;
+                None
             }
-            PreflightFailure::Other => return Err(Box::new(error)),
         },
     };
 
-    let general = select_accounts(&accounts.accounts, AccountPurpose::GeneralRead);
-    let margin = select_accounts(&accounts.accounts, AccountPurpose::Margin);
-    let reports = select_accounts(&accounts.accounts, AccountPurpose::Report);
-    let stream_accounts = select_accounts(&accounts.accounts, AccountPurpose::OperationsStream);
+    let account_discovery_failed = accounts.is_none();
+    let account_rows = accounts
+        .as_ref()
+        .map_or(&[][..], |catalogue| catalogue.accounts.as_slice());
+    let general = select_accounts(account_rows, AccountPurpose::GeneralRead);
+    let margin = select_accounts(account_rows, AccountPurpose::Margin);
+    let reports = select_accounts(account_rows, AccountPurpose::Report);
+    let stream_accounts = select_accounts(account_rows, AccountPurpose::OperationsStream);
     let general_ids = general
         .selected
         .iter()
@@ -540,7 +628,7 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
     let general_id = general_ids.first().cloned();
 
     if let Some(account) = margin.selected.first() {
-        if let Some(body) = qualified(
+        let _ = qualified(
             &mut ledger,
             "GetMarginAttributes",
             client
@@ -548,62 +636,69 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                     account_id: account.account_id.clone(),
                 })
                 .await,
-        )? {
-            let _ = MarginAttributes::try_from(body)?;
-        }
+            MarginAttributes::try_from,
+        )?;
+    } else if account_discovery_failed {
+        ledger.record(
+            "GetMarginAttributes",
+            Evidence::BlockedByPrerequisite("GetAccounts failed".into()),
+        )?;
     } else {
         ledger.record(
             "GetMarginAttributes",
             Evidence::GatedUnavailable("no open readable brokerage/IIS account".into()),
         )?;
     }
-    if let Some(body) = qualified(
+    let _ = qualified(
         &mut ledger,
         "GetUserTariff",
         client.get_user_tariff(v1::GetUserTariffRequest {}).await,
-    )? {
-        let _ = UserTariff::from(body);
-    }
-    if let Some(body) = qualified(
+        |body| Ok::<_, std::convert::Infallible>(UserTariff::from(body)),
+    )?;
+    let _ = qualified(
         &mut ledger,
         "GetInfo",
         client.get_info(v1::GetInfoRequest {}).await,
-    )? {
-        let _ = UserInfo::from(body);
-    }
-    if let Some(body) = qualified(
+        |body| Ok::<_, std::convert::Infallible>(UserInfo::from(body)),
+    )?;
+    let _ = qualified(
         &mut ledger,
         "GetBankAccounts",
         client
             .get_bank_accounts(v1::GetBankAccountsRequest {})
             .await,
-    )? {
-        let _ = BankAccountCatalogue::try_from(body)?;
-    }
-    if general_ids.is_empty() {
+        BankAccountCatalogue::try_from,
+    )?;
+    if account_discovery_failed {
+        ledger.record(
+            "GetAccountValues",
+            Evidence::BlockedByPrerequisite("GetAccounts failed".into()),
+        )?;
+    } else if general_ids.is_empty() {
         ledger.record(
             "GetAccountValues",
             Evidence::GatedUnavailable("no open readable investment account".into()),
         )?;
-    } else if let Some(body) = qualified(
-        &mut ledger,
-        "GetAccountValues",
-        client
-            .get_account_values(v1::GetAccountValuesRequest {
-                accounts: general_ids.clone(),
-                values: vec![
-                    v1::AccountValue::MarginFee as i32,
-                    v1::AccountValue::AmountWithoutExtraFee as i32,
-                ],
-            })
-            .await,
-    )? {
-        let _ = AccountValues::try_from(body)?;
+    } else {
+        let _ = qualified(
+            &mut ledger,
+            "GetAccountValues",
+            client
+                .get_account_values(v1::GetAccountValuesRequest {
+                    accounts: general_ids.clone(),
+                    values: vec![
+                        v1::AccountValue::MarginFee as i32,
+                        v1::AccountValue::AmountWithoutExtraFee as i32,
+                    ],
+                })
+                .await,
+            AccountValues::try_from,
+        )?;
     }
 
     let (from, to) = recent_period();
     if let Some(account_id) = &general_id {
-        if let Some(body) = qualified(
+        let _ = qualified(
             &mut ledger,
             "GetOperations",
             client
@@ -615,10 +710,9 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                     figi: None,
                 })
                 .await,
-        )? {
-            let _ = canonical_legacy_operations(body)?;
-        }
-        if let Some(body) = qualified(
+            canonical_legacy_operations,
+        )?;
+        let _ = qualified(
             &mut ledger,
             "GetPortfolio",
             client
@@ -627,10 +721,9 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                     currency: None,
                 })
                 .await,
-        )? {
-            let _ = PortfolioState::try_from(body)?;
-        }
-        if let Some(body) = qualified(
+            PortfolioState::try_from,
+        )?;
+        let _ = qualified(
             &mut ledger,
             "GetPositions",
             client
@@ -638,10 +731,9 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                     account_id: account_id.clone(),
                 })
                 .await,
-        )? {
-            let _ = PositionsState::try_from(body)?;
-        }
-        if let Some(body) = qualified(
+            PositionsState::try_from,
+        )?;
+        let _ = qualified(
             &mut ledger,
             "GetWithdrawLimits",
             client
@@ -649,9 +741,8 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                     account_id: account_id.clone(),
                 })
                 .await,
-        )? {
-            let _ = WithdrawLimits::try_from(body)?;
-        }
+            WithdrawLimits::try_from,
+        )?;
         let history = OperationsPaginator::new(OperationsFilter {
             account_id: account_id.clone(),
             instrument_id: None,
@@ -671,6 +762,19 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
             "GetOperationsByCursor",
             pagination_result("GetOperationsByCursor", history)?,
         )?;
+    } else if account_discovery_failed {
+        for method in [
+            "GetOperations",
+            "GetPortfolio",
+            "GetPositions",
+            "GetWithdrawLimits",
+            "GetOperationsByCursor",
+        ] {
+            ledger.record(
+                method,
+                Evidence::BlockedByPrerequisite("GetAccounts failed".into()),
+            )?;
+        }
     } else {
         for method in [
             "GetOperations",
@@ -695,10 +799,20 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                 ),
             )?;
         }
+    } else if account_discovery_failed {
+        for method in ["GetBrokerReport", "GetDividendsForeignIssuer"] {
+            ledger.record(
+                method,
+                Evidence::BlockedByPrerequisite("GetAccounts failed".into()),
+            )?;
+        }
     } else if let Some(account) = reports.selected.first() {
         ledger.record(
             "GetBrokerReport",
-            qualify_broker_report(&client, &account.account_id, from, to).await?,
+            aggregate_result(
+                "GetBrokerReport",
+                qualify_broker_report(&client, &account.account_id, from, to).await,
+            ),
         )?;
         let from_time = time::OffsetDateTime::from_unix_timestamp(from.seconds)?;
         let year_start = time::Date::from_calendar_date(from_time.year(), time::Month::January, 1)?
@@ -707,16 +821,19 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
             .unix_timestamp();
         ledger.record(
             "GetDividendsForeignIssuer",
-            qualify_foreign_report(
-                &client,
-                &account.account_id,
-                Timestamp {
-                    seconds: from.seconds.max(year_start),
-                    nanos: 0,
-                },
-                to,
-            )
-            .await?,
+            aggregate_result(
+                "GetDividendsForeignIssuer",
+                qualify_foreign_report(
+                    &client,
+                    &account.account_id,
+                    Timestamp {
+                        seconds: from.seconds.max(year_start),
+                        nanos: 0,
+                    },
+                    to,
+                )
+                .await,
+            ),
         )?;
     } else {
         for method in ["GetBrokerReport", "GetDividendsForeignIssuer"] {
@@ -732,7 +849,14 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
         .iter()
         .map(|account| account.account_id.clone())
         .collect::<Vec<_>>();
-    if stream_ids.is_empty() {
+    if account_discovery_failed {
+        for method in ["PortfolioStream", "PositionsStream", "OperationsStream"] {
+            ledger.record(
+                method,
+                Evidence::BlockedByPrerequisite("GetAccounts failed".into()),
+            )?;
+        }
+    } else if stream_ids.is_empty() {
         for method in ["PortfolioStream", "PositionsStream", "OperationsStream"] {
             ledger.record(
                 method,
@@ -742,69 +866,25 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
     } else {
         ledger.record(
             "PortfolioStream",
-            qualify_portfolio_stream(&client, stream_ids.clone()).await?,
+            aggregate_result(
+                "PortfolioStream",
+                qualify_portfolio_stream(&client, stream_ids.clone()).await,
+            ),
         )?;
         ledger.record(
             "PositionsStream",
-            qualify_positions_stream(&client, stream_ids.clone()).await?,
+            aggregate_result(
+                "PositionsStream",
+                qualify_positions_stream(&client, stream_ids.clone()).await,
+            ),
         )?;
-        let supervisor = OperationsStreamSupervisor::new(
-            client.clone(),
-            OperationsStreamConfig {
-                ping_delay_ms: 5_000,
-                stale_timeout: Duration::from_secs(20),
-                ..Default::default()
-            },
+        ledger.record(
+            "OperationsStream",
+            aggregate_result(
+                "OperationsStream",
+                qualify_operations_stream(&client, stream_ids.clone()).await,
+            ),
         )?;
-        let mut stream = supervisor.start(stream_ids.clone())?;
-        let mut subscribed = false;
-        loop {
-            let event = tokio::time::timeout(Duration::from_secs(30), stream.recv())
-                .await?
-                .ok_or_else(|| failure("operations stream event channel closed"))?;
-            match event {
-                OperationsStreamEvent::Subscribed { accounts, .. } => {
-                    if accounts != stream_ids {
-                        return Err(failure("OperationsStream ACK account set mismatch"));
-                    }
-                    subscribed = true;
-                }
-                OperationsStreamEvent::Ping { .. } if subscribed => {
-                    ledger.record(
-                        "OperationsStream",
-                        Evidence::Qualified(
-                            "eligible account set + exact ACK + provider ping + reconnect state"
-                                .into(),
-                        ),
-                    )?;
-                    stream.stop();
-                    break;
-                }
-                OperationsStreamEvent::Fault(OperationsStreamError::SubscriptionRejected {
-                    status: 2,
-                }) => {
-                    ledger.record(
-                        "OperationsStream",
-                        Evidence::GatedUnavailable(
-                            "subscription status ACCOUNT_NOT_FOUND_OR_INSUFFICIENT_RIGHTS".into(),
-                        ),
-                    )?;
-                    stream.stop();
-                    break;
-                }
-                OperationsStreamEvent::Fault(OperationsStreamError::Connect(error))
-                    if classify_preflight(&error)
-                        == PreflightFailure::CredentialInvalidOrInactive =>
-                {
-                    return Err(failure(format!(
-                        "CREDENTIAL_INVALID_OR_INACTIVE environment={} provider_code=40003 stream=OperationsStream",
-                        mode.wire_name()
-                    )));
-                }
-                OperationsStreamEvent::Fault(error) => return Err(Box::new(error)),
-                _ => {}
-            }
-        }
     }
 
     let sandbox_client = match mode {
@@ -840,31 +920,44 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                 })
                 .await
             {
-                Ok(response) => {
+                Ok(response) => match AccountCatalogue::try_from(response.body) {
+                    Ok(accounts) => {
+                        ledger.record(
+                            "GetSandboxAccounts",
+                            Evidence::Qualified(
+                                "sandbox credential preflight; OPEN accounts".into(),
+                            ),
+                        )?;
+                        Some(accounts)
+                    }
+                    Err(error) => {
+                        ledger.record(
+                            "GetSandboxAccounts",
+                            Evidence::Failed(adapter_failure(
+                                "GetSandboxAccounts",
+                                error.to_string(),
+                            )),
+                        )?;
+                        None
+                    }
+                },
+                Err(error) => {
                     ledger.record(
                         "GetSandboxAccounts",
-                        Evidence::Qualified("sandbox credential preflight; OPEN accounts".into()),
+                        Evidence::Failed(grpc_failure("GetSandboxAccounts", &error)),
                     )?;
-                    AccountCatalogue::try_from(response.body)?
+                    None
                 }
-                Err(error) => match classify_preflight(&error) {
-                    PreflightFailure::CredentialInvalidOrInactive => {
-                        return Err(failure(
-                            "CREDENTIAL_INVALID_OR_INACTIVE environment=SANDBOX provider_code=40003",
-                        ));
-                    }
-                    PreflightFailure::InsufficientPermission => {
-                        return Err(failure(
-                            "CREDENTIAL_INSUFFICIENT_PERMISSION environment=SANDBOX provider_code=40002",
-                        ));
-                    }
-                    PreflightFailure::Other => return Err(Box::new(error)),
-                },
             };
-            let selected = select_accounts(&sandbox_accounts.accounts, AccountPurpose::GeneralRead);
+            let selected = select_accounts(
+                sandbox_accounts
+                    .as_ref()
+                    .map_or(&[][..], |catalogue| catalogue.accounts.as_slice()),
+                AccountPurpose::GeneralRead,
+            );
             if let Some(account) = selected.selected.first() {
                 let account_id = account.account_id.clone();
-                if let Some(body) = qualified(
+                let _ = qualified(
                     &mut ledger,
                     "GetSandboxPortfolio",
                     sandbox
@@ -873,10 +966,9 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                             currency: None,
                         })
                         .await,
-                )? {
-                    let _ = PortfolioState::try_from(body)?;
-                }
-                if let Some(body) = qualified(
+                    PortfolioState::try_from,
+                )?;
+                let _ = qualified(
                     &mut ledger,
                     "GetSandboxPositions",
                     sandbox
@@ -884,10 +976,9 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                             account_id: account_id.clone(),
                         })
                         .await,
-                )? {
-                    let _ = PositionsState::try_from(body)?;
-                }
-                if let Some(body) = qualified(
+                    PositionsState::try_from,
+                )?;
+                let _ = qualified(
                     &mut ledger,
                     "GetSandboxWithdrawLimits",
                     sandbox
@@ -895,10 +986,9 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                             account_id: account_id.clone(),
                         })
                         .await,
-                )? {
-                    let _ = WithdrawLimits::try_from(body)?;
-                }
-                if let Some(body) = qualified(
+                    WithdrawLimits::try_from,
+                )?;
+                let _ = qualified(
                     &mut ledger,
                     "GetSandboxOperations",
                     sandbox
@@ -910,9 +1000,8 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                             figi: None,
                         })
                         .await,
-                )? {
-                    let _ = canonical_legacy_operations(body)?;
-                }
+                    canonical_legacy_operations,
+                )?;
                 let history = OperationsPaginator::new(OperationsFilter {
                     account_id,
                     instrument_id: None,
@@ -932,6 +1021,19 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                     "GetSandboxOperationsByCursor",
                     pagination_result("GetSandboxOperationsByCursor", history)?,
                 )?;
+            } else if sandbox_accounts.is_none() {
+                for method in [
+                    "GetSandboxPositions",
+                    "GetSandboxOperations",
+                    "GetSandboxOperationsByCursor",
+                    "GetSandboxPortfolio",
+                    "GetSandboxWithdrawLimits",
+                ] {
+                    ledger.record(
+                        method,
+                        Evidence::BlockedByPrerequisite("GetSandboxAccounts failed".into()),
+                    )?;
+                }
             } else {
                 for method in [
                     "GetSandboxPositions",
@@ -952,13 +1054,41 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
     }
 
     record_deferred_rows(&mut ledger)?;
-    for (method, evidence) in ledger.finish()? {
+    let rows = ledger.finish()?;
+    let summary = QualificationSummary::from_rows(&rows);
+    for (method, evidence) in &rows {
         match evidence {
             Evidence::Qualified(detail) => println!("QUALIFIED {method}: {detail}"),
             Evidence::GatedUnavailable(detail) => {
                 println!("GATED/UNAVAILABLE {method}: {detail}")
             }
+            Evidence::BlockedByPrerequisite(detail) => {
+                println!("BLOCKED_BY_PREREQUISITE {method}: {detail}")
+            }
+            Evidence::Failed(failure) => println!(
+                "FAILED {method}: class={} grpc_status={:?} provider_code={} attempt={} tracking_id={} detail={}",
+                failure.class.wire_name(),
+                failure.grpc_status,
+                failure.provider_code.as_deref().unwrap_or("-"),
+                failure
+                    .attempt
+                    .map_or_else(|| "-".into(), |attempt| attempt.to_string()),
+                failure.tracking_id.as_deref().unwrap_or("-"),
+                failure.detail
+            ),
         }
     }
+    println!(
+        "COMPLETE SUMMARY qualified={} gated={} blocked={} failed={}",
+        summary.qualified.len(),
+        summary.gated.len(),
+        summary.blocked.len(),
+        summary.failed.len()
+    );
+    println!("QUALIFIED ROWS: {}", summary.qualified.join(", "));
+    println!("GATED ROWS: {}", summary.gated.join(", "));
+    println!("BLOCKED ROWS: {}", summary.blocked.join(", "));
+    println!("FAILED ROWS: {}", summary.failed.join(", "));
+    summary.ensure_success()?;
     Ok(())
 }

@@ -332,7 +332,7 @@ impl TInvestGrpcClient {
                 Ok(response) => return Ok(GrpcResponse::from_tonic(request_id, attempt, response)),
                 Err(status)
                     if attempt < self.config.retry_policy.max_attempts()
-                        && retryable_status(status.code()) =>
+                        && retryable_status(&status) =>
                 {
                     let delay = self.config.retry_policy.delay_for(attempt, request_id);
                     self.retry_observer.on_retry(&RetryEvent {
@@ -432,7 +432,7 @@ impl TInvestGrpcClient {
                 Ok(response) => return Ok(GrpcResponse::from_tonic(request_id, attempt, response)),
                 Err(status)
                     if attempt < self.config.retry_policy.max_attempts()
-                        && retryable_status(status.code()) =>
+                        && retryable_status(&status) =>
                 {
                     let delay = self.config.retry_policy.delay_for(attempt, request_id);
                     self.retry_observer.on_retry(&RetryEvent {
@@ -495,7 +495,7 @@ impl TInvestGrpcClient {
             let mut client = build();
             match dispatch(&mut client, request).await {
                 Ok(response) => return Ok(GrpcResponse::from_tonic(request_id, attempt, response)),
-                Err(status) if attempt < attempts && retryable_status(status.code()) => {
+                Err(status) if attempt < attempts && retryable_status(&status) => {
                     let delay = self.config.retry_policy.delay_for(attempt, request_id);
                     self.retry_observer.on_retry(&RetryEvent {
                         operation: RestOperation::SafeRead,
@@ -859,11 +859,20 @@ impl TInvestGrpcClient {
     }
 }
 
-fn retryable_status(code: Code) -> bool {
-    matches!(
-        code,
+fn retryable_status(status: &Status) -> bool {
+    if matches!(
+        status.code(),
         Code::Unavailable | Code::ResourceExhausted | Code::DeadlineExceeded
-    )
+    ) {
+        return true;
+    }
+    status.code() == Code::Internal
+        && matches!(
+            GrpcProviderError::from_status(status.clone())
+                .provider_code()
+                .as_deref(),
+            Some("70001" | "70002" | "70003")
+        )
 }
 
 macro_rules! safe_reads {
@@ -1255,6 +1264,24 @@ impl GrpcProviderError {
         let details = String::from_utf8_lossy(&self.details);
         digit_tokens(&details).any(|token| token == expected)
     }
+
+    #[must_use]
+    pub fn provider_code(&self) -> Option<String> {
+        if let Ok(detail) = v1::ErrorDetail::decode(self.details.as_slice())
+            && !detail.code.is_empty()
+        {
+            return Some(detail.code);
+        }
+        digit_tokens(&self.message)
+            .find(|token| token.len() == 5)
+            .map(str::to_owned)
+            .or_else(|| {
+                let details = String::from_utf8_lossy(&self.details);
+                digit_tokens(&details)
+                    .find(|token| token.len() == 5)
+                    .map(str::to_owned)
+            })
+    }
 }
 
 fn digit_tokens(value: &str) -> impl Iterator<Item = &str> {
@@ -1362,6 +1389,22 @@ mod tests {
             TInvestGrpcClient::sandbox(GrpcCredential::Production(token())),
             Err(GrpcConfigError::CredentialEnvironmentMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn documented_internal_safe_reads_have_bounded_retry() {
+        for provider_code in ["70001", "70002", "70003"] {
+            let status = Status::new(
+                Code::Internal,
+                format!("provider internal code {provider_code}"),
+            );
+            assert!(retryable_status(&status));
+        }
+        assert!(!retryable_status(&Status::new(
+            Code::Internal,
+            "provider internal code 79999",
+        )));
+        assert_eq!(GrpcConfig::sandbox().retry_policy.max_attempts(), 3);
     }
 
     #[tokio::test]

@@ -37,6 +37,10 @@ execution reads remain generated/inventoried but deferred; issue #9 never calls 
   credential/endpoint mismatch. `40003/UNAUTHENTICATED` is invalid/inactive credential;
   `40002/PERMISSION_DENIED` is insufficient scope. Only method-specific documented codes become
   gates; arbitrary provider errors fail qualification.
+- Safe unary reads retry documented transient/internal provider codes `70001`, `70002`, and `70003`
+  with existing bounded policy (three attempts by default). Mutations keep their separate retry
+  rules. Exhausted `INTERNAL` failures remain failures and retain gRPC status, provider code,
+  method, attempt count, and tracking ID; certificate or provider verification is never bypassed.
 - Account selection requests `ACCOUNT_STATUS_OPEN`, rejects unknown/new/closed/no-access, bank and
   special account types, and uses deterministic account IDs. Live probes use brokerage/IIS only;
   multi-account values and OperationsStream receive only validated IDs.
@@ -84,8 +88,13 @@ cargo test --locked -p vox-tinvest --test account_live -- --ignored --nocapture
 ```
 
 Credential preflight aborts once with `CREDENTIAL_INVALID_OR_INACTIVE` for provider `40003`; token
-contents never enter diagnostics. Final output contains exactly one `QUALIFIED` or contract-justified
-`GATED/UNAVAILABLE` result for each of 38 inventory rows. Sandbox-only acceptance qualifies every
+contents never enter diagnostics. All later safe rows use aggregate-first execution: independent
+rows continue after failures; account-dependent rows become `BLOCKED_BY_PREREQUISITE` when account
+discovery fails. Final output contains exactly one `QUALIFIED`, contract-justified
+`GATED/UNAVAILABLE`, `BLOCKED_BY_PREREQUISITE`, or `FAILED` result for each of 38 inventory rows,
+then a `COMPLETE SUMMARY` with counts and full method lists. Any `FAILED` row makes process exit
+nonzero after ledger emission. Persistent `GetBankAccounts` `70001/INTERNAL` is a provider failure,
+not a sandbox or permission gate; official sandbox contract supports this method. Sandbox-only acceptance qualifies every
 sandbox-supported ordinary/SandboxService safe read plus Portfolio/Positions/Operations stream ACK
 and ping; two prod-only reports emit `reason=ENVIRONMENT_UNSUPPORTED_SANDBOX`.
 
