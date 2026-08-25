@@ -50,6 +50,85 @@ pub const ACCOUNT_INVENTORY_METHODS: [&str; 38] = [
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QualificationMode {
+    SandboxOnly,
+    ProductionReadOnly,
+}
+
+impl QualificationMode {
+    #[must_use]
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::SandboxOnly => "SANDBOX_ONLY",
+            Self::ProductionReadOnly => "PRODUCTION_READ_ONLY",
+        }
+    }
+}
+
+pub fn select_qualification_mode(
+    explicit: Option<&str>,
+    production_token: bool,
+    sandbox_token: bool,
+) -> Result<QualificationMode, QualificationModeError> {
+    match explicit {
+        Some("SANDBOX_ONLY") if sandbox_token => Ok(QualificationMode::SandboxOnly),
+        Some("SANDBOX_ONLY") => Err(QualificationModeError::MissingSandboxToken),
+        Some("PRODUCTION_READ_ONLY") if production_token => {
+            Ok(QualificationMode::ProductionReadOnly)
+        }
+        Some("PRODUCTION_READ_ONLY") => Err(QualificationModeError::MissingProductionToken),
+        Some(value) => Err(QualificationModeError::UnknownMode(value.to_owned())),
+        None if production_token => Ok(QualificationMode::ProductionReadOnly),
+        None if sandbox_token => Ok(QualificationMode::SandboxOnly),
+        None => Err(QualificationModeError::NoCredential),
+    }
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum QualificationModeError {
+    #[error("SANDBOX_ONLY requires TINVEST_SANDBOX_TOKEN")]
+    MissingSandboxToken,
+    #[error("PRODUCTION_READ_ONLY requires TINVEST_TOKEN")]
+    MissingProductionToken,
+    #[error("unknown TINVEST_QUALIFICATION_ENV value: {0}")]
+    UnknownMode(String),
+    #[error("configure TINVEST_SANDBOX_TOKEN or TINVEST_TOKEN")]
+    NoCredential,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MethodEnvironment {
+    ProductionAndSandbox,
+    ProductionOnly,
+    SandboxOnly,
+}
+
+impl MethodEnvironment {
+    #[must_use]
+    pub const fn matrix_name(self) -> &'static str {
+        match self {
+            Self::ProductionAndSandbox => "PROD_AND_SANDBOX",
+            Self::ProductionOnly => "PROD",
+            Self::SandboxOnly => "SANDBOX",
+        }
+    }
+}
+
+#[must_use]
+pub fn method_environment(method: &str) -> Option<MethodEnvironment> {
+    if !ACCOUNT_INVENTORY_METHODS.contains(&method) {
+        return None;
+    }
+    if matches!(method, "GetBrokerReport" | "GetDividendsForeignIssuer") {
+        Some(MethodEnvironment::ProductionOnly)
+    } else if method.contains("Sandbox") {
+        Some(MethodEnvironment::SandboxOnly)
+    } else {
+        Some(MethodEnvironment::ProductionAndSandbox)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountPurpose {
     GeneralRead,
     Margin,
@@ -174,6 +253,8 @@ fn account_read_method(method: &str) -> bool {
             | "GetBrokerReport"
             | "GetDividendsForeignIssuer"
             | "GetOperationsByCursor"
+            | "PortfolioStream"
+            | "PositionsStream"
             | "OperationsStream"
             | "GetSandboxPortfolio"
             | "GetSandboxPositions"
@@ -346,6 +427,41 @@ mod tests {
             SandboxAvailability::AuthenticatedNoEligibleAccount
         );
         assert_eq!(sandbox_availability(true, 1), SandboxAvailability::Ready);
+    }
+
+    #[test]
+    fn sandbox_only_auto_selects_without_production_token() {
+        assert_eq!(
+            select_qualification_mode(None, false, true),
+            Ok(QualificationMode::SandboxOnly)
+        );
+        assert_eq!(
+            select_qualification_mode(Some("SANDBOX_ONLY"), false, true),
+            Ok(QualificationMode::SandboxOnly)
+        );
+        assert_eq!(
+            select_qualification_mode(Some("PRODUCTION_READ_ONLY"), false, true),
+            Err(QualificationModeError::MissingProductionToken)
+        );
+    }
+
+    #[test]
+    fn every_inventory_row_has_explicit_environment_support() {
+        for method in ACCOUNT_INVENTORY_METHODS {
+            assert!(method_environment(method).is_some(), "missing {method}");
+        }
+        assert_eq!(
+            method_environment("GetAccounts"),
+            Some(MethodEnvironment::ProductionAndSandbox)
+        );
+        assert_eq!(
+            method_environment("GetBrokerReport"),
+            Some(MethodEnvironment::ProductionOnly)
+        );
+        assert_eq!(
+            method_environment("GetSandboxAccounts"),
+            Some(MethodEnvironment::SandboxOnly)
+        );
     }
 
     #[test]

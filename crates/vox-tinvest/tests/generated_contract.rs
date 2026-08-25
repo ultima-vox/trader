@@ -188,6 +188,16 @@ fn account_read_side_matrix_matches_every_official_service_rpc() {
                     "inventory row missing {required}: {row}"
                 );
             }
+            let method = row["method"].as_str().expect("method");
+            let expected_environment =
+                vox_tinvest::account_qualification::method_environment(method)
+                    .expect("inventory method environment classification")
+                    .matrix_name();
+            assert_eq!(
+                row["environment"].as_str(),
+                Some(expected_environment),
+                "environment support drift for {method}"
+            );
             (
                 row["service"].as_str().expect("service").to_owned(),
                 row["method"].as_str().expect("method").to_owned(),

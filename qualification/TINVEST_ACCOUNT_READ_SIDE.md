@@ -44,9 +44,12 @@ execution reads remain generated/inventoried but deferred; issue #9 never calls 
   `PingDelaySettings`; supervisor validates subscription ACK, detects stale streams, applies
   bounded jittered reconnect, restores full subscription, uses bounded channel backpressure, and
   supports forced reconnect plus graceful stop.
-- Sandbox read parity covers accounts, portfolio, positions, withdraw limits, deprecated
-  operations compatibility, and cursor operations. Sandbox mutations and execution reads remain
-  deferred to owning issue.
+- `SANDBOX_ONLY` routes ordinary generated UsersService, OperationsService and all three
+  OperationsStreamService RPCs to `sandbox-invest-public-api.tbank.ru:443`, then also qualifies
+  SandboxService reads with same sandbox credential/account. Broker and foreign-income reports are
+  explicitly environment-gated because official matrix excludes them from sandbox.
+- Sandbox read parity covers accounts, portfolio, positions, withdraw limits, deprecated operations
+  compatibility, and cursor operations. Sandbox mutations/execution reads remain deferred.
 
 ## Offline gates
 
@@ -61,21 +64,30 @@ cargo test --locked --workspace --all-targets --all-features
 
 ## One final credentialed qualification
 
-Runner is read-only. `TINVEST_TOKEN` is production-only. `TINVEST_SANDBOX_TOKEN` is separate and
-optional; absence gates sandbox rows without an RPC. Sandbox methods run only after separate auth
-preflight and only when provider returns an existing sandbox account. Runner never creates/funds one.
+Runner is read-only. `TINVEST_TOKEN` is production-only; `TINVEST_SANDBOX_TOKEN` is sandbox-only.
+When only sandbox token exists, runner automatically selects `SANDBOX_ONLY`; no production token is
+required. Set `TINVEST_QUALIFICATION_ENV` to `SANDBOX_ONLY` or `PRODUCTION_READ_ONLY` for explicit
+selection. If both tokens exist and no override exists, production mode is selected. Selected
+credential preflight always targets selected endpoint. Runner never creates/funds sandbox account.
 
 ```powershell
-$env:TINVEST_TOKEN = '<read-only-capable token>'
-# Optional, separate token type issued for Sandbox:
 $env:TINVEST_SANDBOX_TOKEN = '<sandbox token>'
+cargo test --locked -p vox-tinvest --test account_live -- --ignored --nocapture
+```
+
+Optional production qualification:
+
+```powershell
+$env:TINVEST_TOKEN = '<read-only-capable production token>'
+$env:TINVEST_QUALIFICATION_ENV = 'PRODUCTION_READ_ONLY'
 cargo test --locked -p vox-tinvest --test account_live -- --ignored --nocapture
 ```
 
 Credential preflight aborts once with `CREDENTIAL_INVALID_OR_INACTIVE` for provider `40003`; token
 contents never enter diagnostics. Final output contains exactly one `QUALIFIED` or contract-justified
-`GATED/UNAVAILABLE` result for each of 38 inventory rows. OperationsStream proves exact eligible
-account ACK plus provider ping; idle stream remains legal.
+`GATED/UNAVAILABLE` result for each of 38 inventory rows. Sandbox-only acceptance qualifies every
+sandbox-supported ordinary/SandboxService safe read plus Portfolio/Positions/Operations stream ACK
+and ping; two prod-only reports emit `reason=ENVIRONMENT_UNSUPPORTED_SANDBOX`.
 
 Audit sources: pinned official protobuf plus current T-Bank Dev Portal token, sandbox/prod,
 UsersService, OperationsService, OperationsStream, report FAQ, and gRPC error-code pages.

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::io;
 use std::time::Duration;
@@ -8,8 +9,8 @@ use vox_tinvest::account::{
     PositionsState, ProviderTimestamp, UserInfo, UserTariff, WithdrawLimits,
 };
 use vox_tinvest::account_qualification::{
-    AccountPurpose, Evidence, PreflightFailure, QualificationLedger, classify_method_gate,
-    classify_preflight, select_accounts,
+    AccountPurpose, Evidence, PreflightFailure, QualificationLedger, QualificationMode,
+    classify_method_gate, classify_preflight, select_accounts, select_qualification_mode,
 };
 use vox_tinvest::generated::v1;
 use vox_tinvest::operations::{
@@ -22,11 +23,20 @@ use vox_tinvest::operations_stream::{
 };
 use vox_tinvest::reports::{BrokerReportState, ForeignIssuerReportState, ReportPageTraversal};
 use vox_tinvest::{
-    GrpcCredential, GrpcError, GrpcErrorKind, GrpcResponse, SecretToken, TInvestGrpcClient,
+    GrpcCredential, GrpcError, GrpcErrorKind, GrpcResponse, GrpcStreamError, SecretToken,
+    TInvestGrpcClient,
 };
 
 fn failure(message: impl Into<String>) -> Box<dyn Error> {
     Box::new(io::Error::other(message.into()))
+}
+
+fn optional_env(name: &str) -> Result<Option<String>, std::env::VarError> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 fn qualified<T>(
@@ -78,15 +88,6 @@ fn record_deferred_rows(ledger: &mut QualificationLedger) -> Result<(), Box<dyn 
         ledger.record(
             method,
             Evidence::GatedUnavailable("financial mutation; forbidden in issue #9".into()),
-        )?;
-    }
-    for method in ["PortfolioStream", "PositionsStream"] {
-        ledger.record(
-            method,
-            Evidence::GatedUnavailable(
-                "generated compatibility surface; OperationsStream supervisor is issue #9 target"
-                    .into(),
-            ),
         )?;
     }
     for method in [
@@ -165,6 +166,148 @@ fn pagination_result(
             },
             _ => Err(Box::new(failure)),
         },
+    }
+}
+
+fn exact_successful_accounts(
+    expected: &[String],
+    actual: impl IntoIterator<Item = (String, i32)>,
+) -> Result<Option<Evidence>, Box<dyn Error>> {
+    let expected = expected.iter().cloned().collect::<BTreeSet<_>>();
+    let mut observed = BTreeSet::new();
+    let mut unavailable = false;
+    for (account, status) in actual {
+        if !matches!(status, 1 | 2) {
+            return Err(failure(format!(
+                "stream subscription rejected account={account} status={status}"
+            )));
+        }
+        unavailable |= status == 2;
+        if !observed.insert(account) {
+            return Err(failure("stream subscription ACK repeated account"));
+        }
+    }
+    if observed != expected {
+        return Err(failure("stream subscription ACK account set mismatch"));
+    }
+    if unavailable {
+        Ok(Some(Evidence::GatedUnavailable(
+            "subscription status ACCOUNT_NOT_FOUND_OR_INSUFFICIENT_RIGHTS".into(),
+        )))
+    } else {
+        Ok(None)
+    }
+}
+
+fn stream_error(method: &'static str, error: GrpcStreamError) -> Result<Evidence, Box<dyn Error>> {
+    if let GrpcStreamError::Provider(provider) = &error
+        && let Some(gate) = classify_method_gate(method, provider)
+    {
+        return Ok(Evidence::GatedUnavailable(format!(
+            "{gate:?}; provider contract code"
+        )));
+    }
+    Err(Box::new(error))
+}
+
+async fn qualify_portfolio_stream(
+    client: &TInvestGrpcClient,
+    accounts: Vec<String>,
+) -> Result<Evidence, Box<dyn Error>> {
+    let mut stream = match client
+        .open_portfolio_stream(v1::PortfolioStreamRequest {
+            accounts: accounts.clone(),
+            ping_settings: Some(v1::PingDelaySettings {
+                ping_delay_ms: Some(5_000),
+            }),
+        })
+        .await
+    {
+        Ok(stream) => stream,
+        Err(error) => return report_gate_or_error("PortfolioStream", error),
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut subscribed = false;
+    loop {
+        let remaining = deadline
+            .checked_duration_since(tokio::time::Instant::now())
+            .ok_or_else(|| failure("PortfolioStream ACK+ping timeout"))?;
+        let message = match tokio::time::timeout(remaining, stream.message()).await? {
+            Ok(message) => message,
+            Err(error) => return stream_error("PortfolioStream", error),
+        };
+        let Some(message) = message else {
+            return Err(failure("PortfolioStream closed before ACK+ping"));
+        };
+        match message.payload {
+            Some(v1::portfolio_stream_response::Payload::Subscriptions(result)) => {
+                if let Some(gate) = exact_successful_accounts(
+                    &accounts,
+                    result
+                        .accounts
+                        .into_iter()
+                        .map(|item| (item.account_id, item.subscription_status)),
+                )? {
+                    return Ok(gate);
+                }
+                subscribed = true;
+            }
+            Some(v1::portfolio_stream_response::Payload::Ping(_)) if subscribed => {
+                return Ok(Evidence::Qualified("exact ACK + provider ping".into()));
+            }
+            _ => {}
+        }
+    }
+}
+
+async fn qualify_positions_stream(
+    client: &TInvestGrpcClient,
+    accounts: Vec<String>,
+) -> Result<Evidence, Box<dyn Error>> {
+    let mut stream = match client
+        .open_positions_stream(v1::PositionsStreamRequest {
+            accounts: accounts.clone(),
+            with_initial_positions: true,
+            ping_settings: Some(v1::PingDelaySettings {
+                ping_delay_ms: Some(5_000),
+            }),
+        })
+        .await
+    {
+        Ok(stream) => stream,
+        Err(error) => return report_gate_or_error("PositionsStream", error),
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut subscribed = false;
+    loop {
+        let remaining = deadline
+            .checked_duration_since(tokio::time::Instant::now())
+            .ok_or_else(|| failure("PositionsStream ACK+ping timeout"))?;
+        let message = match tokio::time::timeout(remaining, stream.message()).await? {
+            Ok(message) => message,
+            Err(error) => return stream_error("PositionsStream", error),
+        };
+        let Some(message) = message else {
+            return Err(failure("PositionsStream closed before ACK+ping"));
+        };
+        match message.payload {
+            Some(v1::positions_stream_response::Payload::Subscriptions(result)) => {
+                if let Some(gate) = exact_successful_accounts(
+                    &accounts,
+                    result
+                        .accounts
+                        .into_iter()
+                        .map(|item| (item.account_id, item.subscription_status)),
+                )? {
+                    return Ok(gate);
+                }
+                subscribed = true;
+            }
+            Some(v1::positions_stream_response::Payload::Ping(_)) if subscribed => {
+                return Ok(Evidence::Qualified("exact ACK + provider ping".into()));
+            }
+            _ => {}
+        }
     }
 }
 
@@ -300,11 +443,56 @@ async fn qualify_foreign_report(
     }
 }
 
+#[test]
+fn generated_stream_ack_requires_exact_eligible_account_set() {
+    let expected = vec!["broker-a".to_owned(), "broker-b".to_owned()];
+    assert_eq!(
+        exact_successful_accounts(
+            &expected,
+            [("broker-b".to_owned(), 1), ("broker-a".to_owned(), 1)]
+        )
+        .expect("exact ACK"),
+        None
+    );
+    assert!(exact_successful_accounts(&expected, [("broker-a".to_owned(), 1)]).is_err());
+    assert!(matches!(
+        exact_successful_accounts(
+            &expected,
+            [("broker-a".to_owned(), 1), ("broker-b".to_owned(), 2)]
+        ),
+        Ok(Some(Evidence::GatedUnavailable(_)))
+    ));
+}
+
 #[tokio::test]
-#[ignore = "requires TINVEST_TOKEN; optional TINVEST_SANDBOX_TOKEN; one read-only qualification"]
+#[ignore = "requires TINVEST_SANDBOX_TOKEN or TINVEST_TOKEN; one read-only qualification"]
 async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn Error>> {
-    let token = SecretToken::new(std::env::var("TINVEST_TOKEN")?)?;
-    let client = TInvestGrpcClient::production(GrpcCredential::Production(token))?;
+    let production_token = optional_env("TINVEST_TOKEN")?;
+    let sandbox_token = optional_env("TINVEST_SANDBOX_TOKEN")?;
+    let explicit_mode = optional_env("TINVEST_QUALIFICATION_ENV")?;
+    let mode = select_qualification_mode(
+        explicit_mode.as_deref(),
+        production_token.is_some(),
+        sandbox_token.is_some(),
+    )?;
+    let client = match mode {
+        QualificationMode::SandboxOnly => {
+            TInvestGrpcClient::sandbox(GrpcCredential::Sandbox(SecretToken::new(
+                sandbox_token
+                    .as_ref()
+                    .ok_or_else(|| failure("SANDBOX_ONLY token selection invariant"))?
+                    .clone(),
+            )?))?
+        }
+        QualificationMode::ProductionReadOnly => {
+            TInvestGrpcClient::production(GrpcCredential::Production(SecretToken::new(
+                production_token
+                    .as_ref()
+                    .ok_or_else(|| failure("PRODUCTION_READ_ONLY token selection invariant"))?
+                    .clone(),
+            )?))?
+        }
+    };
     let mut ledger = QualificationLedger::default();
 
     let accounts = match client
@@ -316,20 +504,25 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
         Ok(response) => {
             ledger.record(
                 "GetAccounts",
-                Evidence::Qualified("production credential preflight; OPEN accounts".into()),
+                Evidence::Qualified(format!(
+                    "{} credential preflight; OPEN accounts",
+                    mode.wire_name()
+                )),
             )?;
             AccountCatalogue::try_from(response.body)?
         }
         Err(error) => match classify_preflight(&error) {
             PreflightFailure::CredentialInvalidOrInactive => {
-                return Err(failure(
-                    "CREDENTIAL_INVALID_OR_INACTIVE environment=PRODUCTION provider_code=40003",
-                ));
+                return Err(failure(format!(
+                    "CREDENTIAL_INVALID_OR_INACTIVE environment={} provider_code=40003",
+                    mode.wire_name()
+                )));
             }
             PreflightFailure::InsufficientPermission => {
-                return Err(failure(
-                    "CREDENTIAL_INSUFFICIENT_PERMISSION environment=PRODUCTION provider_code=40002",
-                ));
+                return Err(failure(format!(
+                    "CREDENTIAL_INSUFFICIENT_PERMISSION environment={} provider_code=40002",
+                    mode.wire_name()
+                )));
             }
             PreflightFailure::Other => return Err(Box::new(error)),
         },
@@ -493,7 +686,16 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
         }
     }
 
-    if let Some(account) = reports.selected.first() {
+    if mode == QualificationMode::SandboxOnly {
+        for method in ["GetBrokerReport", "GetDividendsForeignIssuer"] {
+            ledger.record(
+                method,
+                Evidence::GatedUnavailable(
+                    "reason=ENVIRONMENT_UNSUPPORTED_SANDBOX; official environment matrix".into(),
+                ),
+            )?;
+        }
+    } else if let Some(account) = reports.selected.first() {
         ledger.record(
             "GetBrokerReport",
             qualify_broker_report(&client, &account.account_id, from, to).await?,
@@ -531,11 +733,21 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
         .map(|account| account.account_id.clone())
         .collect::<Vec<_>>();
     if stream_ids.is_empty() {
-        ledger.record(
-            "OperationsStream",
-            Evidence::GatedUnavailable("no open readable investment account".into()),
-        )?;
+        for method in ["PortfolioStream", "PositionsStream", "OperationsStream"] {
+            ledger.record(
+                method,
+                Evidence::GatedUnavailable("no open readable investment account".into()),
+            )?;
+        }
     } else {
+        ledger.record(
+            "PortfolioStream",
+            qualify_portfolio_stream(&client, stream_ids.clone()).await?,
+        )?;
+        ledger.record(
+            "PositionsStream",
+            qualify_positions_stream(&client, stream_ids.clone()).await?,
+        )?;
         let supervisor = OperationsStreamSupervisor::new(
             client.clone(),
             OperationsStreamConfig {
@@ -584,9 +796,10 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                     if classify_preflight(&error)
                         == PreflightFailure::CredentialInvalidOrInactive =>
                 {
-                    return Err(failure(
-                        "CREDENTIAL_INVALID_OR_INACTIVE environment=PRODUCTION provider_code=40003 stream=OperationsStream",
-                    ));
+                    return Err(failure(format!(
+                        "CREDENTIAL_INVALID_OR_INACTIVE environment={} provider_code=40003 stream=OperationsStream",
+                        mode.wire_name()
+                    )));
                 }
                 OperationsStreamEvent::Fault(error) => return Err(Box::new(error)),
                 _ => {}
@@ -594,8 +807,16 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
         }
     }
 
-    match std::env::var("TINVEST_SANDBOX_TOKEN") {
-        Err(std::env::VarError::NotPresent) => {
+    let sandbox_client = match mode {
+        QualificationMode::SandboxOnly => Some(client.clone()),
+        QualificationMode::ProductionReadOnly => sandbox_token
+            .map(SecretToken::new)
+            .transpose()?
+            .map(|token| TInvestGrpcClient::sandbox(GrpcCredential::Sandbox(token)))
+            .transpose()?,
+    };
+    match sandbox_client {
+        None => {
             for method in [
                 "GetSandboxAccounts",
                 "GetSandboxPositions",
@@ -612,10 +833,7 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                 )?;
             }
         }
-        Err(error) => return Err(Box::new(error)),
-        Ok(value) => {
-            let sandbox =
-                TInvestGrpcClient::sandbox(GrpcCredential::Sandbox(SecretToken::new(value)?))?;
+        Some(sandbox) => {
             let sandbox_accounts = match sandbox
                 .get_sandbox_accounts(v1::GetAccountsRequest {
                     status: Some(v1::AccountStatus::Open as i32),
