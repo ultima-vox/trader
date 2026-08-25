@@ -100,25 +100,31 @@ Unknown future `InstrumentType` values remain explicit and default to `TRADER_ON
 
 ## Accounts and user
 
+Issue #9 inventory is generated from official contract revision
+`762e720e27164213f41cac0b226c5698c2ae8199`; full 38-row machine matrix and per-method
+requirements live in `qualification/tinvest_account_contracts.json`.
+
 | Capability | T-Invest surface | Trader 2.0 status |
 | --- | --- | --- |
-| Accounts | `GetAccounts` | required |
-| User/tariff/qualification info | `GetInfo` | required |
-| Margin attributes | `GetMarginAttributes` | required |
-| Additional account values | `GetAccountValues` | required |
+| Accounts/bank accounts | `GetAccounts`, `GetBankAccounts` | generated production/sandbox contract; exact empty bank request; persistent sandbox `70001/INTERNAL` is retained as reproducible external provider limitation with retry/tracking evidence |
+| User/tariff/qualification info | `GetInfo`, `GetUserTariff` | supported: broker-authoritative capability facts |
+| Margin attributes | `GetMarginAttributes` | supported: optional economics preserved; unavailable values never become zero |
+| Additional account values | `GetAccountValues` | production: isolated eligible-account probes for both documented variants, raw enum and optional exact money preserved; sandbox: environment-data gate because official sandbox docs say additional indicators are not calculated |
+| Currency transfer/pay-in | `CurrencyTransfer`, `PayIn` | `DEFERRED_MUTATION`; generated/inventoried, never called by #9 |
 
 ## Portfolio, operations and reports
 
 | Capability | T-Invest surface | Trader 2.0 status |
 | --- | --- | --- |
-| Portfolio | `GetPortfolio` | required |
-| Positions | `GetPositions` | required |
-| Withdraw limits | `GetWithdrawLimits` | required |
-| Operations history | `GetOperationsByCursor` | required |
-| Legacy operations | `GetOperations` | deprecated-do-not-use |
-| Broker report | `GetBrokerReport` | required |
-| Foreign issuer dividend report | `GetDividendsForeignIssuer` | environment-limited |
-| Operations stream | `OperationsStreamService` | required where exposed |
+| Portfolio | `GetPortfolio` | supported: totals, provider metrics, identities, optional exact economics |
+| Positions | `GetPositions` | supported: cash/blocked cash, securities, futures, options |
+| Withdraw limits | `GetWithdrawLimits` | supported: currency, blocked, guarantee arrays |
+| Operations history | `GetOperationsByCursor` | supported: exhaustive stable-order paginator, cycle/contradiction protection, partial failure |
+| Legacy operations | `GetOperations` | compatibility only; production path uses cursor API |
+| Broker report | `GetBrokerReport` | supported typed generate/get/page lifecycle; capability gated where documented |
+| Foreign issuer dividend report | `GetDividendsForeignIssuer` | supported typed lifecycle; same-calendar-year generation constraint |
+| Operations stream | `OperationsStream` | supported: generated long-lived gRPC, ACK/ping/stale, bounded reconnect/resubscribe/backpressure |
+| Portfolio/positions streams | `PortfolioStream`, `PositionsStream` | generated compatibility surface; no duplicate #9 supervisor |
 
 ## Orders and execution
 

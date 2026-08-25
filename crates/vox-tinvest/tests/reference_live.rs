@@ -8,7 +8,9 @@ use vox_tinvest::reference::{
     consensus_asset_uids, forecast_instrument_candidates, fundamentals_request,
     insider_deals_request, instrument_by_uid,
 };
-use vox_tinvest::{GrpcError, GrpcErrorKind, GrpcResponse, SecretToken, TInvestGrpcClient};
+use vox_tinvest::{
+    GrpcCredential, GrpcError, GrpcErrorKind, GrpcResponse, SecretToken, TInvestGrpcClient,
+};
 
 fn qualified<T>(
     method: &'static str,
@@ -59,7 +61,7 @@ fn period() -> (Timestamp, Timestamp) {
 #[ignore = "requires TINVEST_TOKEN; complete generated-contract safe-read qualification"]
 async fn current_reference_surface_qualifies_over_grpc() -> Result<(), Box<dyn Error>> {
     let token = SecretToken::new(std::env::var("TINVEST_TOKEN")?)?;
-    let client = TInvestGrpcClient::production(token)?;
+    let client = TInvestGrpcClient::production(GrpcCredential::Production(token))?;
     let mut capabilities = CapabilityRegistry::default();
     let catalogue = catalogue_request();
     let (from, to) = period();

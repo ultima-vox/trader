@@ -1,4 +1,5 @@
 use prost::Message;
+use std::collections::BTreeSet;
 use vox_tinvest::TInvestGrpcClient;
 use vox_tinvest::generated::v1;
 use vox_tinvest::market_data::{MARKET_DATA_SERVICE_METHODS, MARKET_DATA_STREAM_METHODS};
@@ -6,6 +7,9 @@ use vox_tinvest::reference::INSTRUMENTS_SERVICE_METHODS;
 
 const INSTRUMENTS_PROTO: &str = include_str!("../proto/tinkoff/instruments.proto");
 const MARKET_DATA_PROTO: &str = include_str!("../proto/tinkoff/marketdata.proto");
+const USERS_PROTO: &str = include_str!("../proto/tinkoff/users.proto");
+const OPERATIONS_PROTO: &str = include_str!("../proto/tinkoff/operations.proto");
+const SANDBOX_PROTO: &str = include_str!("../proto/tinkoff/sandbox.proto");
 
 #[test]
 fn generated_contract_inventory_matches_all_43_capability_rows() {
@@ -135,6 +139,121 @@ fn generated_market_data_presence_and_unknown_enums_survive_round_trip() {
     assert_eq!(decoded.direction, 77_777);
 }
 
+#[test]
+fn account_read_side_matrix_matches_every_official_service_rpc() {
+    let matrix: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../qualification/tinvest_account_contracts.json"
+    ))
+    .expect("account contract matrix must be valid JSON");
+    assert_eq!(
+        matrix["revision"],
+        "762e720e27164213f41cac0b226c5698c2ae8199"
+    );
+    let rows = matrix["methods"]
+        .as_array()
+        .expect("account matrix methods must be an array");
+    assert_eq!(rows.len(), 38);
+
+    let official = rpc_inventory(USERS_PROTO)
+        .into_iter()
+        .chain(rpc_inventory(OPERATIONS_PROTO))
+        .chain(rpc_inventory(SANDBOX_PROTO))
+        .collect::<BTreeSet<_>>();
+    let inventoried = rows
+        .iter()
+        .map(|row| {
+            for required in [
+                "service",
+                "method",
+                "request",
+                "response",
+                "class",
+                "environment",
+                "requirements",
+                "identifiers",
+                "pagination",
+                "empty",
+                "constraints",
+                "adapter",
+                "state",
+                "routing",
+                "canonical",
+                "evidence",
+                "limitations",
+            ] {
+                assert!(
+                    row[required]
+                        .as_str()
+                        .is_some_and(|value| !value.is_empty()),
+                    "inventory row missing {required}: {row}"
+                );
+            }
+            let method = row["method"].as_str().expect("method");
+            let expected_environment =
+                vox_tinvest::account_qualification::method_environment(method)
+                    .expect("inventory method environment classification")
+                    .matrix_name();
+            assert_eq!(
+                row["environment"].as_str(),
+                Some(expected_environment),
+                "environment support drift for {method}"
+            );
+            (
+                row["service"].as_str().expect("service").to_owned(),
+                row["method"].as_str().expect("method").to_owned(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(inventoried.len(), rows.len(), "duplicate inventory row");
+    assert_eq!(
+        official, inventoried,
+        "official account RPC inventory drift"
+    );
+}
+
+fn rpc_inventory(proto: &str) -> Vec<(String, String)> {
+    let mut service = None;
+    let mut methods = Vec::new();
+    for line in proto.lines().map(str::trim) {
+        if let Some(name) = line.strip_prefix("service ") {
+            service = name.split_whitespace().next().map(str::to_owned);
+        } else if line == "}" {
+            service = None;
+        } else if let (Some(service), Some(method)) = (
+            service.as_ref(),
+            line.strip_prefix("rpc ")
+                .and_then(|rpc| rpc.split([' ', '(']).next()),
+        ) {
+            methods.push((service.clone(), method.to_owned()));
+        }
+    }
+    methods
+}
+
+#[test]
+fn generated_account_optionality_and_unknown_enums_survive_round_trip() {
+    let account = v1::Account {
+        r#type: 77_777,
+        status: 88_888,
+        access_level: 99_999,
+        ..Default::default()
+    };
+    let decoded = v1::Account::decode(account.encode_to_vec().as_slice())
+        .expect("generated account must decode");
+    assert_eq!(decoded.r#type, 77_777);
+    assert_eq!(decoded.status, 88_888);
+    assert_eq!(decoded.access_level, 99_999);
+    assert!(decoded.opened_date.is_none());
+    assert!(decoded.closed_date.is_none());
+
+    let operation = v1::OperationItem::default();
+    let decoded = v1::OperationItem::decode(operation.encode_to_vec().as_slice())
+        .expect("generated cursor operation must decode");
+    assert!(decoded.date.is_none());
+    assert!(decoded.payment.is_none());
+    assert!(decoded.price.is_none());
+}
+
 #[allow(dead_code)]
 fn adapter_exposes_every_unary_method(client: &TInvestGrpcClient) {
     drop(client.get_candles(v1::GetCandlesRequest::default()));
@@ -151,4 +270,26 @@ fn adapter_exposes_every_unary_method(client: &TInvestGrpcClient) {
         vec![vox_tinvest::market_data::get_my_subscriptions_request()],
     ));
     drop(client.open_market_data_server_stream(v1::MarketDataServerSideStreamRequest::default()));
+    drop(client.get_accounts(v1::GetAccountsRequest::default()));
+    drop(client.get_margin_attributes(v1::GetMarginAttributesRequest::default()));
+    drop(client.get_user_tariff(v1::GetUserTariffRequest::default()));
+    drop(client.get_info(v1::GetInfoRequest::default()));
+    drop(client.get_bank_accounts(v1::GetBankAccountsRequest::default()));
+    drop(client.get_account_values(v1::GetAccountValuesRequest::default()));
+    drop(client.get_operations(v1::OperationsRequest::default()));
+    drop(client.get_portfolio(v1::PortfolioRequest::default()));
+    drop(client.get_positions(v1::PositionsRequest::default()));
+    drop(client.get_withdraw_limits(v1::WithdrawLimitsRequest::default()));
+    drop(client.get_broker_report(v1::BrokerReportRequest::default()));
+    drop(client.get_dividends_foreign_issuer(v1::GetDividendsForeignIssuerRequest::default()));
+    drop(client.get_operations_by_cursor(v1::GetOperationsByCursorRequest::default()));
+    drop(client.open_portfolio_stream(v1::PortfolioStreamRequest::default()));
+    drop(client.open_positions_stream(v1::PositionsStreamRequest::default()));
+    drop(client.open_operations_stream(v1::OperationsStreamRequest::default()));
+    drop(client.get_sandbox_accounts(v1::GetAccountsRequest::default()));
+    drop(client.get_sandbox_portfolio(v1::PortfolioRequest::default()));
+    drop(client.get_sandbox_positions(v1::PositionsRequest::default()));
+    drop(client.get_sandbox_withdraw_limits(v1::WithdrawLimitsRequest::default()));
+    drop(client.get_sandbox_operations(v1::OperationsRequest::default()));
+    drop(client.get_sandbox_operations_by_cursor(v1::GetOperationsByCursorRequest::default()));
 }

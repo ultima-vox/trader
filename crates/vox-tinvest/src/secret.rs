@@ -23,6 +23,39 @@ impl SecretToken {
     }
 }
 
+/// Bearer credential bound to one provider environment before transport construction.
+#[derive(Clone, PartialEq, Eq)]
+pub enum GrpcCredential {
+    Production(SecretToken),
+    Sandbox(SecretToken),
+}
+
+impl GrpcCredential {
+    #[must_use]
+    pub const fn environment(&self) -> vox_domain::Environment {
+        match self {
+            Self::Production(_) => vox_domain::Environment::Live,
+            Self::Sandbox(_) => vox_domain::Environment::Sandbox,
+        }
+    }
+
+    pub(crate) fn token(&self) -> &SecretToken {
+        match self {
+            Self::Production(token) | Self::Sandbox(token) => token,
+        }
+    }
+}
+
+impl fmt::Debug for GrpcCredential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GrpcCredential")
+            .field("environment", &self.environment())
+            .field("token", &"[REDACTED]")
+            .finish()
+    }
+}
+
 impl fmt::Debug for SecretToken {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("SecretToken([REDACTED])")
@@ -84,5 +117,15 @@ mod tests {
             SecretToken::new("secret\r\nX-Evil: yes"),
             Err(SecretTokenError::InvalidBearerValue)
         );
+    }
+
+    #[test]
+    fn credential_debug_exposes_environment_but_never_secret() {
+        let credential = GrpcCredential::Sandbox(
+            SecretToken::new("sandbox-secret").unwrap_or_else(|error| panic!("{error}")),
+        );
+        let debug = format!("{credential:?}");
+        assert!(debug.contains("Sandbox"));
+        assert!(!debug.contains("sandbox-secret"));
     }
 }
