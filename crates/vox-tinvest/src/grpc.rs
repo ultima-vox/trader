@@ -18,8 +18,8 @@ use vox_domain::{Environment, MutationAuthorization};
 use crate::generated::v1;
 use crate::market_data::{MarketDataRequestError, validate_get_candles_request};
 use crate::{
-    NoopRetryObserver, RestOperation, RetryEvent, RetryObserver, RetryPolicy, RetryReason,
-    SecretToken,
+    GrpcCredential, NoopRetryObserver, RestOperation, RetryEvent, RetryObserver, RetryPolicy,
+    RetryReason, SecretToken,
 };
 
 pub const DEFAULT_GRPC_ENDPOINT: &str = "https://invest-public-api.tbank.ru:443";
@@ -170,6 +170,13 @@ pub enum GrpcConfigError {
     ZeroMessageLimit,
     #[error("failed to build verified native-root gRPC channel: {0}")]
     Channel(String),
+    #[error(
+        "gRPC credential environment {credential:?} does not match endpoint environment {endpoint:?}"
+    )]
+    CredentialEnvironmentMismatch {
+        credential: Environment,
+        endpoint: Environment,
+    },
 }
 
 #[derive(Clone)]
@@ -181,8 +188,14 @@ pub struct TInvestGrpcClient {
 }
 
 impl TInvestGrpcClient {
-    pub fn new(token: SecretToken, config: GrpcConfig) -> Result<Self, GrpcConfigError> {
+    pub fn new(credential: GrpcCredential, config: GrpcConfig) -> Result<Self, GrpcConfigError> {
         validate_endpoint(&config.endpoint)?;
+        if credential.environment() != config.environment {
+            return Err(GrpcConfigError::CredentialEnvironmentMismatch {
+                credential: credential.environment(),
+                endpoint: config.environment,
+            });
+        }
         let endpoint =
             Endpoint::from_shared(config.endpoint.as_str().trim_end_matches('/').to_owned())
                 .map_err(|error| GrpcConfigError::Channel(error.to_string()))?
@@ -192,19 +205,19 @@ impl TInvestGrpcClient {
                 .tls_config(ClientTlsConfig::new().with_native_roots())
                 .map_err(|error| GrpcConfigError::Channel(error.to_string()))?;
         Ok(Self {
-            token,
+            token: credential.token().clone(),
             config,
             channel: endpoint.connect_lazy(),
             retry_observer: Arc::new(NoopRetryObserver),
         })
     }
 
-    pub fn production(token: SecretToken) -> Result<Self, GrpcConfigError> {
-        Self::new(token, GrpcConfig::production())
+    pub fn production(credential: GrpcCredential) -> Result<Self, GrpcConfigError> {
+        Self::new(credential, GrpcConfig::production())
     }
 
-    pub fn sandbox(token: SecretToken) -> Result<Self, GrpcConfigError> {
-        Self::new(token, GrpcConfig::sandbox())
+    pub fn sandbox(credential: GrpcCredential) -> Result<Self, GrpcConfigError> {
+        Self::new(credential, GrpcConfig::sandbox())
     }
 
     #[must_use]
@@ -1230,7 +1243,7 @@ impl GrpcProviderError {
         }
     }
 
-    fn has_provider_code(&self, expected: &str) -> bool {
+    pub fn has_provider_code(&self, expected: &str) -> bool {
         if digit_tokens(&self.message).any(|token| token == expected) {
             return true;
         }
@@ -1322,13 +1335,42 @@ mod tests {
             GrpcCertificatePolicy::NativeRoots
         );
         assert_eq!(config.environment(), Environment::Live);
-        assert!(TInvestGrpcClient::new(token(), config).is_ok());
+        assert!(TInvestGrpcClient::new(GrpcCredential::Production(token()), config).is_ok());
+    }
+
+    #[test]
+    fn credentials_cannot_cross_production_and_sandbox_routes() {
+        assert!(matches!(
+            TInvestGrpcClient::new(GrpcCredential::Sandbox(token()), GrpcConfig::production()),
+            Err(GrpcConfigError::CredentialEnvironmentMismatch {
+                credential: Environment::Sandbox,
+                endpoint: Environment::Live,
+            })
+        ));
+        assert!(matches!(
+            TInvestGrpcClient::new(GrpcCredential::Production(token()), GrpcConfig::sandbox()),
+            Err(GrpcConfigError::CredentialEnvironmentMismatch {
+                credential: Environment::Live,
+                endpoint: Environment::Sandbox,
+            })
+        ));
+        assert!(matches!(
+            TInvestGrpcClient::production(GrpcCredential::Sandbox(token())),
+            Err(GrpcConfigError::CredentialEnvironmentMismatch { .. })
+        ));
+        assert!(matches!(
+            TInvestGrpcClient::sandbox(GrpcCredential::Production(token())),
+            Err(GrpcConfigError::CredentialEnvironmentMismatch { .. })
+        ));
     }
 
     #[tokio::test]
     async fn unary_requests_have_deadline_but_stream_requests_do_not() {
-        let client = TInvestGrpcClient::new(token(), GrpcConfig::production())
-            .unwrap_or_else(|error| panic!("client failed: {error}"));
+        let client = TInvestGrpcClient::new(
+            GrpcCredential::Production(token()),
+            GrpcConfig::production(),
+        )
+        .unwrap_or_else(|error| panic!("client failed: {error}"));
         let unary = client
             .unary_request((), Uuid::nil())
             .expect("unary request metadata");
@@ -1362,8 +1404,9 @@ mod tests {
 
     #[tokio::test]
     async fn mutation_environment_mismatch_fails_before_dispatch() {
-        let client = TInvestGrpcClient::new(token(), GrpcConfig::sandbox())
-            .unwrap_or_else(|error| panic!("client failed: {error}"));
+        let client =
+            TInvestGrpcClient::new(GrpcCredential::Sandbox(token()), GrpcConfig::sandbox())
+                .unwrap_or_else(|error| panic!("client failed: {error}"));
         let authorization = MutationGuard::with_live_mutations_enabled(Environment::Live)
             .authorize_mutation()
             .expect("explicit live authorization");
@@ -1379,8 +1422,11 @@ mod tests {
 
     #[tokio::test]
     async fn candle_source_with_limit_fails_before_dispatch() {
-        let client = TInvestGrpcClient::new(token(), GrpcConfig::production())
-            .unwrap_or_else(|error| panic!("client failed: {error}"));
+        let client = TInvestGrpcClient::new(
+            GrpcCredential::Production(token()),
+            GrpcConfig::production(),
+        )
+        .unwrap_or_else(|error| panic!("client failed: {error}"));
         let error = client
             .get_candles(v1::GetCandlesRequest {
                 candle_source_type: Some(v1::get_candles_request::CandleSource::Exchange as i32),
@@ -1416,8 +1462,11 @@ mod tests {
 
     #[tokio::test]
     async fn bidirectional_stream_requires_seed_requests_before_dispatch() {
-        let client = TInvestGrpcClient::new(token(), GrpcConfig::production())
-            .unwrap_or_else(|error| panic!("client failed: {error}"));
+        let client = TInvestGrpcClient::new(
+            GrpcCredential::Production(token()),
+            GrpcConfig::production(),
+        )
+        .unwrap_or_else(|error| panic!("client failed: {error}"));
         let error = match client.open_market_data_stream(16, Vec::new()).await {
             Err(error) => error,
             Ok(_) => panic!("empty bootstrap would trigger provider 80004"),

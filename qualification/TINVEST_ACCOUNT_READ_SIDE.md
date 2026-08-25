@@ -31,8 +31,15 @@ execution reads remain generated/inventoried but deferred; issue #9 never calls 
   OperationsStream emits every duplicate/update. Reconciliation key uses account, parent,
   instrument, operation type, and provider timestamp; occurrence revision is observable.
 - Report requests model generate/get oneofs. Page numbering is validated as zero-based.
-  Foreign-issuer generation cannot cross a calendar year. Permission/tariff/environment gates
-  remain typed capability outcomes; arbitrary provider errors fail qualification.
+  Foreign-issuer generation cannot cross a calendar year. Live qualification performs generation,
+  bounded `30058` task polling, authoritative task readback, and every page through termination.
+- Production and sandbox credentials have typed environment provenance. Client construction rejects
+  credential/endpoint mismatch. `40003/UNAUTHENTICATED` is invalid/inactive credential;
+  `40002/PERMISSION_DENIED` is insufficient scope. Only method-specific documented codes become
+  gates; arbitrary provider errors fail qualification.
+- Account selection requests `ACCOUNT_STATUS_OPEN`, rejects unknown/new/closed/no-access, bank and
+  special account types, and uses deterministic account IDs. Live probes use brokerage/IIS only;
+  multi-account values and OperationsStream receive only validated IDs.
 - OperationsStream has no unary deadline. Request supports multiple unique accounts and
   `PingDelaySettings`; supervisor validates subscription ACK, detects stale streams, applies
   bounded jittered reconnect, restores full subscription, uses bounded channel backpressure, and
@@ -54,18 +61,23 @@ cargo test --locked --workspace --all-targets --all-features
 
 ## One final credentialed qualification
 
-Runner is read-only for production. Report generation creates broker report tasks but performs no
-funding or order mutation. Sandbox methods run only when provider returns an existing sandbox
-account; runner never creates or funds one.
+Runner is read-only. `TINVEST_TOKEN` is production-only. `TINVEST_SANDBOX_TOKEN` is separate and
+optional; absence gates sandbox rows without an RPC. Sandbox methods run only after separate auth
+preflight and only when provider returns an existing sandbox account. Runner never creates/funds one.
 
 ```powershell
 $env:TINVEST_TOKEN = '<read-only-capable token>'
+# Optional, separate token type issued for Sandbox:
+$env:TINVEST_SANDBOX_TOKEN = '<sandbox token>'
 cargo test --locked -p vox-tinvest --test account_live -- --ignored --nocapture
 ```
 
-Expected output gives `QUALIFIED`, contract-justified `GATED/UNAVAILABLE`, or precise failure for
-every safe row. It also prints explicit deferred classifications for mutations/#10 execution
-methods. OperationsStream must prove successful multi-account subscription and broker ping; idle
-stream is valid and no financial operation is manufactured.
+Credential preflight aborts once with `CREDENTIAL_INVALID_OR_INACTIVE` for provider `40003`; token
+contents never enter diagnostics. Final output contains exactly one `QUALIFIED` or contract-justified
+`GATED/UNAVAILABLE` result for each of 38 inventory rows. OperationsStream proves exact eligible
+account ACK plus provider ping; idle stream remains legal.
+
+Audit sources: pinned official protobuf plus current T-Bank Dev Portal token, sandbox/prod,
+UsersService, OperationsService, OperationsStream, report FAQ, and gRPC error-code pages.
 
 Implementation environment had no `TINVEST_TOKEN` on 2026-08-25. No live result is claimed.

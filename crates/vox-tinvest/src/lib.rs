@@ -4,6 +4,7 @@ pub mod qualification;
 pub mod reference;
 
 pub mod account;
+pub mod account_qualification;
 pub mod canonical;
 pub mod generated;
 pub mod market_data;
@@ -32,7 +33,7 @@ pub use rest::{
 pub use retry::{
     NoopRetryObserver, RetryEvent, RetryObserver, RetryPolicy, RetryPolicyError, RetryReason,
 };
-pub use secret::{SecretToken, SecretTokenError};
+pub use secret::{GrpcCredential, SecretToken, SecretTokenError};
 pub use websocket::{
     AckKey, AcknowledgementError, AcknowledgementTracker, CertificatePolicy, ConnectionMetadata,
     DEFAULT_MARKET_DATA_STREAM_URL, DesiredSubscription, ProviderMessage, ReconnectPolicy,

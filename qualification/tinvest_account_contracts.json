@@ -7,7 +7,10 @@
     "errors": "typed gRPC status + provider details/tracking_id; permission, tariff, rate-limit and unavailable remain distinct",
     "operation_identity": "operation id and parent_operation_id are mutable provider facts, never durable database primary keys",
     "cursor": "GetOperationsByCursor limit defaults to 100, maximum 1000; use limit > 2; detect cursor cycles and contradictory has_next/next_cursor",
-    "reports": "oneof generate/get lifecycle; generated report pages are zero-based; foreign-income generation range stays within one calendar year",
+    "credentials": "TINVEST_TOKEN is production-only; TINVEST_SANDBOX_TOKEN is sandbox-only; 40003 UNAUTHENTICATED aborts preflight; 40002 PERMISSION_DENIED remains distinct capability evidence",
+    "accounts": "request OPEN accounts; downstream live probes require FULL_ACCESS or READ_ONLY plus brokerage or IIS type; closed/new/no-access/bank/special accounts are excluded so one account cannot poison unrelated qualification",
+    "reports": "oneof generate/get lifecycle; poll documented 30058 only; authoritative task readback; exhaust zero-based pages; foreign-income range stays within one calendar year and ends at least two working days before current date",
+    "gates": "method-specific documented provider code plus gRPC status only; arbitrary INVALID_ARGUMENT/NOT_FOUND/INTERNAL never becomes GATED",
     "stream": "server-streaming, no unary deadline; accounts may contain multiple IDs; ping settings supported; updates may repeat"
   },
   "methods": [

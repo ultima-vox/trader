@@ -28,27 +28,26 @@ pub enum CapabilityGate {
 /// Converts only unambiguous gRPC capability states. Other errors remain failures for callers to
 /// investigate; tariff/account-kind gates require a documented provider code and explicit variant.
 pub fn observe_documented_gate<T>(
+    method: &'static str,
     result: Result<T, GrpcError>,
 ) -> Result<CapabilityObservation<T>, GrpcError> {
     match result {
         Ok(value) => Ok(CapabilityObservation::Qualified(value)),
-        Err(GrpcError {
-            kind: crate::GrpcErrorKind::Provider(provider),
-            ..
-        }) if provider.code == tonic::Code::PermissionDenied => Ok(
-            CapabilityObservation::GatedUnavailable(CapabilityGate::Permission {
-                provider_code: None,
-            }),
-        ),
-        Err(GrpcError {
-            kind: crate::GrpcErrorKind::Provider(provider),
-            ..
-        }) if provider.code == tonic::Code::Unimplemented => Ok(
-            CapabilityObservation::GatedUnavailable(CapabilityGate::Environment {
-                provider_code: None,
-            }),
-        ),
-        Err(error) => Err(error),
+        Err(error) => match &error.kind {
+            crate::GrpcErrorKind::Provider(provider)
+                if matches!(
+                    crate::account_qualification::classify_method_gate(method, provider),
+                    Some(crate::account_qualification::CapabilityGate::InsufficientPermission)
+                ) =>
+            {
+                Ok(CapabilityObservation::GatedUnavailable(
+                    CapabilityGate::Permission {
+                        provider_code: Some("40002".to_owned()),
+                    },
+                ))
+            }
+            _ => Err(error),
+        },
     }
 }
 
@@ -152,6 +151,52 @@ pub struct ForeignIssuerReportRow {
     pub tax: Option<UnitsNano>,
     pub dividend_amount: Option<UnitsNano>,
     pub currency: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReportPageTraversal {
+    next_page: u32,
+    task_id: String,
+}
+
+impl ReportPageTraversal {
+    pub fn new(task_id: String) -> Result<Self, ReportError> {
+        Ok(Self {
+            next_page: 0,
+            task_id: required_text(task_id, "report.task_id")?,
+        })
+    }
+
+    #[must_use]
+    pub fn task_id(&self) -> &str {
+        &self.task_id
+    }
+
+    #[must_use]
+    pub const fn next_page(&self) -> u32 {
+        self.next_page
+    }
+
+    /// Provider pages and `pages_count` are zero-based: page 0 with pages_count 0 is complete.
+    pub fn observe(&mut self, page: i32, pages_count: i32) -> Result<bool, ReportError> {
+        let expected = i32::try_from(self.next_page).map_err(|_| ReportError::InvalidPage)?;
+        if page != expected || pages_count < page {
+            return Err(ReportError::InconsistentPagination {
+                expected,
+                actual: page,
+                pages_count,
+            });
+        }
+        if page == pages_count {
+            Ok(true)
+        } else {
+            self.next_page = self
+                .next_page
+                .checked_add(1)
+                .ok_or(ReportError::InvalidPage)?;
+            Ok(false)
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -420,6 +465,14 @@ pub enum ReportError {
     InvalidRange,
     #[error("foreign-issuer report range must stay within one calendar year")]
     ForeignIssuerRangeCrossesCalendarYear,
+    #[error(
+        "report pagination invalid: expected page {expected}, got {actual}, pages_count {pages_count}"
+    )]
+    InconsistentPagination {
+        expected: i32,
+        actual: i32,
+        pages_count: i32,
+    },
 }
 
 #[cfg(test)]
@@ -469,6 +522,22 @@ mod tests {
     }
 
     #[test]
+    fn report_lifecycle_requires_task_readback_and_all_pages() {
+        let mut traversal = ReportPageTraversal::new("task-1".into()).expect("task id");
+        assert_eq!(traversal.task_id(), "task-1");
+        assert_eq!(traversal.next_page(), 0);
+        assert!(!traversal.observe(0, 2).expect("page 0"));
+        assert!(!traversal.observe(1, 2).expect("page 1"));
+        assert!(traversal.observe(2, 2).expect("final page"));
+
+        let mut broken = ReportPageTraversal::new("task-2".into()).expect("task id");
+        assert!(matches!(
+            broken.observe(1, 2),
+            Err(ReportError::InconsistentPagination { .. })
+        ));
+    }
+
+    #[test]
     fn foreign_report_range_cannot_cross_year() {
         let from = ProviderTimestamp {
             seconds: 1_735_603_200,
@@ -501,13 +570,27 @@ mod tests {
             }),
         };
         assert!(matches!(
-            observe_documented_gate::<()>(Err(error(tonic::Code::PermissionDenied))),
+            observe_documented_gate::<()>(
+                "GetBrokerReport",
+                Err(GrpcError {
+                    kind: GrpcErrorKind::Provider(GrpcProviderError {
+                        code: tonic::Code::PermissionDenied,
+                        message: "provider code 40002".to_owned(),
+                        details: Vec::new(),
+                        tracking_id: None,
+                    }),
+                    ..error(tonic::Code::PermissionDenied)
+                })
+            ),
             Ok(CapabilityObservation::GatedUnavailable(
                 CapabilityGate::Permission { .. }
             ))
         ));
         assert_eq!(
-            observe_documented_gate::<()>(Err(error(tonic::Code::InvalidArgument))),
+            observe_documented_gate::<()>(
+                "GetBrokerReport",
+                Err(error(tonic::Code::InvalidArgument))
+            ),
             Err(error(tonic::Code::InvalidArgument))
         );
     }

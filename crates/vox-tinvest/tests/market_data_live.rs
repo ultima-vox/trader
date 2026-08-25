@@ -11,7 +11,7 @@ use vox_tinvest::market_data::{
     SubscriptionKind, get_my_subscriptions_request,
 };
 use vox_tinvest::reference::catalogue_request;
-use vox_tinvest::{SecretToken, TInvestGrpcClient};
+use vox_tinvest::{GrpcCredential, SecretToken, TInvestGrpcClient};
 
 fn period() -> (Timestamp, Timestamp) {
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
@@ -32,7 +32,7 @@ fn period() -> (Timestamp, Timestamp) {
 async fn complete_market_data_surface_qualifies_over_generated_grpc() -> Result<(), Box<dyn Error>>
 {
     let token = SecretToken::new(std::env::var("TINVEST_TOKEN")?)?;
-    let client = TInvestGrpcClient::production(token)?;
+    let client = TInvestGrpcClient::production(GrpcCredential::Production(token))?;
     let instrument_uid = resolve_market_data_uid(&client).await?;
     let (from, to) = period();
 
