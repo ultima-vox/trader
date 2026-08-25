@@ -28,13 +28,13 @@ from a CDN, and no Claude Design runtime or account is needed.
 
 | File | Role |
 | --- | --- |
-| `reference/vox-trader-design-system.reference.html` | **Canonical visual reference.** Self-contained export of the original Claude Design sheet. Generated output — read it, don't hand-edit it. |
-| `reference/index.html` | Layered reference sheet, hand-maintained, built on the CSS layers below. Extend this when adding components. |
+| `reference/vox-trader-design-system.reference.html` | Stable canonical viewing entry point. It loads the layered reference locally with no external runtime and should remain a stable path for tooling/bookmarks. |
+| `reference/index.html` | Layered visual reference, hand-maintained, built on the CSS layers below. Extend this when adding components. |
 | `tokens/`, `primitives/`, `components/`, `patterns/` | **Source of truth for implementation.** Hand-maintained CSS layers. |
 | `../../docs/design/*.md` | **Source of truth for rules.** Documentation beats any rendering. |
 
-Conflict resolution: docs > CSS layers > `index.html` > canonical export. The canonical
-export fixes the *intended visual result*; the docs fix the *rules*.
+Conflict resolution: docs > CSS layers > `index.html`. The stable reference entry point
+is only a launcher for the layered reference; it is not an independent design authority.
 
 ## Layers
 
