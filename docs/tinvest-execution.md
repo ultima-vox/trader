@@ -18,14 +18,20 @@ new RPC or omitted stream branch fails tests.
   stream evidence resolves them. Production authorization remains off by default and differs from
   sandbox authorization.
 - `vox-tinvest::execution_stream` owns bounded long-lived gRPC streams. No unary deadline is set.
-  It requires successful subscription ACK before events, checks exact account identities, detects
-  staleness, reconnects with bounded jitter/backoff, and restores subscriptions. Duplicate or
-  out-of-order provider events remain evidence; adapter neither invents order nor fill state.
+  It requires successful subscription ACK within a separate bounded timeout, but valid account
+  events and pings received before ACK do not close the stream. It checks exact account identities,
+  detects staleness, reconnects with bounded jitter/backoff, and restores subscriptions. Duplicate
+  or out-of-order provider events remain evidence; adapter neither invents order nor fill state.
 
 Native T-Invest trailing fields are always used. No market-data polling or synthetic trailing engine
 exists. Fixed stop-loss and take-profit are independent legs, each with distinct broker request ID.
 Provider trailing state, favorable extreme, execution price, stop identity and raw status remain
-available in canonical readback. Unsupported protection fails with explicit capability error.
+available in canonical readback. Generated proto and current provider schema encode trailing stops
+as `STOP_ORDER_TYPE_TAKE_PROFIT` plus `TAKE_PROFIT_TYPE_TRAILING`, typed indent/spread fields and
+currency price input. Omitted activation/spread remain absent. Vox policy requires
+`instant_execution=true` when activation price is omitted. Complete wire invariants are audited
+before dispatch, and redacted actual request shape is included in live failure evidence. Unsupported
+protection fails with explicit capability error.
 
 ## Nautilus boundary
 
@@ -54,6 +60,12 @@ Production credentials and production mutation qualification are prohibited. Run
 result for every inventory capability, clean every active test order/stop it created, then confirm
 cleanup by broker readback. `GATED/UNAVAILABLE` is valid only for documented sandbox capability,
 account, permission or deterministic-trigger limitations; arbitrary provider errors fail run.
+Sandbox mutations are paced below documented 200 unary requests/minute. Provider errors add a
+cooldown; rate-limit errors wait a complete reset window, preventing follow-on
+`RESOURCE_EXHAUSTED` noise. A correctly formed `PostSandboxOrder` returning documented generic
+`INTERNAL/70001` is recorded as `BLOCKED/PROVIDER` with status, provider code, attempt, tracking ID
+and redacted request shape. Mutation service is then latched off for qualification: no blind replay
+or unrelated mutation cascade occurs. Cleanup readback still runs.
 
 PowerShell command:
 
@@ -66,6 +78,7 @@ Runner reads no production-token variable and rejects any non-sandbox client. It
 sandbox account plus API-tradeable instrument from generated contracts, exercises unary order,
 async order, replacement, cancellation, broker idempotency, controlled ambiguous-dispatch guard,
 all supported stop/protection shapes, and both execution streams. Every row is printed as
-`QUALIFIED`, `GATED/UNAVAILABLE`, or `FAILED`. Cleanup always runs last, cancels qualification-created
-active orders/stops once, flattens observed test exposure, and fails unless authoritative readback
-confirms baseline resources plus zero net test lots.
+`QUALIFIED`, `GATED/UNAVAILABLE`, `BLOCKED/PROVIDER`, or `FAILED`. Provider-blocked completion returns
+a distinct qualification error, never an implementation-failure result. Cleanup always runs last,
+cancels qualification-created active orders/stops once, flattens observed test exposure, and fails
+unless authoritative readback confirms baseline resources plus zero net test lots.

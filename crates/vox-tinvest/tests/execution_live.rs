@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
+use std::fmt;
 use std::io;
 use std::time::Duration;
 
@@ -15,9 +16,11 @@ use vox_tinvest::execution::{
     CanonicalMaxLots, CanonicalOrderPrice, CanonicalOrderState, ProtectionRequestContext,
     ProtectionRequestIds, async_regular_order_request, cancel_order_request,
     cancel_stop_order_request, canonical_orders, canonical_stop_orders, protection_requests,
-    regular_order_request, replace_order_request,
+    regular_order_request, replace_order_request, stop_order_request_shape,
 };
-use vox_tinvest::execution_dispatch::{ExecutionMutationDispatcher, ExecutionRoute};
+use vox_tinvest::execution_dispatch::{
+    ExecutionDispatchError, ExecutionMutationDispatcher, ExecutionRoute,
+};
 use vox_tinvest::execution_qualification::{
     QualificationEvidence, SandboxQualificationLedger, qualify_ambiguous_dispatch_guard,
 };
@@ -25,7 +28,11 @@ use vox_tinvest::execution_stream::{
     ExecutionStreamConfig, ExecutionStreamEvent, ExecutionStreamKind, ExecutionStreamSupervisor,
 };
 use vox_tinvest::generated::v1;
-use vox_tinvest::{GrpcCredential, GrpcErrorKind, SecretToken, TInvestGrpcClient};
+use vox_tinvest::{GrpcCredential, GrpcError, GrpcErrorKind, SecretToken, TInvestGrpcClient};
+
+const SANDBOX_MUTATION_INTERVAL: Duration = Duration::from_millis(350);
+const PROVIDER_ERROR_COOLDOWN: Duration = Duration::from_secs(2);
+const RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 
 type BoxError = Box<dyn Error + Send + Sync>;
 
@@ -83,13 +90,26 @@ struct QualificationState {
     limit_order_id: Option<String>,
     limit_request_id: Option<String>,
     net_open_lots: i64,
+    provider_mutation_blocker: Option<String>,
 }
 
 struct SandboxRunner {
     client: TInvestGrpcClient,
     dispatcher: ExecutionMutationDispatcher<MemoryEvidenceStore>,
     state: QualificationState,
+    next_mutation_at: tokio::time::Instant,
 }
+
+#[derive(Clone, Debug)]
+struct ProviderBlocked(String);
+
+impl fmt::Display for ProviderBlocked {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl Error for ProviderBlocked {}
 
 impl SandboxRunner {
     fn new(client: TInvestGrpcClient) -> Result<Self, BoxError> {
@@ -102,7 +122,103 @@ impl SandboxRunner {
             client,
             dispatcher: ExecutionMutationDispatcher::new(MemoryEvidenceStore::default()),
             state: QualificationState::default(),
+            next_mutation_at: tokio::time::Instant::now(),
         })
+    }
+
+    fn require_mutation_service(&self) -> Result<(), BoxError> {
+        match &self.state.provider_mutation_blocker {
+            Some(evidence) => Err(Box::new(ProviderBlocked(format!(
+                "mutation dispatch suppressed after provider blocker; {evidence}"
+            )))),
+            None => Ok(()),
+        }
+    }
+
+    async fn wait_for_mutation_slot(&mut self) {
+        tokio::time::sleep_until(self.next_mutation_at).await;
+        self.next_mutation_at = tokio::time::Instant::now() + SANDBOX_MUTATION_INTERVAL;
+    }
+
+    async fn cooldown_after_provider_error(&mut self, error: &GrpcError) {
+        let cooldown = match &error.kind {
+            GrpcErrorKind::Provider(provider)
+                if provider.code == tonic::Code::ResourceExhausted =>
+            {
+                RATE_LIMIT_COOLDOWN
+            }
+            GrpcErrorKind::Provider(_) => PROVIDER_ERROR_COOLDOWN,
+            _ => return,
+        };
+        self.next_mutation_at = tokio::time::Instant::now() + cooldown;
+        tokio::time::sleep_until(self.next_mutation_at).await;
+    }
+
+    async fn handle_dispatch_error(
+        &mut self,
+        method: &'static str,
+        request_shape: String,
+        error: ExecutionDispatchError,
+    ) -> BoxError {
+        let Some(source) = dispatch_source(&error) else {
+            return Box::new(error);
+        };
+        let blocker = match &source.kind {
+            GrpcErrorKind::Provider(provider)
+                if method == "PostSandboxOrder"
+                    && provider.code == tonic::Code::Internal
+                    && provider.has_provider_code("70001") =>
+            {
+                Some(format!(
+                    "method={method}; grpc_status={:?}; provider_code=70001; attempt={}; tracking_id={}; request_shape={request_shape}; mutation_retry=not_attempted",
+                    provider.code,
+                    source.metadata.attempt,
+                    provider.tracking_id.as_deref().unwrap_or("missing"),
+                ))
+            }
+            _ => None,
+        };
+        self.cooldown_after_provider_error(source).await;
+        if let Some(evidence) = blocker {
+            self.state.provider_mutation_blocker = Some(evidence.clone());
+            Box::new(ProviderBlocked(evidence))
+        } else {
+            failure(format!(
+                "{error}; method={method}; request_shape={request_shape}"
+            ))
+        }
+    }
+
+    async fn handle_direct_mutation_error(
+        &mut self,
+        method: &'static str,
+        request_shape: String,
+        error: GrpcError,
+    ) -> BoxError {
+        let blocker = match &error.kind {
+            GrpcErrorKind::Provider(provider)
+                if method == "PostSandboxOrder"
+                    && provider.code == tonic::Code::Internal
+                    && provider.has_provider_code("70001") =>
+            {
+                Some(format!(
+                    "method={method}; grpc_status={:?}; provider_code=70001; attempt={}; tracking_id={}; request_shape={request_shape}; mutation_retry=not_attempted",
+                    provider.code,
+                    error.metadata.attempt,
+                    provider.tracking_id.as_deref().unwrap_or("missing"),
+                ))
+            }
+            _ => None,
+        };
+        self.cooldown_after_provider_error(&error).await;
+        if let Some(evidence) = blocker {
+            self.state.provider_mutation_blocker = Some(evidence.clone());
+            Box::new(ProviderBlocked(evidence))
+        } else {
+            failure(format!(
+                "{error}; method={method}; request_shape={request_shape}"
+            ))
+        }
     }
 
     async fn account_readiness(&mut self) -> Result<String, BoxError> {
@@ -307,6 +423,7 @@ impl SandboxRunner {
         quantity: i64,
         price: Option<FixedPoint>,
     ) -> Result<CanonicalOrderState, BoxError> {
+        self.require_mutation_service()?;
         let (account, instrument) = self.owned_context()?;
         let request_id = logical_id();
         let request = regular_order_request(&RegularOrderCommand {
@@ -320,7 +437,9 @@ impl SandboxRunner {
             time_in_force: (order_type == RegularOrderType::Limit).then_some(TimeInForce::Day),
             confirm_margin_trade: false,
         })?;
-        let acknowledged = self
+        let request_shape = regular_request_shape(&request);
+        self.wait_for_mutation_slot().await;
+        let acknowledged = match self
             .dispatcher
             .post_order(
                 &self.client,
@@ -328,7 +447,15 @@ impl SandboxRunner {
                 ExecutionRoute::Sandbox,
                 request,
             )
-            .await?;
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                return Err(self
+                    .handle_dispatch_error("PostSandboxOrder", request_shape, error)
+                    .await);
+            }
+        };
         self.state.logical_order_ids.insert(request_id.clone());
         let broker_id = nonempty(acknowledged.response.body.order_id)
             .ok_or_else(|| failure("PostSandboxOrder omitted broker order id"))?;
@@ -397,13 +524,16 @@ impl SandboxRunner {
     }
 
     async fn cancel_broker_order(&mut self, broker_id: &str) -> Result<(), BoxError> {
+        self.require_mutation_service()?;
         let (account, _) = self.owned_context()?;
         let request = cancel_order_request(&CancelOrderCommand {
             account_id: account,
             order_id: broker_id.to_owned(),
             order_id_kind: Some(ProviderOrderIdentityKind::BrokerOrder),
         })?;
-        self.dispatcher
+        self.wait_for_mutation_slot().await;
+        match self
+            .dispatcher
             .cancel_order(
                 &self.client,
                 authorization()?,
@@ -411,8 +541,17 @@ impl SandboxRunner {
                 ClientRequestId::new(logical_id())?,
                 request,
             )
-            .await?;
-        Ok(())
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(error) => Err(self
+                .handle_dispatch_error(
+                    "CancelSandboxOrder",
+                    "broker_order_id=present".into(),
+                    error,
+                )
+                .await),
+        }
     }
 
     async fn market_order_lifecycle(&mut self) -> Result<String, BoxError> {
@@ -453,6 +592,7 @@ impl SandboxRunner {
     }
 
     async fn limit_order_lifecycle(&mut self) -> Result<String, BoxError> {
+        self.require_mutation_service()?;
         let (_, instrument) = self.owned_context()?;
         let price = far_below(&instrument)?;
         let order = self
@@ -474,6 +614,7 @@ impl SandboxRunner {
     }
 
     async fn order_state_and_list(&self) -> Result<String, BoxError> {
+        self.require_mutation_service()?;
         let (account, _) = self.context()?;
         let broker_id = self
             .state
@@ -503,6 +644,7 @@ impl SandboxRunner {
     }
 
     async fn replace_lifecycle(&mut self) -> Result<String, BoxError> {
+        self.require_mutation_service()?;
         let (account, instrument) = self.owned_context()?;
         let existing = self
             .state
@@ -519,7 +661,8 @@ impl SandboxRunner {
             price: one_tick_higher(far_below(&instrument)?, instrument.tick)?,
             confirm_margin_trade: false,
         })?;
-        let response = self
+        self.wait_for_mutation_slot().await;
+        let response = match self
             .dispatcher
             .replace_order(
                 &self.client,
@@ -527,7 +670,19 @@ impl SandboxRunner {
                 ExecutionRoute::Sandbox,
                 request,
             )
-            .await?;
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                return Err(self
+                    .handle_dispatch_error(
+                        "ReplaceSandboxOrder",
+                        "quantity=1; price=present; order_id_type=EXCHANGE".into(),
+                        error,
+                    )
+                    .await);
+            }
+        };
         self.state.logical_order_ids.insert(replacement_id);
         self.state.limit_order_id = nonempty(response.response.body.order_id);
         let broker_id = self
@@ -539,6 +694,7 @@ impl SandboxRunner {
     }
 
     async fn cancel_lifecycle(&mut self) -> Result<String, BoxError> {
+        self.require_mutation_service()?;
         let broker_id = self
             .state
             .limit_order_id
@@ -566,6 +722,7 @@ impl SandboxRunner {
     }
 
     async fn async_order_lifecycle(&mut self) -> Result<String, BoxError> {
+        self.require_mutation_service()?;
         let (account, instrument) = self.owned_context()?;
         let request_id = logical_id();
         let request = async_regular_order_request(&RegularOrderCommand {
@@ -579,14 +736,28 @@ impl SandboxRunner {
             time_in_force: Some(TimeInForce::Day),
             confirm_margin_trade: false,
         })?;
-        self.dispatcher
+        self.wait_for_mutation_slot().await;
+        match self
+            .dispatcher
             .post_order_async(
                 &self.client,
                 authorization()?,
                 ExecutionRoute::Sandbox,
                 request,
             )
-            .await?;
+            .await
+        {
+            Ok(_) => {}
+            Err(error) => {
+                return Err(self
+                    .handle_dispatch_error(
+                        "PostSandboxOrderAsync",
+                        "quantity=1; order_type=LIMIT; price=present; time_in_force=DAY".into(),
+                        error,
+                    )
+                    .await);
+            }
+        }
         self.state.logical_order_ids.insert(request_id.clone());
         let mut state = None;
         let mut last_point_error = None;
@@ -644,6 +815,7 @@ impl SandboxRunner {
     }
 
     async fn broker_idempotency_evidence(&mut self) -> Result<String, BoxError> {
+        self.require_mutation_service()?;
         let (account, instrument) = self.owned_context()?;
         let request_id = logical_id();
         let request = regular_order_request(&RegularOrderCommand {
@@ -657,13 +829,23 @@ impl SandboxRunner {
             time_in_force: Some(TimeInForce::Day),
             confirm_margin_trade: false,
         })?;
-        let first = self
+        let request_shape = regular_request_shape(&request);
+        self.wait_for_mutation_slot().await;
+        let first = match self
             .client
             .post_sandbox_order(authorization()?, request.clone())
-            .await?
-            .body;
+            .await
+        {
+            Ok(value) => value.body,
+            Err(error) => {
+                return Err(self
+                    .handle_direct_mutation_error("PostSandboxOrder", request_shape.clone(), error)
+                    .await);
+            }
+        };
         let broker_id = nonempty(first.order_id)
             .ok_or_else(|| failure("idempotency response omitted broker identity"))?;
+        self.wait_for_mutation_slot().await;
         match self
             .client
             .post_sandbox_order(authorization()?, request)
@@ -673,11 +855,14 @@ impl SandboxRunner {
                 if matches!(
                     &error.kind,
                     GrpcErrorKind::Provider(provider) if provider.has_provider_code("30057")
-                ) => {}
+                ) =>
+            {
+                self.cooldown_after_provider_error(&error).await;
+            }
             Err(error) => {
-                return Err(failure(format!(
-                    "duplicate replay returned unexpected provider result: {error}"
-                )));
+                return Err(self
+                    .handle_direct_mutation_error("PostSandboxOrder", request_shape, error)
+                    .await);
             }
             Ok(_) => {
                 return Err(failure(
@@ -717,6 +902,7 @@ impl SandboxRunner {
     }
 
     async fn protection_lifecycle(&mut self, plan: ProtectionPlan) -> Result<String, BoxError> {
+        self.require_mutation_service()?;
         let (account, instrument) = self.owned_context()?;
         let requests = protection_requests(
             &plan,
@@ -739,7 +925,9 @@ impl SandboxRunner {
         let expected = requests.len();
         let mut broker_ids = Vec::with_capacity(expected);
         for request in requests {
-            let response = self
+            let request_shape = stop_order_request_shape(&request);
+            self.wait_for_mutation_slot().await;
+            let response = match self
                 .dispatcher
                 .post_stop_order(
                     &self.client,
@@ -747,7 +935,15 @@ impl SandboxRunner {
                     ExecutionRoute::Sandbox,
                     request,
                 )
-                .await?;
+                .await
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    return Err(self
+                        .handle_dispatch_error("PostSandboxStopOrder", request_shape, error)
+                        .await);
+                }
+            };
             broker_ids.push(
                 nonempty(response.response.body.stop_order_id)
                     .ok_or_else(|| failure("PostSandboxStopOrder omitted broker identity"))?,
@@ -773,7 +969,9 @@ impl SandboxRunner {
                 account_id: account.clone(),
                 broker_stop_order_id: broker_id.clone(),
             })?;
-            self.dispatcher
+            self.wait_for_mutation_slot().await;
+            match self
+                .dispatcher
                 .cancel_stop_order(
                     &self.client,
                     authorization()?,
@@ -781,7 +979,19 @@ impl SandboxRunner {
                     ClientRequestId::new(logical_id())?,
                     request,
                 )
-                .await?;
+                .await
+            {
+                Ok(_) => {}
+                Err(error) => {
+                    return Err(self
+                        .handle_dispatch_error(
+                            "CancelSandboxStopOrder",
+                            "broker_stop_order_id=present".into(),
+                            error,
+                        )
+                        .await);
+                }
+            }
         }
         let remaining = canonical_stop_orders(
             self.client
@@ -814,6 +1024,7 @@ impl SandboxRunner {
             ExecutionStreamConfig {
                 event_capacity: 32,
                 stale_timeout: Duration::from_secs(20),
+                subscription_ack_timeout: Duration::from_secs(15),
                 ping_delay_ms: 5_000,
                 ..ExecutionStreamConfig::default()
             },
@@ -871,11 +1082,13 @@ impl SandboxRunner {
                     order_id: order.order_id.clone(),
                     order_id_type: Some(v1::OrderIdType::Exchange as i32),
                 };
+                self.wait_for_mutation_slot().await;
                 if let Err(error) = self
                     .client
                     .cancel_sandbox_order(authorization()?, request)
                     .await
                 {
+                    self.cooldown_after_provider_error(&error).await;
                     cleanup_errors.push(format!("order {} cancel: {error}", order.order_id));
                 }
             }
@@ -892,11 +1105,13 @@ impl SandboxRunner {
                     account_id: account.clone(),
                     stop_order_id: stop.stop_order_id.clone(),
                 };
+                self.wait_for_mutation_slot().await;
                 if let Err(error) = self
                     .client
                     .cancel_sandbox_stop_order(authorization()?, request)
                     .await
                 {
+                    self.cooldown_after_provider_error(&error).await;
                     cleanup_errors.push(format!("stop {} cancel: {error}", stop.stop_order_id));
                 }
             }
@@ -981,6 +1196,27 @@ impl SandboxRunner {
 
 fn failure(message: impl Into<String>) -> BoxError {
     Box::new(io::Error::other(message.into()))
+}
+
+fn dispatch_source(error: &ExecutionDispatchError) -> Option<&GrpcError> {
+    match error {
+        ExecutionDispatchError::Rejected { source, .. }
+        | ExecutionDispatchError::UnknownAfterDispatch { source, .. } => Some(source),
+        _ => None,
+    }
+}
+
+fn regular_request_shape(request: &v1::PostOrderRequest) -> String {
+    format!(
+        "quantity={}; price_present={}; direction={}; order_type={}; time_in_force={:?}; price_type={}; instrument_id=present; account_id=present; order_id=uuid; confirm_margin_trade={}",
+        request.quantity,
+        request.price.is_some(),
+        request.direction,
+        request.order_type,
+        request.time_in_force,
+        request.price_type,
+        request.confirm_margin_trade,
+    )
 }
 
 fn nonempty(value: String) -> Option<String> {
@@ -1161,7 +1397,10 @@ fn protection_plan(
 fn evidence(result: Result<String, BoxError>) -> QualificationEvidence {
     match result {
         Ok(detail) => QualificationEvidence::Qualified(detail),
-        Err(error) => QualificationEvidence::Failed(error.to_string()),
+        Err(error) => match error.downcast_ref::<ProviderBlocked>() {
+            Some(blocker) => QualificationEvidence::ProviderBlocked(blocker.to_string()),
+            None => QualificationEvidence::Failed(error.to_string()),
+        },
     }
 }
 

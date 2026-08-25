@@ -86,6 +86,7 @@ pub fn qualify_ambiguous_dispatch_guard() -> Result<(), StoreError> {
 pub enum QualificationEvidence {
     Qualified(String),
     GatedUnavailable(String),
+    ProviderBlocked(String),
     Failed(String),
 }
 
@@ -94,6 +95,7 @@ impl QualificationEvidence {
         match self {
             Self::Qualified(detail) => format!("QUALIFIED {row}: {detail}"),
             Self::GatedUnavailable(reason) => format!("GATED/UNAVAILABLE {row}: {reason}"),
+            Self::ProviderBlocked(reason) => format!("BLOCKED/PROVIDER {row}: {reason}"),
             Self::Failed(reason) => format!("FAILED {row}: {reason}"),
         }
     }
@@ -143,10 +145,23 @@ impl SandboxQualificationLedger {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        if failed.is_empty() {
-            Ok(lines)
-        } else {
+        if !failed.is_empty() {
             Err(SandboxQualificationError::FailedRows(failed))
+        } else {
+            let blocked = SANDBOX_QUALIFICATION_ROWS
+                .iter()
+                .filter_map(|row| match self.evidence.get(*row) {
+                    Some(QualificationEvidence::ProviderBlocked(reason)) => {
+                        Some(format!("{row}: {reason}"))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if blocked.is_empty() {
+                Ok(lines)
+            } else {
+                Err(SandboxQualificationError::ProviderBlockedRows(blocked))
+            }
         }
     }
 }
@@ -161,6 +176,8 @@ pub enum SandboxQualificationError {
     MissingRows(Vec<&'static str>),
     #[error("sandbox qualification failed rows: {0:?}")]
     FailedRows(Vec<String>),
+    #[error("sandbox qualification blocked by provider rows: {0:?}")]
+    ProviderBlockedRows(Vec<String>),
 }
 
 #[cfg(test)]
@@ -198,5 +215,25 @@ mod tests {
     #[test]
     fn controlled_ambiguous_dispatch_fault_blocks_duplicate() {
         qualify_ambiguous_dispatch_guard().expect("fault harness");
+    }
+
+    #[test]
+    fn provider_blocker_is_not_reported_as_implementation_failure() {
+        let mut ledger = SandboxQualificationLedger::default();
+        for row in SANDBOX_QUALIFICATION_ROWS {
+            let evidence = if row == "market_order_lifecycle" {
+                QualificationEvidence::ProviderBlocked(
+                    "PostSandboxOrder INTERNAL/70001; tracking_id=provider-evidence".into(),
+                )
+            } else {
+                QualificationEvidence::Qualified("contract evidence".into())
+            };
+            ledger.record(row, evidence).expect("unique row");
+        }
+        assert!(matches!(
+            ledger.finish(),
+            Err(SandboxQualificationError::ProviderBlockedRows(rows))
+                if rows.len() == 1 && rows[0].contains("70001")
+        ));
     }
 }

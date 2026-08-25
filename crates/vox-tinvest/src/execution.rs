@@ -461,7 +461,7 @@ pub fn protection_requests(
                 )
             }
         };
-        requests.push(v1::PostStopOrderRequest {
+        let request = v1::PostStopOrderRequest {
             quantity: context.quantity_lots,
             price,
             stop_price,
@@ -474,12 +474,14 @@ pub fn protection_requests(
             exchange_order_type,
             take_profit_type,
             trailing_data,
-            price_type: v1::PriceType::Unspecified as i32,
+            price_type: v1::PriceType::Currency as i32,
             order_id: request_id.to_owned(),
             confirm_margin_trade: context.confirm_margin_trade,
             instant_execution,
             ..Default::default()
-        });
+        };
+        audit_stop_order_request(&request)?;
+        requests.push(request);
     }
     if let Some(take_profit) = &plan.take_profit {
         let request_id = context.request_ids.take_profit.as_deref().ok_or(
@@ -513,7 +515,7 @@ fn take_profit_request(
         .trailing
         .map(|distance| trailing_request(distance, None))
         .transpose()?;
-    Ok(v1::PostStopOrderRequest {
+    let request = v1::PostStopOrderRequest {
         quantity: context.quantity_lots,
         price: protection.limit_price.map(quotation).transpose()?,
         stop_price: protection.trigger_price.map(quotation).transpose()?,
@@ -534,12 +536,135 @@ fn take_profit_request(
             v1::TakeProfitType::Regular as i32
         },
         trailing_data,
-        price_type: v1::PriceType::Unspecified as i32,
+        price_type: v1::PriceType::Currency as i32,
         order_id: request_id.to_owned(),
         confirm_margin_trade: context.confirm_margin_trade,
         instant_execution: None,
         ..Default::default()
-    })
+    };
+    audit_stop_order_request(&request)?;
+    Ok(request)
+}
+
+/// Verifies complete generated `PostStopOrderRequest` invariants before provider dispatch.
+/// This follows proto presence semantics: omitted activation/spread remain `None`.
+#[allow(deprecated)]
+pub fn audit_stop_order_request(
+    request: &v1::PostStopOrderRequest,
+) -> Result<(), ExecutionValidationError> {
+    positive_quantity(request.quantity)?;
+    validate_text("account_id", &request.account_id)?;
+    validate_text("instrument_id", &request.instrument_id)?;
+    validate_request_id(&request.order_id)?;
+    if request.figi.is_some() {
+        return Err(ExecutionValidationError::InvalidStopWire("deprecated_figi"));
+    }
+    if !matches!(
+        v1::StopOrderDirection::try_from(request.direction),
+        Ok(v1::StopOrderDirection::Buy) | Ok(v1::StopOrderDirection::Sell)
+    ) {
+        return Err(ExecutionValidationError::InvalidStopWire("direction"));
+    }
+    match v1::StopOrderExpirationType::try_from(request.expiration_type) {
+        Ok(v1::StopOrderExpirationType::GoodTillCancel) if request.expire_date.is_none() => {}
+        Ok(v1::StopOrderExpirationType::GoodTillDate)
+            if request
+                .expire_date
+                .as_ref()
+                .is_some_and(|value| (0..1_000_000_000).contains(&value.nanos)) => {}
+        _ => return Err(ExecutionValidationError::InvalidStopWire("expiration")),
+    }
+    if let Some(price) = &request.price {
+        positive_wire_quotation("price", price)?;
+    }
+    if let Some(stop_price) = &request.stop_price {
+        positive_wire_quotation("stop_price", stop_price)?;
+    }
+    let trailing = request.take_profit_type == v1::TakeProfitType::Trailing as i32;
+    if request.price_type != v1::PriceType::Currency as i32 {
+        return Err(ExecutionValidationError::InvalidStopWire("price_type"));
+    }
+    if request.instant_execution.is_some() && !trailing {
+        return Err(ExecutionValidationError::InvalidStopWire(
+            "instant_execution_without_trailing",
+        ));
+    }
+    if !trailing {
+        if request.trailing_data.is_some() {
+            return Err(ExecutionValidationError::InvalidStopWire(
+                "trailing_data_without_trailing",
+            ));
+        }
+        return Ok(());
+    }
+    if request.stop_order_type != v1::StopOrderType::TakeProfit as i32 {
+        return Err(ExecutionValidationError::InvalidStopWire(
+            "trailing_stop_order_type",
+        ));
+    }
+    if request.exchange_order_type != v1::ExchangeOrderType::Market as i32
+        || request.price.is_some()
+    {
+        return Err(ExecutionValidationError::InvalidStopWire(
+            "trailing_exchange_order",
+        ));
+    }
+    if request.stop_price.is_none() && request.instant_execution != Some(true) {
+        return Err(ExecutionValidationError::TrailingActivationRequired);
+    }
+    let data = request
+        .trailing_data
+        .as_ref()
+        .ok_or(ExecutionValidationError::InvalidStopWire("trailing_data"))?;
+    if data.indent.is_none()
+        || !matches!(
+            v1::TrailingValueType::try_from(data.indent_type),
+            Ok(v1::TrailingValueType::TrailingValueAbsolute)
+                | Ok(v1::TrailingValueType::TrailingValueRelative)
+        )
+    {
+        return Err(ExecutionValidationError::InvalidStopWire("trailing_indent"));
+    }
+    positive_wire_quotation(
+        "trailing_indent",
+        data.indent.as_ref().expect("checked above"),
+    )?;
+    if data.spread.is_some()
+        != matches!(
+            v1::TrailingValueType::try_from(data.spread_type),
+            Ok(v1::TrailingValueType::TrailingValueAbsolute)
+                | Ok(v1::TrailingValueType::TrailingValueRelative)
+        )
+    {
+        return Err(ExecutionValidationError::InvalidStopWire("trailing_spread"));
+    }
+    if let Some(spread) = &data.spread {
+        positive_wire_quotation("trailing_spread", spread)?;
+    }
+    Ok(())
+}
+
+/// Redacted wire evidence for live qualification failures.
+#[must_use]
+pub fn stop_order_request_shape(request: &v1::PostStopOrderRequest) -> String {
+    let trailing = request.trailing_data.as_ref();
+    format!(
+        "quantity={}; price={:?}; stop_price={:?}; direction={}; expiration_type={}; stop_order_type={}; exchange_order_type={}; take_profit_type={}; trailing_indent={:?}; trailing_indent_type={:?}; trailing_spread={:?}; trailing_spread_type={:?}; price_type={}; instant_execution={:?}",
+        request.quantity,
+        request.price,
+        request.stop_price,
+        request.direction,
+        request.expiration_type,
+        request.stop_order_type,
+        request.exchange_order_type,
+        request.take_profit_type,
+        trailing.and_then(|value| value.indent.as_ref()),
+        trailing.map(|value| value.indent_type),
+        trailing.and_then(|value| value.spread.as_ref()),
+        trailing.map(|value| value.spread_type),
+        request.price_type,
+        request.instant_execution,
+    )
 }
 
 fn trailing_request(
@@ -936,6 +1061,14 @@ fn positive_fixed(field: &'static str, value: FixedPoint) -> Result<(), Executio
         Err(ExecutionValidationError::NonPositive(field))
     }
 }
+fn positive_wire_quotation(
+    field: &'static str,
+    value: &v1::Quotation,
+) -> Result<(), ExecutionValidationError> {
+    let value = FixedPoint::from_units_nano(value.units, value.nano)
+        .map_err(|_| ExecutionValidationError::InvalidStopWire(field))?;
+    positive_fixed(field, value)
+}
 fn quotation(value: FixedPoint) -> Result<v1::Quotation, ExecutionValidationError> {
     positive_fixed("price/distance", value)?;
     let (units, nano) = value.units_nano();
@@ -1023,6 +1156,8 @@ pub enum ExecutionValidationError {
     MissingTakeProfitTrigger,
     #[error("trailing stop requires activation price or instant execution")]
     TrailingActivationRequired,
+    #[error("invalid generated stop-order wire invariant: {0}")]
+    InvalidStopWire(&'static str),
     #[error("provider timestamp is invalid")]
     Timestamp,
     #[error("exact value exceeds provider int64 units")]
@@ -1117,7 +1252,29 @@ mod tests {
             requests[0].take_profit_type,
             v1::TakeProfitType::Trailing as i32
         );
-        assert!(requests[0].trailing_data.is_some());
+        assert_eq!(
+            requests[0].stop_order_type,
+            v1::StopOrderType::TakeProfit as i32
+        );
+        assert_eq!(
+            requests[0].exchange_order_type,
+            v1::ExchangeOrderType::Market as i32
+        );
+        assert_eq!(requests[0].price_type, v1::PriceType::Currency as i32);
+        assert!(requests[0].price.is_none());
+        assert!(requests[0].stop_price.is_none());
+        assert_eq!(requests[0].instant_execution, Some(true));
+        let trailing = requests[0].trailing_data.as_ref().expect("trailing data");
+        assert_eq!(trailing.indent, Some(quotation(fp(5)).expect("quotation")));
+        assert_eq!(
+            trailing.indent_type,
+            v1::TrailingValueType::TrailingValueRelative as i32
+        );
+        assert!(trailing.spread.is_none());
+        assert_eq!(
+            trailing.spread_type,
+            v1::TrailingValueType::TrailingValueUnspecified as i32
+        );
         assert_eq!(
             requests[1].take_profit_type,
             v1::TakeProfitType::Regular as i32
@@ -1156,6 +1313,8 @@ mod tests {
             fixed[0].take_profit_type,
             v1::TakeProfitType::Unspecified as i32
         );
+        assert_eq!(fixed[0].price_type, v1::PriceType::Currency as i32);
+        assert_eq!(fixed[0].instant_execution, None);
 
         let take_profit = protection_requests(
             &ProtectionPlan {
@@ -1193,6 +1352,69 @@ mod tests {
         assert_eq!(
             invalid_trailing,
             Err(ExecutionValidationError::TrailingActivationRequired)
+        );
+    }
+
+    #[test]
+    fn trailing_wire_audit_covers_presence_types_and_activation_modes() {
+        let request = protection_requests(
+            &ProtectionPlan {
+                stop_loss: Some(StopLossProtection::Trailing {
+                    distance: TrailingDistance {
+                        value: fp(7),
+                        mode: TrailingDistanceMode::AbsolutePrice,
+                    },
+                    activation_price: Some(fp(90)),
+                    protective_spread: Some(TrailingDistance {
+                        value: fp(1),
+                        mode: TrailingDistanceMode::RelativePercent,
+                    }),
+                    instant_execution: Some(false),
+                }),
+                take_profit: None,
+            },
+            &ProtectionRequestContext {
+                account_id: "account".into(),
+                instrument_id: "instrument".into(),
+                quantity_lots: 1,
+                position_side: PositionSide::Long,
+                expire_at: None,
+                confirm_margin_trade: false,
+                request_ids: ProtectionRequestIds {
+                    stop_loss: Some("550e8400-e29b-41d4-a716-446655440010".into()),
+                    take_profit: None,
+                },
+            },
+        )
+        .expect("absolute trailing")
+        .remove(0);
+        assert_eq!(request.stop_price, Some(quotation(fp(90)).expect("quote")));
+        assert_eq!(request.instant_execution, Some(false));
+        let trailing = request.trailing_data.as_ref().expect("trailing data");
+        assert_eq!(
+            trailing.indent_type,
+            v1::TrailingValueType::TrailingValueAbsolute as i32
+        );
+        assert_eq!(trailing.spread, Some(quotation(fp(1)).expect("quote")));
+        assert_eq!(
+            trailing.spread_type,
+            v1::TrailingValueType::TrailingValueRelative as i32
+        );
+        assert!(audit_stop_order_request(&request).is_ok());
+
+        let mut malformed = request.clone();
+        malformed.trailing_data.as_mut().expect("trailing").spread = None;
+        assert_eq!(
+            audit_stop_order_request(&malformed),
+            Err(ExecutionValidationError::InvalidStopWire("trailing_spread"))
+        );
+        let mut malformed = request;
+        malformed.stop_order_type = v1::StopOrderType::StopLoss as i32;
+        assert_eq!(
+            audit_stop_order_request(&malformed),
+            Err(ExecutionValidationError::InvalidStopWire(
+                "trailing_stop_order_type"
+            ))
         );
     }
 

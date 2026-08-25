@@ -7,7 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use thiserror::Error;
 use tokio::sync::{mpsc, watch};
-use tokio::time::timeout;
+use tokio::time::{Instant, sleep_until, timeout};
 use uuid::Uuid;
 
 use crate::execution::{
@@ -31,6 +31,7 @@ pub enum ExecutionStreamKind {
 pub struct ExecutionStreamConfig {
     pub event_capacity: usize,
     pub stale_timeout: Duration,
+    pub subscription_ack_timeout: Duration,
     pub reconnect_policy: RetryPolicy,
     pub ping_delay_ms: i32,
 }
@@ -40,6 +41,7 @@ impl Default for ExecutionStreamConfig {
         Self {
             event_capacity: 1_024,
             stale_timeout: Duration::from_secs(150),
+            subscription_ack_timeout: Duration::from_secs(30),
             reconnect_policy: RetryPolicy::default(),
             ping_delay_ms: DEFAULT_EXECUTION_PING_DELAY_MS,
         }
@@ -53,6 +55,9 @@ impl ExecutionStreamConfig {
         }
         if self.stale_timeout.is_zero() {
             return Err(ExecutionStreamError::ZeroStaleTimeout);
+        }
+        if self.subscription_ack_timeout.is_zero() {
+            return Err(ExecutionStreamError::ZeroSubscriptionAckTimeout);
         }
         if !(MIN_EXECUTION_PING_DELAY_MS..=MAX_EXECUTION_PING_DELAY_MS)
             .contains(&self.ping_delay_ms)
@@ -295,8 +300,15 @@ impl ExecutionStreamSupervisor {
                 return;
             }
             let mut subscribed = false;
+            let subscription_deadline = Instant::now() + self.config.subscription_ack_timeout;
             loop {
                 tokio::select! {
+                    () = sleep_until(subscription_deadline), if !subscribed => {
+                        failed_attempts = failed_attempts.saturating_add(1);
+                        let error = ExecutionStreamError::SubscriptionAckTimeout;
+                        let _ = events.send(ExecutionStreamEvent::Fault(error)).await;
+                        break;
+                    }
                     changed = stop.changed() => {
                         if changed.is_err() || *stop.borrow() {
                             let _ = events.send(ExecutionStreamEvent::Stopped).await;
@@ -374,7 +386,6 @@ fn process_response(
             }
             *subscribed = true;
         }
-        _ if !*subscribed => return Err(ExecutionStreamError::EventBeforeSubscription),
         CanonicalExecutionStreamEvent::Trades(batch) => {
             if batch
                 .account_id
@@ -426,6 +437,8 @@ pub enum ExecutionStreamError {
     ZeroCapacity,
     #[error("execution stream stale timeout must be positive")]
     ZeroStaleTimeout,
+    #[error("execution stream subscription ACK timeout must be positive")]
+    ZeroSubscriptionAckTimeout,
     #[error("execution stream ping delay must be within 5000..=120000 ms")]
     InvalidPingDelay,
     #[error("execution stream requires at least one account")]
@@ -444,8 +457,8 @@ pub enum ExecutionStreamError {
     Closed,
     #[error("execution stream subscription rejected with status {status}")]
     SubscriptionRejected { status: i32 },
-    #[error("execution event arrived before subscription acknowledgement")]
-    EventBeforeSubscription,
+    #[error("execution stream subscription ACK timed out")]
+    SubscriptionAckTimeout,
     #[error("execution stream delivered an unsubscribed account identity")]
     UnexpectedAccountIdentity,
     #[error("execution connector returned response for wrong stream")]
@@ -469,7 +482,8 @@ impl ExecutionStreamError {
             ),
             Self::Stream(GrpcStreamError::NoActiveSubscriptions(_))
             | Self::Stale
-            | Self::Closed => true,
+            | Self::Closed
+            | Self::SubscriptionAckTimeout => true,
             _ => false,
         }
     }
@@ -478,6 +492,28 @@ impl ExecutionStreamError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct PendingConnector;
+    struct PendingConnection;
+
+    #[async_trait]
+    impl ExecutionStreamConnector for PendingConnector {
+        async fn connect(
+            &self,
+            _kind: ExecutionStreamKind,
+            _accounts: Vec<String>,
+            _ping_delay_ms: i32,
+        ) -> Result<Box<dyn ExecutionStreamConnection>, ExecutionStreamError> {
+            Ok(Box::new(PendingConnection))
+        }
+    }
+
+    #[async_trait]
+    impl ExecutionStreamConnection for PendingConnection {
+        async fn message(&mut self) -> Result<Option<ExecutionWireResponse>, ExecutionStreamError> {
+            std::future::pending().await
+        }
+    }
 
     fn subscription(accounts: Vec<String>) -> ExecutionWireResponse {
         ExecutionWireResponse::Trades(Box::new(v1::TradesStreamResponse {
@@ -499,6 +535,14 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(config.validate(), Err(ExecutionStreamError::ZeroCapacity));
+        let config = ExecutionStreamConfig {
+            subscription_ack_timeout: Duration::ZERO,
+            ..Default::default()
+        };
+        assert_eq!(
+            config.validate(),
+            Err(ExecutionStreamError::ZeroSubscriptionAckTimeout)
+        );
         assert_eq!(
             validate_accounts(vec![]),
             Err(ExecutionStreamError::NoAccounts)
@@ -507,6 +551,40 @@ mod tests {
             validate_accounts(vec!["a".into(), "a".into()]),
             Err(ExecutionStreamError::InvalidAccounts)
         );
+    }
+
+    #[tokio::test]
+    async fn missing_ack_faults_within_its_own_bound() {
+        let supervisor = ExecutionStreamSupervisor::with_connector(
+            PendingConnector,
+            ExecutionStreamConfig {
+                subscription_ack_timeout: Duration::from_millis(10),
+                stale_timeout: Duration::from_secs(1),
+                reconnect_policy: RetryPolicy::new(
+                    1,
+                    Duration::from_millis(1),
+                    Duration::from_millis(1),
+                    0,
+                )
+                .expect("retry policy"),
+                ..Default::default()
+            },
+        )
+        .expect("supervisor");
+        let mut handle = supervisor
+            .start(ExecutionStreamKind::Trades, vec!["a".into()])
+            .expect("stream");
+        assert_eq!(handle.recv().await, Some(ExecutionStreamEvent::Connected));
+        let event = timeout(Duration::from_millis(100), handle.recv())
+            .await
+            .expect("bounded ACK timeout");
+        assert_eq!(
+            event,
+            Some(ExecutionStreamEvent::Fault(
+                ExecutionStreamError::SubscriptionAckTimeout
+            ))
+        );
+        handle.stop();
     }
 
     #[test]
@@ -518,15 +596,34 @@ mod tests {
                 v1::Ping::default(),
             )),
         }));
-        assert_eq!(
+        assert!(
             process_response(
                 ExecutionStreamKind::Trades,
                 ping,
                 &expected,
                 &mut subscribed
-            ),
-            Err(ExecutionStreamError::EventBeforeSubscription)
+            )
+            .is_ok()
         );
+        assert!(!subscribed);
+        let event = ExecutionWireResponse::Trades(Box::new(v1::TradesStreamResponse {
+            payload: Some(v1::trades_stream_response::Payload::OrderTrades(
+                v1::OrderTrades {
+                    account_id: "a".into(),
+                    ..Default::default()
+                },
+            )),
+        }));
+        assert!(
+            process_response(
+                ExecutionStreamKind::Trades,
+                event,
+                &expected,
+                &mut subscribed
+            )
+            .is_ok()
+        );
+        assert!(!subscribed);
         assert!(
             process_response(
                 ExecutionStreamKind::Trades,
