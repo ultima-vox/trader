@@ -25,7 +25,7 @@ use vox_tinvest::execution_stream::{
     ExecutionStreamConfig, ExecutionStreamEvent, ExecutionStreamKind, ExecutionStreamSupervisor,
 };
 use vox_tinvest::generated::v1;
-use vox_tinvest::{GrpcCredential, SecretToken, TInvestGrpcClient};
+use vox_tinvest::{GrpcCredential, GrpcErrorKind, SecretToken, TInvestGrpcClient};
 
 type BoxError = Box<dyn Error + Send + Sync>;
 
@@ -153,7 +153,7 @@ impl SandboxRunner {
             .await?
             .body
             .instruments;
-        let candidates = shares
+        let mut candidates = shares
             .into_iter()
             .filter(|share| {
                 share.api_trade_available_flag
@@ -163,8 +163,16 @@ impl SandboxRunner {
                     && share.lot > 0
                     && share.min_price_increment.is_some()
             })
-            .take(100)
             .collect::<Vec<_>>();
+        candidates.sort_by_key(|share| {
+            (
+                share.ticker != "SBER",
+                share.class_code != "TQBR",
+                share.ticker.clone(),
+                share.uid.clone(),
+            )
+        });
+        candidates.truncate(100);
         if candidates.is_empty() {
             return Err(failure("no API-tradeable share with exact tick metadata"));
         }
@@ -183,7 +191,15 @@ impl SandboxRunner {
             .collect::<BTreeMap<_, _>>();
         let (share, price) = candidates
             .into_iter()
-            .find_map(|share| prices.get(&share.uid).cloned().map(|price| (share, price)))
+            .filter_map(|share| prices.get(&share.uid).cloned().map(|price| (share, price)))
+            .min_by_key(|(share, _)| {
+                (
+                    share.ticker != "SBER",
+                    share.class_code != "TQBR",
+                    share.ticker.clone(),
+                    share.uid.clone(),
+                )
+            })
             .ok_or_else(|| failure("tradeable share catalogue has no authoritative last price"))?;
         let current_price = fixed(price)?;
         let tick = fixed(
@@ -500,7 +516,7 @@ impl SandboxRunner {
             existing_order_id_kind: Some(ProviderOrderIdentityKind::BrokerOrder),
             replacement_request_id: replacement_id.clone(),
             quantity_lots: 1,
-            price: one_tick_lower(far_below(&instrument)?, instrument.tick)?,
+            price: one_tick_higher(far_below(&instrument)?, instrument.tick)?,
             confirm_margin_trade: false,
         })?;
         let response = self
@@ -572,13 +588,48 @@ impl SandboxRunner {
             )
             .await?;
         self.state.logical_order_ids.insert(request_id.clone());
-        let state = self
-            .wait_for_order(
-                &account,
-                &request_id,
-                ProviderOrderIdentityKind::ClientRequest,
-            )
-            .await?;
+        let mut state = None;
+        let mut last_point_error = None;
+        for _ in 0..20 {
+            match self
+                .client
+                .get_sandbox_order_state(v1::GetOrderStateRequest {
+                    account_id: account.clone(),
+                    order_id: request_id.clone(),
+                    price_type: v1::PriceType::Unspecified as i32,
+                    order_id_type: Some(v1::OrderIdType::Request as i32),
+                })
+                .await
+            {
+                Ok(response) => {
+                    state = Some(response.body.try_into()?);
+                    break;
+                }
+                Err(error) => last_point_error = Some(error.to_string()),
+            }
+            let listed = canonical_orders(
+                self.client
+                    .get_sandbox_orders(v1::GetOrdersRequest {
+                        account_id: account.clone(),
+                        advanced_filters: None,
+                    })
+                    .await?
+                    .body,
+            )?;
+            state = listed
+                .into_iter()
+                .find(|order| order.client_request_id.as_deref() == Some(&request_id));
+            if state.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        let state = state.ok_or_else(|| {
+            failure(format!(
+                "async acknowledgement did not materialize by request identity: {}",
+                last_point_error.unwrap_or_else(|| "no provider response".to_owned())
+            ))
+        })?;
         let broker_id = state
             .broker_order_id
             .ok_or_else(|| failure("async order readback omitted broker identity"))?;
@@ -596,7 +647,7 @@ impl SandboxRunner {
         let (account, instrument) = self.owned_context()?;
         let request_id = logical_id();
         let request = regular_order_request(&RegularOrderCommand {
-            account_id: account,
+            account_id: account.clone(),
             instrument_id: instrument.uid.clone(),
             client_request_id: request_id.clone(),
             quantity_lots: 1,
@@ -611,22 +662,52 @@ impl SandboxRunner {
             .post_sandbox_order(authorization()?, request.clone())
             .await?
             .body;
-        let second = self
-            .client
-            .post_sandbox_order(authorization()?, request)
-            .await?
-            .body;
         let broker_id = nonempty(first.order_id)
             .ok_or_else(|| failure("idempotency response omitted broker identity"))?;
-        if second.order_id != broker_id || first.order_request_id != second.order_request_id {
-            return Err(failure(
-                "same idempotency key produced different provider identity",
-            ));
+        match self
+            .client
+            .post_sandbox_order(authorization()?, request)
+            .await
+        {
+            Err(error)
+                if matches!(
+                    &error.kind,
+                    GrpcErrorKind::Provider(provider) if provider.has_provider_code("30057")
+                ) => {}
+            Err(error) => {
+                return Err(failure(format!(
+                    "duplicate replay returned unexpected provider result: {error}"
+                )));
+            }
+            Ok(_) => {
+                return Err(failure(
+                    "duplicate replay unexpectedly returned success instead of provider 30057",
+                ));
+            }
         }
         self.state.logical_order_ids.insert(request_id);
+        let listed = canonical_orders(
+            self.client
+                .get_sandbox_orders(v1::GetOrdersRequest {
+                    account_id: account.clone(),
+                    advanced_filters: None,
+                })
+                .await?
+                .body,
+        )?;
+        if listed
+            .iter()
+            .filter(|order| order.broker_order_id.as_deref() == Some(&broker_id))
+            .count()
+            != 1
+        {
+            return Err(failure(
+                "provider 30057 was not backed by exactly one authoritative active order",
+            ));
+        }
         self.cancel_broker_order(&broker_id).await?;
         Ok(format!(
-            "exact replay resolved to one broker order {broker_id}"
+            "duplicate replay returned documented 30057; one broker order {broker_id}"
         ))
     }
 
@@ -956,14 +1037,11 @@ fn far_below(instrument: &InstrumentFixture) -> Result<FixedPoint, BoxError> {
     ))
 }
 
-fn one_tick_lower(value: FixedPoint, tick: FixedPoint) -> Result<FixedPoint, BoxError> {
+fn one_tick_higher(value: FixedPoint, tick: FixedPoint) -> Result<FixedPoint, BoxError> {
     let total = value
         .total_nanos()
-        .checked_sub(tick.total_nanos())
-        .ok_or_else(|| failure("price subtraction overflow"))?;
-    if total <= 0 {
-        return Err(failure("replacement price is non-positive"));
-    }
+        .checked_add(tick.total_nanos())
+        .ok_or_else(|| failure("price addition overflow"))?;
     Ok(FixedPoint::from_total_nanos(total))
 }
 
@@ -982,6 +1060,23 @@ fn ticks_from(value: FixedPoint, tick: FixedPoint, ticks: i128) -> Result<FixedP
     Ok(FixedPoint::from_total_nanos(total))
 }
 
+fn percentage_price(
+    instrument: &InstrumentFixture,
+    percentage: i128,
+) -> Result<FixedPoint, BoxError> {
+    let price_ticks = instrument.current_price.total_nanos() / instrument.tick.total_nanos();
+    let scaled_ticks = price_ticks
+        .checked_mul(percentage)
+        .and_then(|value| value.checked_div(100))
+        .ok_or_else(|| failure("percentage price overflow"))?;
+    if scaled_ticks <= 0 {
+        return Err(failure("percentage price is non-positive"));
+    }
+    Ok(FixedPoint::from_total_nanos(
+        scaled_ticks * instrument.tick.total_nanos(),
+    ))
+}
+
 #[derive(Clone, Copy)]
 enum ProtectionVariant {
     Fixed,
@@ -997,9 +1092,9 @@ fn protection_plan(
     instrument: &InstrumentFixture,
     variant: ProtectionVariant,
 ) -> Result<ProtectionPlan, BoxError> {
-    let below = ticks_from(instrument.current_price, instrument.tick, -20)?;
-    let lower_limit = ticks_from(instrument.current_price, instrument.tick, -21)?;
-    let above = ticks_from(instrument.current_price, instrument.tick, 20)?;
+    let below = percentage_price(instrument, 95)?;
+    let lower_limit = ticks_from(below, instrument.tick, -1)?;
+    let above = percentage_price(instrument, 105)?;
     let fixed = StopLossProtection::Fixed {
         trigger_price: below,
         limit_price: None,
@@ -1015,16 +1110,16 @@ fn protection_plan(
         },
         activation_price: None,
         protective_spread: None,
-        instant_execution: Some(false),
+        instant_execution: Some(true),
     };
     let trailing_absolute = StopLossProtection::Trailing {
         distance: TrailingDistance {
-            value: ticks_from(FixedPoint::from_total_nanos(0), instrument.tick, 10)?,
+            value: percentage_price(instrument, 5)?,
             mode: TrailingDistanceMode::AbsolutePrice,
         },
         activation_price: None,
         protective_spread: None,
-        instant_execution: Some(false),
+        instant_execution: Some(true),
     };
     let take_profit = TakeProfitProtection {
         trigger_price: Some(above),

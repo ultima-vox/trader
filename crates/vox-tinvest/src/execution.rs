@@ -437,7 +437,7 @@ pub fn protection_requests(
                 } else {
                     v1::ExchangeOrderType::Market as i32
                 },
-                v1::TakeProfitType::Regular as i32,
+                v1::TakeProfitType::Unspecified as i32,
                 None,
                 None,
             ),
@@ -446,15 +446,20 @@ pub fn protection_requests(
                 activation_price,
                 protective_spread,
                 instant_execution,
-            } => (
-                None,
-                activation_price.map(quotation).transpose()?,
-                v1::StopOrderType::TakeProfit as i32,
-                v1::ExchangeOrderType::Market as i32,
-                v1::TakeProfitType::Trailing as i32,
-                Some(trailing_request(*distance, *protective_spread)?),
-                *instant_execution,
-            ),
+            } => {
+                if activation_price.is_none() && *instant_execution != Some(true) {
+                    return Err(ExecutionValidationError::TrailingActivationRequired);
+                }
+                (
+                    None,
+                    activation_price.map(quotation).transpose()?,
+                    v1::StopOrderType::TakeProfit as i32,
+                    v1::ExchangeOrderType::Market as i32,
+                    v1::TakeProfitType::Trailing as i32,
+                    Some(trailing_request(*distance, *protective_spread)?),
+                    *instant_execution,
+                )
+            }
         };
         requests.push(v1::PostStopOrderRequest {
             quantity: context.quantity_lots,
@@ -1016,6 +1021,8 @@ pub enum ExecutionValidationError {
     MissingProtectionRequestId(&'static str),
     #[error("regular take-profit requires trigger price")]
     MissingTakeProfitTrigger,
+    #[error("trailing stop requires activation price or instant execution")]
+    TrailingActivationRequired,
     #[error("provider timestamp is invalid")]
     Timestamp,
     #[error("exact value exceeds provider int64 units")]
@@ -1145,6 +1152,10 @@ mod tests {
             fixed[0].stop_order_type,
             v1::StopOrderType::StopLimit as i32
         );
+        assert_eq!(
+            fixed[0].take_profit_type,
+            v1::TakeProfitType::Unspecified as i32
+        );
 
         let take_profit = protection_requests(
             &ProtectionPlan {
@@ -1162,6 +1173,26 @@ mod tests {
         assert_eq!(
             take_profit[0].stop_order_type,
             v1::StopOrderType::TakeProfit as i32
+        );
+
+        let invalid_trailing = protection_requests(
+            &ProtectionPlan {
+                stop_loss: Some(StopLossProtection::Trailing {
+                    distance: TrailingDistance {
+                        value: fp(1),
+                        mode: TrailingDistanceMode::RelativePercent,
+                    },
+                    activation_price: None,
+                    protective_spread: None,
+                    instant_execution: Some(false),
+                }),
+                take_profit: None,
+            },
+            &context,
+        );
+        assert_eq!(
+            invalid_trailing,
+            Err(ExecutionValidationError::TrailingActivationRequired)
         );
     }
 

@@ -138,13 +138,10 @@ impl SandboxQualificationLedger {
         let lines = self.lines()?;
         let failed = SANDBOX_QUALIFICATION_ROWS
             .iter()
-            .filter(|row| {
-                matches!(
-                    self.evidence.get(**row),
-                    Some(QualificationEvidence::Failed(_))
-                )
+            .filter_map(|row| match self.evidence.get(*row) {
+                Some(QualificationEvidence::Failed(reason)) => Some(format!("{row}: {reason}")),
+                _ => None,
             })
-            .copied()
             .collect::<Vec<_>>();
         if failed.is_empty() {
             Ok(lines)
@@ -163,7 +160,7 @@ pub enum SandboxQualificationError {
     #[error("sandbox qualification omitted rows: {0:?}")]
     MissingRows(Vec<&'static str>),
     #[error("sandbox qualification failed rows: {0:?}")]
-    FailedRows(Vec<&'static str>),
+    FailedRows(Vec<String>),
 }
 
 #[cfg(test)]
