@@ -106,10 +106,10 @@ requirements live in `qualification/tinvest_account_contracts.json`.
 
 | Capability | T-Invest surface | Trader 2.0 status |
 | --- | --- | --- |
-| Accounts/bank accounts | `GetAccounts`, `GetBankAccounts` | supported in production and sandbox: exact canonical catalogue; exhausted `70001/INTERNAL` remains `FAILED_PROVIDER_INTERNAL` with retry/tracking evidence |
+| Accounts/bank accounts | `GetAccounts`, `GetBankAccounts` | generated production/sandbox contract; exact empty bank request; persistent sandbox `70001/INTERNAL` is retained as reproducible external provider limitation with retry/tracking evidence |
 | User/tariff/qualification info | `GetInfo`, `GetUserTariff` | supported: broker-authoritative capability facts |
 | Margin attributes | `GetMarginAttributes` | supported: optional economics preserved; unavailable values never become zero |
-| Additional account values | `GetAccountValues` | supported: multiple accounts, raw enum values, optional exact money |
+| Additional account values | `GetAccountValues` | production: isolated eligible-account probes for both documented variants, raw enum and optional exact money preserved; sandbox: environment-data gate because official sandbox docs say additional indicators are not calculated |
 | Currency transfer/pay-in | `CurrencyTransfer`, `PayIn` | `DEFERRED_MUTATION`; generated/inventoried, never called by #9 |
 
 ## Portfolio, operations and reports

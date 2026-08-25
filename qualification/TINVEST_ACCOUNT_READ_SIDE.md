@@ -54,6 +54,15 @@ execution reads remain generated/inventoried but deferred; issue #9 never calls 
   explicitly environment-gated because official matrix excludes them from sandbox.
 - Sandbox read parity covers accounts, portfolio, positions, withdraw limits, deprecated operations
   compatibility, and cursor operations. Sandbox mutations/execution reads remain deferred.
+- `GetAccountValues` remains a generated production capability. Production qualification uses one
+  deterministic OPEN readable brokerage/IIS account and two isolated one-value probes for the only
+  documented variants (`MARGIN_FEE`, `AMOUNT_WITHOUT_EXTRA_FEE`); response account/value identities
+  must match each request. Sandbox advertises UsersService routing but explicitly does not calculate
+  additional account indicators, so this row is environment-data-gated without fabricating values.
+- `GetBankAccounts` uses the exact generated empty protobuf request through the same UsersService
+  transport as qualified `GetAccounts`, `GetUserTariff`, and `GetInfo`. After three bounded attempts,
+  sandbox `70001/INTERNAL` is retained with provider message, tracking ID, environment, and request
+  shape as a reproducible external provider defect—not relabeled as unsupported and not replaced.
 
 ## Offline gates
 
@@ -93,8 +102,10 @@ rows continue after failures; account-dependent rows become `BLOCKED_BY_PREREQUI
 discovery fails. Final output contains exactly one `QUALIFIED`, contract-justified
 `GATED/UNAVAILABLE`, `BLOCKED_BY_PREREQUISITE`, or `FAILED` result for each of 38 inventory rows,
 then a `COMPLETE SUMMARY` with counts and full method lists. Any `FAILED` row makes process exit
-nonzero after ledger emission. Persistent `GetBankAccounts` `70001/INTERNAL` is a provider failure,
-not a sandbox or permission gate; official sandbox contract supports this method. Sandbox-only acceptance qualifies every
+nonzero after ledger emission. Each failed row is repeated after the summary with status, provider
+code/message, bounded attempt, tracking ID, environment, and sanitized request shape. Persistent
+`GetBankAccounts` `70001/INTERNAL` is an external provider defect, not an unsupported-method or
+permission gate; official sandbox contract supports this method. Sandbox-only acceptance qualifies every
 sandbox-supported ordinary/SandboxService safe read plus Portfolio/Positions/Operations stream ACK
 and ping; two prod-only reports emit `reason=ENVIRONMENT_UNSUPPORTED_SANDBOX`.
 

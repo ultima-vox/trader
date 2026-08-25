@@ -131,6 +131,7 @@ pub fn method_environment(method: &str) -> Option<MethodEnvironment> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountPurpose {
     GeneralRead,
+    AccountValues,
     Margin,
     Report,
     OperationsStream,
@@ -220,6 +221,20 @@ pub enum CapabilityGate {
     DeprecatedUnavailable,
 }
 
+/// Reproducible sandbox provider defect: official contract advertises GetBankAccounts, but the
+/// sandbox endpoint persistently returns documented generic internal error 70001 for the exact
+/// empty generated request while sibling UsersService methods succeed. This is not "unsupported".
+#[must_use]
+pub fn persistent_sandbox_provider_limitation(method: &str, error: &GrpcError) -> bool {
+    method == "GetBankAccounts"
+        && error.metadata.attempt >= 3
+        && matches!(
+            &error.kind,
+            GrpcErrorKind::Provider(provider)
+                if provider.code == Code::Internal && provider.has_provider_code("70001")
+        )
+}
+
 /// Method-specific provider gate. Unknown methods/codes and arbitrary INVALID_ARGUMENT never gate.
 #[must_use]
 pub fn classify_method_gate(method: &str, provider: &GrpcProviderError) -> Option<CapabilityGate> {
@@ -298,7 +313,32 @@ pub struct FailureEvidence {
     pub method: &'static str,
     pub attempt: Option<u32>,
     pub tracking_id: Option<String>,
+    pub provider_message: Option<String>,
+    pub environment: Option<String>,
+    pub request_shape: Option<String>,
     pub detail: String,
+}
+
+impl FailureEvidence {
+    #[must_use]
+    pub fn with_live_context(
+        mut self,
+        environment: impl Into<String>,
+        request_shape: impl Into<String>,
+        sensitive_values: &[String],
+    ) -> Self {
+        self.environment = Some(environment.into());
+        self.request_shape = Some(request_shape.into());
+        for sensitive in sensitive_values {
+            if !sensitive.is_empty() {
+                if let Some(message) = &mut self.provider_message {
+                    *message = message.replace(sensitive, "<redacted-account-id>");
+                }
+                self.detail = self.detail.replace(sensitive, "<redacted-account-id>");
+            }
+        }
+        self
+    }
 }
 
 #[must_use]
@@ -322,6 +362,9 @@ pub fn grpc_failure(method: &'static str, error: &GrpcError) -> FailureEvidence 
                 method,
                 attempt: Some(error.metadata.attempt),
                 tracking_id: provider.tracking_id.clone(),
+                provider_message: Some(provider.message.clone()),
+                environment: None,
+                request_shape: None,
                 detail: "provider request failed after bounded safe-read policy".into(),
             }
         }
@@ -332,6 +375,9 @@ pub fn grpc_failure(method: &'static str, error: &GrpcError) -> FailureEvidence 
             method,
             attempt: Some(error.metadata.attempt),
             tracking_id: None,
+            provider_message: None,
+            environment: None,
+            request_shape: None,
             detail: kind.to_string(),
         },
     }
@@ -346,6 +392,9 @@ pub fn adapter_failure(method: &'static str, detail: impl Into<String>) -> Failu
         method,
         attempt: None,
         tracking_id: None,
+        provider_message: None,
+        environment: None,
+        request_shape: None,
         detail: detail.into(),
     }
 }
@@ -507,6 +556,15 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["open-iis"]
         );
+        let values = select_accounts(&accounts, AccountPurpose::AccountValues);
+        assert_eq!(
+            values
+                .selected
+                .iter()
+                .map(|account| account.account_id.as_str())
+                .collect::<Vec<_>>(),
+            ["open-iis"]
+        );
     }
 
     #[test]
@@ -650,5 +708,32 @@ mod tests {
         assert_eq!(failed.provider_code.as_deref(), Some("70001"));
         assert_eq!(failed.attempt, Some(3));
         assert_eq!(failed.tracking_id.as_deref(), Some("tracking-70001"));
+        let contextual = failed.with_live_context(
+            "SANDBOX_ONLY",
+            "GetBankAccountsRequest {}",
+            &["secret-account".into()],
+        );
+        assert_eq!(contextual.environment.as_deref(), Some("SANDBOX_ONLY"));
+        assert_eq!(
+            contextual.request_shape.as_deref(),
+            Some("GetBankAccountsRequest {}")
+        );
+        assert_eq!(
+            contextual.provider_message.as_deref(),
+            Some("provider code 70001")
+        );
+        assert!(persistent_sandbox_provider_limitation(
+            "GetBankAccounts",
+            &error
+        ));
+        assert!(!persistent_sandbox_provider_limitation(
+            "GetAccountValues",
+            &error
+        ));
+        error.metadata.attempt = 2;
+        assert!(!persistent_sandbox_provider_limitation(
+            "GetBankAccounts",
+            &error
+        ));
     }
 }

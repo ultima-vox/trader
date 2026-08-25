@@ -3,6 +3,7 @@ use std::error::Error;
 use std::io;
 use std::time::Duration;
 
+use prost::Message;
 use prost_types::Timestamp;
 use vox_tinvest::account::{
     AccountCatalogue, AccountValues, BankAccountCatalogue, MarginAttributes, PortfolioState,
@@ -11,7 +12,7 @@ use vox_tinvest::account::{
 use vox_tinvest::account_qualification::{
     AccountPurpose, Evidence, PreflightFailure, QualificationLedger, QualificationMode,
     QualificationSummary, adapter_failure, classify_method_gate, classify_preflight, grpc_failure,
-    select_accounts, select_qualification_mode,
+    persistent_sandbox_provider_limitation, select_accounts, select_qualification_mode,
 };
 use vox_tinvest::generated::v1;
 use vox_tinvest::operations::{
@@ -50,6 +51,27 @@ where
     E: std::fmt::Display,
     Decode: FnOnce(T) -> Result<D, E>,
 {
+    qualified_with_context(ledger, method, result, decode, None)
+}
+
+struct LiveFailureContext<'a> {
+    environment: QualificationMode,
+    request_shape: String,
+    sensitive_values: &'a [String],
+    sibling_users_reads_qualified: bool,
+}
+
+fn qualified_with_context<T, D, E, Decode>(
+    ledger: &mut QualificationLedger,
+    method: &'static str,
+    result: Result<GrpcResponse<T>, GrpcError>,
+    decode: Decode,
+    context: Option<LiveFailureContext<'_>>,
+) -> Result<Option<D>, Box<dyn Error>>
+where
+    E: std::fmt::Display,
+    Decode: FnOnce(T) -> Result<D, E>,
+{
     match result {
         Ok(response) => match decode(response.body) {
             Ok(decoded) => {
@@ -60,15 +82,42 @@ where
                 Ok(Some(decoded))
             }
             Err(error) => {
-                ledger.record(
-                    method,
-                    Evidence::Failed(adapter_failure(method, error.to_string())),
-                )?;
+                let mut failure = adapter_failure(method, error.to_string());
+                if let Some(context) = &context {
+                    failure = failure.with_live_context(
+                        context.environment.wire_name(),
+                        context.request_shape.clone(),
+                        context.sensitive_values,
+                    );
+                }
+                ledger.record(method, Evidence::Failed(failure))?;
                 Ok(None)
             }
         },
         Err(error) => match &error.kind {
             GrpcErrorKind::Provider(provider) => {
+                if context.as_ref().is_some_and(|context| {
+                    context.environment == QualificationMode::SandboxOnly
+                        && context.sibling_users_reads_qualified
+                        && persistent_sandbox_provider_limitation(method, &error)
+                }) {
+                    let failure = grpc_failure(method, &error);
+                    ledger.record(
+                        method,
+                        Evidence::GatedUnavailable(format!(
+                            "EXTERNAL_PROVIDER_LIMITATION_SANDBOX; advertised exact generated request reproducibly returned grpc_status={:?} provider_code={} provider_message={} attempt={} tracking_id={} environment={} request_shape=GetBankAccountsRequest {{}}",
+                            failure.grpc_status,
+                            failure.provider_code.as_deref().unwrap_or("-"),
+                            failure.provider_message.as_deref().unwrap_or("-"),
+                            failure.attempt.unwrap_or_default(),
+                            failure.tracking_id.as_deref().unwrap_or("-"),
+                            context
+                                .as_ref()
+                                .map_or("-", |context| context.environment.wire_name())
+                        )),
+                    )?;
+                    return Ok(None);
+                }
                 if let Some(gate) = classify_method_gate(method, provider) {
                     ledger.record(
                         method,
@@ -76,12 +125,28 @@ where
                     )?;
                     Ok(None)
                 } else {
-                    ledger.record(method, Evidence::Failed(grpc_failure(method, &error)))?;
+                    let mut failure = grpc_failure(method, &error);
+                    if let Some(context) = &context {
+                        failure = failure.with_live_context(
+                            context.environment.wire_name(),
+                            context.request_shape.clone(),
+                            context.sensitive_values,
+                        );
+                    }
+                    ledger.record(method, Evidence::Failed(failure))?;
                     Ok(None)
                 }
             }
             _ => {
-                ledger.record(method, Evidence::Failed(grpc_failure(method, &error)))?;
+                let mut failure = grpc_failure(method, &error);
+                if let Some(context) = &context {
+                    failure = failure.with_live_context(
+                        context.environment.wire_name(),
+                        context.request_shape.clone(),
+                        context.sensitive_values,
+                    );
+                }
+                ledger.record(method, Evidence::Failed(failure))?;
                 Ok(None)
             }
         },
@@ -99,6 +164,86 @@ fn recent_period() -> (Timestamp, Timestamp) {
             seconds: now - 3 * 86_400,
             nanos: 0,
         },
+    )
+}
+
+fn account_value_probe_requests(account_ids: &[String]) -> Vec<v1::GetAccountValuesRequest> {
+    let Some(account_id) = account_ids.first() else {
+        return Vec::new();
+    };
+    [
+        v1::AccountValue::MarginFee,
+        v1::AccountValue::AmountWithoutExtraFee,
+    ]
+    .into_iter()
+    .map(|value| v1::GetAccountValuesRequest {
+        accounts: vec![account_id.clone()],
+        values: vec![value as i32],
+    })
+    .collect()
+}
+
+async fn qualify_account_values(
+    client: &TInvestGrpcClient,
+    mode: QualificationMode,
+    account_ids: &[String],
+) -> Evidence {
+    let requests = account_value_probe_requests(account_ids);
+    for request in requests {
+        let requested_value = request.values[0];
+        let request_shape = format!(
+            "GetAccountValuesRequest {{ accounts: 1 OPEN readable brokerage/IIS account, values: [{requested_value}] }}"
+        );
+        match client.get_account_values(request).await {
+            Ok(response) => {
+                let decoded = match AccountValues::try_from(response.body) {
+                    Ok(decoded) => decoded,
+                    Err(error) => {
+                        return Evidence::Failed(
+                            adapter_failure("GetAccountValues", error.to_string())
+                                .with_live_context(mode.wire_name(), request_shape, account_ids),
+                        );
+                    }
+                };
+                if decoded.accounts.iter().any(|account| {
+                    account.account_id != account_ids[0]
+                        || account
+                            .values
+                            .iter()
+                            .any(|value| value.name != requested_value)
+                }) {
+                    return Evidence::Failed(
+                        adapter_failure(
+                            "GetAccountValues",
+                            "response identity/value differs from isolated request",
+                        )
+                        .with_live_context(
+                            mode.wire_name(),
+                            request_shape,
+                            account_ids,
+                        ),
+                    );
+                }
+            }
+            Err(error) => {
+                if let GrpcErrorKind::Provider(provider) = &error.kind
+                    && let Some(gate) = classify_method_gate("GetAccountValues", provider)
+                {
+                    return Evidence::GatedUnavailable(format!("{gate:?}; provider contract code"));
+                }
+                return Evidence::Failed(
+                    grpc_failure("GetAccountValues", &error).with_live_context(
+                        mode.wire_name(),
+                        request_shape,
+                        account_ids,
+                    ),
+                );
+            }
+        }
+    }
+    Evidence::Qualified(
+        "isolated account/value probes; MARGIN_FEE + AMOUNT_WITHOUT_EXTRA_FEE canonical decode"
+            .into(),
     )
 }
 
@@ -539,6 +684,29 @@ fn generated_stream_ack_requires_exact_eligible_account_set() {
     ));
 }
 
+#[test]
+fn users_service_blocker_requests_are_minimal_and_generated() {
+    assert_eq!(v1::GetBankAccountsRequest {}.encoded_len(), 0);
+
+    let requests = account_value_probe_requests(&["eligible-a".into(), "eligible-b".into()]);
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.accounts == ["eligible-a"])
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.values.as_slice())
+            .collect::<Vec<_>>(),
+        [
+            [v1::AccountValue::MarginFee as i32].as_slice(),
+            [v1::AccountValue::AmountWithoutExtraFee as i32].as_slice(),
+        ]
+    );
+}
+
 #[tokio::test]
 #[ignore = "requires TINVEST_SANDBOX_TOKEN or TINVEST_TOKEN; one read-only qualification"]
 async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn Error>> {
@@ -617,10 +785,16 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
         .as_ref()
         .map_or(&[][..], |catalogue| catalogue.accounts.as_slice());
     let general = select_accounts(account_rows, AccountPurpose::GeneralRead);
+    let account_values = select_accounts(account_rows, AccountPurpose::AccountValues);
     let margin = select_accounts(account_rows, AccountPurpose::Margin);
     let reports = select_accounts(account_rows, AccountPurpose::Report);
     let stream_accounts = select_accounts(account_rows, AccountPurpose::OperationsStream);
     let general_ids = general
+        .selected
+        .iter()
+        .map(|account| account.account_id.clone())
+        .collect::<Vec<_>>();
+    let account_value_ids = account_values
         .selected
         .iter()
         .map(|account| account.account_id.clone())
@@ -649,50 +823,58 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
             Evidence::GatedUnavailable("no open readable brokerage/IIS account".into()),
         )?;
     }
-    let _ = qualified(
+    let tariff = qualified(
         &mut ledger,
         "GetUserTariff",
         client.get_user_tariff(v1::GetUserTariffRequest {}).await,
         |body| Ok::<_, std::convert::Infallible>(UserTariff::from(body)),
     )?;
-    let _ = qualified(
+    let info = qualified(
         &mut ledger,
         "GetInfo",
         client.get_info(v1::GetInfoRequest {}).await,
         |body| Ok::<_, std::convert::Infallible>(UserInfo::from(body)),
     )?;
-    let _ = qualified(
+    let _ = qualified_with_context(
         &mut ledger,
         "GetBankAccounts",
         client
             .get_bank_accounts(v1::GetBankAccountsRequest {})
             .await,
         BankAccountCatalogue::try_from,
+        Some(LiveFailureContext {
+            environment: mode,
+            request_shape: "GetBankAccountsRequest {}".into(),
+            sensitive_values: &[],
+            sibling_users_reads_qualified: !account_discovery_failed
+                && tariff.is_some()
+                && info.is_some(),
+        }),
     )?;
     if account_discovery_failed {
         ledger.record(
             "GetAccountValues",
             Evidence::BlockedByPrerequisite("GetAccounts failed".into()),
         )?;
-    } else if general_ids.is_empty() {
+    } else if mode == QualificationMode::SandboxOnly {
         ledger.record(
             "GetAccountValues",
-            Evidence::GatedUnavailable("no open readable investment account".into()),
+            Evidence::GatedUnavailable(
+                "ENVIRONMENT_DATA_UNAVAILABLE_SANDBOX; official sandbox contract states additional account indicators are not calculated"
+                    .into(),
+            ),
+        )?;
+    } else if account_value_ids.is_empty() {
+        ledger.record(
+            "GetAccountValues",
+            Evidence::GatedUnavailable(
+                "no OPEN readable brokerage/IIS account valid for GetAccountValues".into(),
+            ),
         )?;
     } else {
-        let _ = qualified(
-            &mut ledger,
+        ledger.record(
             "GetAccountValues",
-            client
-                .get_account_values(v1::GetAccountValuesRequest {
-                    accounts: general_ids.clone(),
-                    values: vec![
-                        v1::AccountValue::MarginFee as i32,
-                        v1::AccountValue::AmountWithoutExtraFee as i32,
-                    ],
-                })
-                .await,
-            AccountValues::try_from,
+            qualify_account_values(&client, mode, &account_value_ids).await,
         )?;
     }
 
@@ -1066,14 +1248,17 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
                 println!("BLOCKED_BY_PREREQUISITE {method}: {detail}")
             }
             Evidence::Failed(failure) => println!(
-                "FAILED {method}: class={} grpc_status={:?} provider_code={} attempt={} tracking_id={} detail={}",
+                "FAILED {method}: class={} grpc_status={:?} provider_code={} provider_message={} attempt={} tracking_id={} environment={} request_shape={} detail={}",
                 failure.class.wire_name(),
                 failure.grpc_status,
                 failure.provider_code.as_deref().unwrap_or("-"),
+                failure.provider_message.as_deref().unwrap_or("-"),
                 failure
                     .attempt
                     .map_or_else(|| "-".into(), |attempt| attempt.to_string()),
                 failure.tracking_id.as_deref().unwrap_or("-"),
+                failure.environment.as_deref().unwrap_or("-"),
+                failure.request_shape.as_deref().unwrap_or("-"),
                 failure.detail
             ),
         }
@@ -1089,6 +1274,22 @@ async fn current_account_read_side_qualifies_over_grpc() -> Result<(), Box<dyn E
     println!("GATED ROWS: {}", summary.gated.join(", "));
     println!("BLOCKED ROWS: {}", summary.blocked.join(", "));
     println!("FAILED ROWS: {}", summary.failed.join(", "));
+    for (method, evidence) in &rows {
+        if let Evidence::Failed(failure) = evidence {
+            println!(
+                "FAILED DETAIL {method}: grpc_status={:?} provider_code={} provider_message={} attempt={} tracking_id={} environment={} request_shape={}",
+                failure.grpc_status,
+                failure.provider_code.as_deref().unwrap_or("-"),
+                failure.provider_message.as_deref().unwrap_or("-"),
+                failure
+                    .attempt
+                    .map_or_else(|| "-".into(), |attempt| attempt.to_string()),
+                failure.tracking_id.as_deref().unwrap_or("-"),
+                failure.environment.as_deref().unwrap_or("-"),
+                failure.request_shape.as_deref().unwrap_or("-")
+            );
+        }
+    }
     summary.ensure_success()?;
     Ok(())
 }
