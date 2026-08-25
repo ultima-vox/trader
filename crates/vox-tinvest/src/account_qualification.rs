@@ -443,6 +443,14 @@ mod tests {
             select_qualification_mode(Some("PRODUCTION_READ_ONLY"), false, true),
             Err(QualificationModeError::MissingProductionToken)
         );
+        assert_eq!(
+            select_qualification_mode(None, true, true),
+            Ok(QualificationMode::ProductionReadOnly)
+        );
+        assert_eq!(
+            select_qualification_mode(Some("TYPO"), false, true),
+            Err(QualificationModeError::UnknownMode("TYPO".to_owned()))
+        );
     }
 
     #[test]
