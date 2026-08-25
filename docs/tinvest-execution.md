@@ -54,3 +54,18 @@ Production credentials and production mutation qualification are prohibited. Run
 result for every inventory capability, clean every active test order/stop it created, then confirm
 cleanup by broker readback. `GATED/UNAVAILABLE` is valid only for documented sandbox capability,
 account, permission or deterministic-trigger limitations; arbitrary provider errors fail run.
+
+PowerShell command:
+
+```powershell
+$env:TINVEST_SANDBOX_TOKEN = '<sandbox-token>'
+cargo test --locked -p vox-tinvest --test execution_live -- --ignored --nocapture
+```
+
+Runner reads no production-token variable and rejects any non-sandbox client. It selects open
+sandbox account plus API-tradeable instrument from generated contracts, exercises unary order,
+async order, replacement, cancellation, broker idempotency, controlled ambiguous-dispatch guard,
+all supported stop/protection shapes, and both execution streams. Every row is printed as
+`QUALIFIED`, `GATED/UNAVAILABLE`, or `FAILED`. Cleanup always runs last, cancels qualification-created
+active orders/stops once, flattens observed test exposure, and fails unless authoritative readback
+confirms baseline resources plus zero net test lots.

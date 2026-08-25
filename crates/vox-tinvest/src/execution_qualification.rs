@@ -3,13 +3,18 @@
 use std::collections::BTreeMap;
 
 use thiserror::Error;
+use vox_domain::{
+    ClientRequestId, MutationDecision, MutationEvidence, MutationEvidenceStore, MutationRecovery,
+    StoreError,
+};
 
-pub const SANDBOX_QUALIFICATION_ROWS: [&str; 18] = [
+pub const SANDBOX_QUALIFICATION_ROWS: [&str; 21] = [
     "account_discovery_readiness",
     "max_lots",
     "pre_trade_estimate",
     "market_order_lifecycle",
     "limit_order_lifecycle",
+    "async_order_lifecycle",
     "order_state_and_list",
     "replace_lifecycle",
     "cancel_lifecycle",
@@ -20,10 +25,62 @@ pub const SANDBOX_QUALIFICATION_ROWS: [&str; 18] = [
     "take_profit_only",
     "trailing_relative",
     "trailing_absolute",
+    "fixed_stop_plus_take_profit",
+    "trailing_plus_take_profit",
     "trades_stream_health",
     "order_state_stream_health",
     "cleanup_readback",
 ];
+
+/// Controlled post-dispatch fault harness used by final sandbox runner.
+pub fn qualify_ambiguous_dispatch_guard() -> Result<(), StoreError> {
+    #[derive(Default)]
+    struct FaultStore(BTreeMap<ClientRequestId, MutationEvidence>);
+    impl MutationEvidenceStore for FaultStore {
+        fn load(&self, id: &ClientRequestId) -> Result<Option<MutationEvidence>, StoreError> {
+            Ok(self.0.get(id).cloned())
+        }
+        fn persist(&mut self, evidence: &MutationEvidence) -> Result<(), StoreError> {
+            self.0
+                .insert(evidence.client_request_id().clone(), evidence.clone());
+            Ok(())
+        }
+        fn claim_dispatch(&mut self, evidence: &MutationEvidence) -> Result<bool, StoreError> {
+            if self.0.contains_key(evidence.client_request_id()) {
+                return Ok(false);
+            }
+            self.persist(evidence)?;
+            Ok(true)
+        }
+        fn resolve_unknown(
+            &mut self,
+            expected: &MutationEvidence,
+            resolved: &MutationEvidence,
+        ) -> Result<bool, StoreError> {
+            if self.0.get(expected.client_request_id()) != Some(expected) {
+                return Ok(false);
+            }
+            self.persist(resolved)?;
+            Ok(true)
+        }
+    }
+
+    let id = ClientRequestId::new("issue-10-controlled-ambiguous-dispatch")
+        .map_err(|error| StoreError(error.to_string()))?;
+    let mut recovery = MutationRecovery::new(FaultStore::default());
+    recovery.persist_before_dispatch(id.clone(), Some("fault-injection".into()))?;
+    if recovery.decision(&id)? != MutationDecision::Reconcile {
+        return Err(StoreError(
+            "UNKNOWN_AFTER_DISPATCH did not force reconciliation".into(),
+        ));
+    }
+    match recovery.persist_before_dispatch(id, Some("duplicate".into())) {
+        Err(_) => Ok(()),
+        Ok(_) => Err(StoreError(
+            "ambiguous mutation identity was dispatched twice".into(),
+        )),
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum QualificationEvidence {
@@ -62,7 +119,7 @@ impl SandboxQualificationLedger {
         Ok(())
     }
 
-    pub fn finish(self) -> Result<Vec<String>, SandboxQualificationError> {
+    pub fn lines(&self) -> Result<Vec<String>, SandboxQualificationError> {
         let missing = SANDBOX_QUALIFICATION_ROWS
             .iter()
             .filter(|row| !self.evidence.contains_key(**row))
@@ -71,6 +128,14 @@ impl SandboxQualificationLedger {
         if !missing.is_empty() {
             return Err(SandboxQualificationError::MissingRows(missing));
         }
+        Ok(SANDBOX_QUALIFICATION_ROWS
+            .iter()
+            .filter_map(|row| self.evidence.get(row).map(|evidence| evidence.render(row)))
+            .collect())
+    }
+
+    pub fn finish(self) -> Result<Vec<String>, SandboxQualificationError> {
+        let lines = self.lines()?;
         let failed = SANDBOX_QUALIFICATION_ROWS
             .iter()
             .filter(|row| {
@@ -81,10 +146,6 @@ impl SandboxQualificationLedger {
             })
             .copied()
             .collect::<Vec<_>>();
-        let lines = SANDBOX_QUALIFICATION_ROWS
-            .iter()
-            .filter_map(|row| self.evidence.get(row).map(|evidence| evidence.render(row)))
-            .collect();
         if failed.is_empty() {
             Ok(lines)
         } else {
@@ -135,5 +196,10 @@ mod tests {
         let lines = complete.finish().expect("complete");
         assert_eq!(lines.len(), SANDBOX_QUALIFICATION_ROWS.len());
         assert!(lines.iter().all(|line| line.starts_with("QUALIFIED ")));
+    }
+
+    #[test]
+    fn controlled_ambiguous_dispatch_fault_blocks_duplicate() {
+        qualify_ambiguous_dispatch_guard().expect("fault harness");
     }
 }
