@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vox Trader — Design System Reference (layers)</title>
+<link rel="icon" href="./assets/vox-mark.svg">
+<link rel="stylesheet" href="../tokens/tokens.css">
+<link rel="stylesheet" href="../primitives/primitives.css">
+<link rel="stylesheet" href="../components/components.css">
+<link rel="stylesheet" href="../patterns/patterns.css">
+<style>
+  /* Page chrome for the reference sheet only — NOT part of the design system. */
+  html, body { margin: 0; padding: 0; }
+  body { background: var(--vox-bg-canvas); }
+  .ref { max-width: 1440px; margin: 0 auto; padding: 24px 28px 96px; }
+  .ref__head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--vox-border-default); }
+  .ref__sec { padding: 28px 0 4px; border-top: 1px solid var(--vox-border-subtle); margin-top: 28px; }
+  .ref__sec:first-of-type { border-top: 0; }
+  .ref__sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+  .ref__num { font-family: var(--vox-font-mono); font-size: 11px; color: var(--vox-text-disabled); }
+  .ref__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; align-items: start; }
+  .ref__spec { padding: 12px; }
+  .ref__spec-title { font-size: var(--vox-text-12); font-weight: var(--vox-weight-medium); color: var(--vox-text-primary); margin-bottom: 10px; }
+  .ref__demo { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .ref__note { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); line-height: 1.5; }
+  .ref__rule { display: flex; gap: 8px; font-size: var(--vox-text-12); color: var(--vox-text-secondary); line-height: 1.55; }
+  .ref__rule b { color: var(--vox-text-primary); font-weight: var(--vox-weight-medium); }
+  .ref__swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; }
+  .ref__swatch { border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-sm); overflow: hidden; }
+  .ref__swatch-chip { height: 34px; }
+  .ref__swatch-meta { padding: 5px 7px; background: var(--vox-bg-surface); }
+  .ref__code { font-family: var(--vox-font-mono); font-size: 10px; color: var(--vox-text-tertiary); }
+  .ref__nav { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 0 0; }
+  .ref__nav a { text-decoration: none; }
+  a { color: var(--vox-blue-300); }
+  a:hover { color: var(--vox-blue-400); }
+  .ref__placeholder {
+    height: 168px; display: flex; align-items: center; justify-content: center;
+    background: repeating-linear-gradient(135deg, #12161B 0 8px, #161A20 8px 16px);
+    border-bottom: 1px solid var(--vox-border-subtle);
+    font-family: var(--vox-font-mono); font-size: 10px; color: var(--vox-text-tertiary);
+  }
+</style>
+</head>
+<body class="vox-root" data-density="compact" data-theme="dark">
+<div class="ref">
+
+  <header class="ref__head">
+    <div class="vox-row vox-gap-3">
+      <img src="./assets/vox-mark.svg" width="32" height="32" alt="">
+      <div>
+        <div class="vox-text--headline">Vox Trader — Design System</div>
+        <div class="ref__note">Слоевой референс: tokens → primitives → components → patterns. Плотность Compact — производственная по умолчанию.</div>
+      </div>
+    </div>
+    <div class="vox-row vox-gap-2">
+      <span class="vox-env vox-env--sandbox"><span class="vox-dot"></span>SANDBOX</span>
+      <span class="vox-badge">v1.0</span>
+      <span class="ref__code">ru-RU</span>
+    </div>
+  </header>
+
+  <nav class="ref__nav">
+    <a class="vox-badge" href="#tokens">1 · Токены</a>
+    <a class="vox-badge" href="#density">2 · Плотность</a>
+    <a class="vox-badge" href="#primitives">3 · Примитивы</a>
+    <a class="vox-badge" href="#controls">4 · Контролы</a>
+    <a class="vox-badge" href="#states">5 · Состояния среды</a>
+    <a class="vox-badge" href="#markers">6 · Маркеры</a>
+    <a class="vox-badge" href="#table">7 · Таблица</a>
+    <a class="vox-badge" href="#widget">8 · Виджет</a>
+    <a class="vox-badge" href="#patterns">9 · Паттерны</a>
+    <a class="vox-badge" href="#dont">10 · Запрещено</a>
+  </nav>
+
+  <!-- 1 · TOKENS -->
+  <section class="ref__sec" id="tokens">
+    <div class="ref__sec-head"><span class="ref__num">01</span><h2 class="vox-text--title">Токены</h2>
+      <span class="ref__note">Источник истины — <code class="ref__code">tokens/tokens.css</code>. Сырой HEX в компонентах — блокер ревью.</span></div>
+
+    <div class="ref__spec vox-surface" style="margin-bottom:12px">
+      <div class="ref__spec-title">Финансовая семантика</div>
+      <div class="ref__swatches">
+        <div class="ref__swatch"><div class="ref__swatch-chip" style="background:var(--vox-positive-base)"></div><div class="ref__swatch-meta"><div class="vox-text--dense">Рост / Купить</div><div class="ref__code">--vox-positive-base</div></div></div>
+        <div class="ref__swatch"><div class="ref__swatch-chip" style="background:var(--vox-negative-base)"></div><div class="ref__swatch-meta"><div class="vox-text--dense">Падение / Продать</div><div class="ref__code">--vox-negative-base</div></div></div>
+        <div class="ref__swatch"><div class="ref__swatch-chip" style="background:var(--vox-warning-base)"></div><div class="ref__swatch-meta"><div class="vox-text--dense">Предупреждение</div><div class="ref__code">--vox-warning-base</div></div></div>
+        <div class="ref__swatch"><div class="ref__swatch-chip" style="background:var(--vox-unknown-base)"></div><div class="ref__swatch-meta"><div class="vox-text--dense">UNKNOWN ≠ FAILED</div><div class="ref__code">--vox-unknown-base</div></div></div>
+        <div class="ref__swatch"><div class="ref__swatch-chip" style="background:var(--vox-accent-primary)"></div><div class="ref__swatch-meta"><div class="vox-text--dense">Акцент (не «покупка»)</div><div class="ref__code">--vox-accent-primary</div></div></div>
+      </div>
+    </div>
+
+    <div class="ref__grid">
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Поверхности</div>
+        <div class="ref__swatches">
+          <div class="ref__swatch"><div class="ref__swatch-chip" style="background:var(--vox-bg-canvas)"></div><div class="ref__swatch-meta"><div class="ref__code">bg-canvas</div></div></div>
+          <div class="ref__swatch"><div class="ref__swatch-chip" style="background:var(--vox-bg-workspace)"></div><div class="ref__swatch-meta"><div class="ref__code">bg-workspace</div></div></div>
+          <div class="ref__swatch"><div class="ref__swatch-chip" style="background:var(--vox-bg-surface)"></div><div class="ref__swatch-meta"><div class="ref__code">bg-surface</div></div></div>
+          <div class="ref__swatch"><div class="ref__swatch-chip" style="background:var(--vox-bg-elevated)"></div><div class="ref__swatch-meta"><div class="ref__code">bg-elevated</div></div></div>
+        </div>
+        <div class="ref__note" style="margin-top:10px">Соседние области разделяются границей, а не большим отступом. Тень — только у overlay-слоёв (menu, tooltip, modal).</div>
+      </div>
+
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Типографика</div>
+        <div class="vox-stack vox-gap-2">
+          <div class="vox-text--metric-xl">1 284 730,45 <span class="vox-unit">₽</span></div>
+          <div class="vox-text--metric">+3,74 %</div>
+          <div class="vox-text--headline">Раздел</div>
+          <div class="vox-text--title">Заголовок виджета</div>
+          <div>Базовый UI — 13px, интерфейс терминала</div>
+          <div class="vox-text--dense">Плотная таблица / стакан — 12px</div>
+          <div class="vox-text--caption">Служебная подпись — 11px</div>
+          <div class="vox-text--label">Технический лейбл</div>
+          <div class="vox-num vox-num--positive" style="text-align:left">tabular-nums: 1 000,10 / 999,99</div>
+        </div>
+      </div>
+
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Шаг 4px · радиусы · моция</div>
+        <div class="vox-stack vox-gap-2">
+          <div class="vox-row vox-gap-1">
+            <span class="ref__code">4</span><span style="width:4px;height:14px;background:var(--vox-accent-primary)"></span>
+            <span class="ref__code">8</span><span style="width:8px;height:14px;background:var(--vox-accent-primary)"></span>
+            <span class="ref__code">12</span><span style="width:12px;height:14px;background:var(--vox-accent-primary)"></span>
+            <span class="ref__code">16</span><span style="width:16px;height:14px;background:var(--vox-accent-primary)"></span>
+            <span class="ref__code">24</span><span style="width:24px;height:14px;background:var(--vox-accent-primary)"></span>
+          </div>
+          <div class="ref__note">Радиусы: 2 / 4 (контрол) / 6 (виджет) / 8. Больше 8px в терминале не используется.</div>
+          <div class="ref__note">Моция: 80 / 120 / 180 ms, вспышка цены 480 ms. Никаких «въездов» и параллакса. Уважается <code class="ref__code">prefers-reduced-motion</code>.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 · DENSITY -->
+  <section class="ref__sec" id="density">
+    <div class="ref__sec-head"><span class="ref__num">02</span><h2 class="vox-text--title">Плотность</h2>
+      <span class="ref__note">Compact — производственное значение по умолчанию. Standard и Comfortable — только пользовательская настройка доступности.</span></div>
+    <div class="ref__grid">
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Compact (default) — контрол 28 / строка 26</div>
+        <div class="ref__demo"><button class="vox-btn vox-btn--secondary" type="button">Кнопка</button><span class="vox-input" style="width:120px"><input class="vox-input__field" value="120,50"></span><span class="vox-badge">28px</span></div>
+      </div>
+      <div class="ref__spec vox-surface" data-density="standard">
+        <div class="ref__spec-title">Standard — контрол 32 / строка 30</div>
+        <div class="ref__demo"><button class="vox-btn vox-btn--secondary" type="button">Кнопка</button><span class="vox-input" style="width:120px"><input class="vox-input__field" value="120,50"></span><span class="vox-badge">32px</span></div>
+      </div>
+      <div class="ref__spec vox-surface" data-density="comfortable">
+        <div class="ref__spec-title">Comfortable — контрол 36 / строка 36</div>
+        <div class="ref__demo"><button class="vox-btn vox-btn--secondary" type="button">Кнопка</button><span class="vox-input" style="width:120px"><input class="vox-input__field" value="120,50"></span><span class="vox-badge">36px</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 · PRIMITIVES -->
+  <section class="ref__sec" id="primitives">
+    <div class="ref__sec-head"><span class="ref__num">03</span><h2 class="vox-text--title">Примитивы</h2></div>
+    <div class="ref__grid">
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Числа — всегда через <code class="ref__code">.vox-num</code></div>
+        <div class="vox-stack vox-gap-1">
+          <div class="vox-row" style="justify-content:space-between"><span class="vox-text--secondary">Цена</span><span class="vox-num">318,44 <span class="vox-unit">₽</span></span></div>
+          <div class="vox-row" style="justify-content:space-between"><span class="vox-text--secondary">P&amp;L дня</span><span class="vox-num vox-num--positive">+12 480,00 ₽</span></div>
+          <div class="vox-row" style="justify-content:space-between"><span class="vox-text--secondary">P&amp;L позиции</span><span class="vox-num vox-num--negative">−3 105,20 ₽</span></div>
+          <div class="vox-row" style="justify-content:space-between"><span class="vox-text--secondary">Расхождение</span><span class="vox-num vox-num--unknown">неизвестно</span></div>
+        </div>
+      </div>
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Overlay-слои</div>
+        <div class="ref__demo" style="align-items:flex-start">
+          <div class="vox-tooltip">Последняя котировка получена 2 c назад. Источник: основной поток.</div>
+          <div class="vox-popover vox-menu" style="width:210px">
+            <div class="vox-menu__item">Открыть график<span class="vox-menu__shortcut">G</span></div>
+            <div class="vox-menu__item">Закрепить инструмент<span class="vox-menu__shortcut">P</span></div>
+            <div class="vox-menu__sep"></div>
+            <div class="vox-menu__item vox-menu__item--danger">Отменить все заявки<span class="vox-menu__shortcut">⇧X</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Загрузка / пусто</div>
+        <div class="vox-stack vox-gap-2">
+          <div class="vox-skeleton" style="width:70%"></div>
+          <div class="vox-skeleton" style="width:45%"></div>
+          <div class="vox-state-note"><span class="vox-state-note__title">Нет позиций</span><span>Заявки и позиции появятся здесь после исполнения. Скелетон повторяет геометрию строки — без скачка вёрстки.</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 · CONTROLS -->
+  <section class="ref__sec" id="controls">
+    <div class="ref__sec-head"><span class="ref__num">04</span><h2 class="vox-text--title">Контролы</h2>
+      <span class="ref__note">Анатомия, варианты и состояния — <code class="ref__code">docs/design/COMPONENT_SPEC.md</code>.</span></div>
+    <div class="ref__grid">
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Button — варианты</div>
+        <div class="ref__demo">
+          <button class="vox-btn vox-btn--primary" type="button">Подтвердить</button>
+          <button class="vox-btn vox-btn--secondary" type="button">Отмена</button>
+          <button class="vox-btn vox-btn--ghost" type="button">Подробнее</button>
+          <button class="vox-btn vox-btn--danger" type="button">Снять заявку</button>
+          <button class="vox-btn vox-btn--buy" type="button">Купить</button>
+          <button class="vox-btn vox-btn--sell" type="button">Продать</button>
+        </div>
+        <div class="ref__demo" style="margin-top:10px">
+          <button class="vox-btn vox-btn--secondary is-selected" type="button">Выбрано</button>
+          <button class="vox-btn vox-btn--secondary is-focused" type="button">Фокус</button>
+          <button class="vox-btn vox-btn--secondary" type="button" disabled>Недоступно</button>
+          <button class="vox-btn vox-btn--primary" type="button"><span class="vox-spinner"></span>Отправка</button>
+        </div>
+      </div>
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Input / NumericInput</div>
+        <div class="vox-stack vox-gap-2">
+          <div class="ref__demo">
+            <span class="vox-input" style="width:132px"><input class="vox-input__field" value="318,44"><span class="vox-unit">₽</span></span>
+            <span class="vox-numeric"><button class="vox-numeric__step vox-numeric__step--dec" type="button">−</button><span class="vox-numeric__value">10</span><button class="vox-numeric__step vox-numeric__step--inc" type="button">+</button></span>
+          </div>
+          <span class="vox-input is-invalid" style="width:132px"><input class="vox-input__field" value="0"></span>
+          <div class="vox-field-error">Объём должен быть кратен лоту (10). Ближайшее значение — 10.</div>
+          <div class="ref__note">Enter — подтверждение, Escape — откат. Колесо мыши никогда не меняет торгово-критичное значение.</div>
+        </div>
+      </div>
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Select · Tabs · Segmented · Switch</div>
+        <div class="vox-stack vox-gap-3">
+          <div class="ref__demo">
+            <span class="vox-select" style="width:150px">Лимитная<span class="ref__code">▾</span></span>
+            <span class="vox-segmented"><span class="vox-segmented__item is-selected">Compact</span><span class="vox-segmented__item">Standard</span></span>
+          </div>
+          <div class="vox-tabs">
+            <span class="vox-tab is-selected">Позиции<span class="vox-tab__count">7</span></span>
+            <span class="vox-tab">Заявки<span class="vox-tab__count">3</span></span>
+            <span class="vox-tab">Сделки</span>
+            <span class="vox-tab is-disabled">Журнал</span>
+          </div>
+          <div class="ref__demo">
+            <span class="vox-check is-checked"></span><span class="vox-text--dense">Только мои</span>
+            <span class="vox-switch is-on" style="margin-left:8px"><span class="vox-switch__knob"></span></span><span class="vox-text--dense">Связать инструмент</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 · ENV / RUNTIME / RISK -->
+  <section class="ref__sec" id="states">
+    <div class="ref__sec-head"><span class="ref__num">05</span><h2 class="vox-text--title">Среда, рантайм, риск</h2>
+      <span class="ref__note">Цвет никогда не единственный носитель смысла: значок + текст + причина.</span></div>
+    <div class="ref__grid">
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Среда — всегда видна</div>
+        <div class="ref__demo">
+          <span class="vox-env vox-env--live"><span class="vox-dot"></span>LIVE</span>
+          <span class="vox-env vox-env--sandbox"><span class="vox-dot"></span>SANDBOX</span>
+          <span class="vox-env vox-env--paper"><span class="vox-dot"></span>PAPER</span>
+          <span class="vox-env vox-env--backtest"><span class="vox-dot"></span>BACKTEST</span>
+        </div>
+        <div class="ref__demo" style="margin-top:10px">
+          <button class="vox-btn vox-btn--buy vox-live-action" type="button">Купить · LIVE</button>
+          <span class="ref__note">В LIVE необратимое действие получает внутреннюю рамку. Интерфейс целиком не краснеет.</span>
+        </div>
+      </div>
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Рантайм — кликабельно, открывает диагностику</div>
+        <div class="ref__demo">
+          <span class="vox-runtime vox-runtime--ready"><span class="vox-dot"></span><span class="vox-runtime__label">READY</span></span>
+          <span class="vox-runtime vox-runtime--reconciling"><span class="vox-dot"></span><span class="vox-runtime__label">RECONCILING</span></span>
+          <span class="vox-runtime vox-runtime--degraded"><span class="vox-dot"></span><span class="vox-runtime__label">DEGRADED</span></span>
+          <span class="vox-runtime vox-runtime--halted"><span class="vox-dot"></span><span class="vox-runtime__label">HALTED</span></span>
+        </div>
+        <div class="ref__note" style="margin-top:10px">DEGRADED — торговля возможна с оговоркой; HALTED — новые заявки запрещены, снятие остаётся доступным.</div>
+      </div>
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Риск-предпроверка</div>
+        <div class="vox-stack vox-gap-2">
+          <div class="vox-risk vox-risk--safe"><span class="vox-dot"></span><div><div>Проверки пройдены</div><div class="vox-risk__reason">Лимит на инструмент: использовано 42 %</div></div></div>
+          <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Близко к лимиту концентрации</div><div class="vox-risk__reason">Доля позиции 18 % из 20 % <span class="vox-reason-code">RISK_CONC_NEAR</span></div></div></div>
+          <div class="vox-risk vox-risk--blocked"><span class="vox-dot"></span><div><div>Заявка заблокирована</div><div class="vox-risk__reason">Превышен дневной лимит убытка <span class="vox-reason-code">RISK_DAY_LOSS</span></div></div></div>
+          <div class="vox-risk vox-risk--unknown"><span class="vox-dot"></span><div><div>Состояние неизвестно</div><div class="vox-risk__reason">Нет ответа от риск-сервиса 8 c. Это не отказ — решение отложено. <span class="vox-reason-code">RISK_UNKNOWN</span></div></div></div>
+          <div class="vox-risk vox-risk--resize"><span class="vox-dot"></span><div><div>Объём будет уменьшен</div><div class="vox-risk__reason">120 → 80 по лимиту на инструмент <span class="vox-reason-code">RISK_RESIZE</span></div></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 · MARKERS -->
+  <section class="ref__sec" id="markers">
+    <div class="ref__sec-head"><span class="ref__num">06</span><h2 class="vox-text--title">Маркеры событий</h2>
+      <span class="ref__note">Единый буквенный язык графика, ленты, заявок и журнала.</span></div>
+    <div class="ref__spec vox-surface">
+      <div class="ref__demo" style="gap:18px">
+        <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--b">B</span><span class="vox-text--dense">покупка</span></span>
+        <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--s">S</span><span class="vox-text--dense">продажа</span></span>
+        <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--f">F</span><span class="vox-text--dense">исполнение</span></span>
+        <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--sl">SL</span><span class="vox-text--dense">стоп-лосс</span></span>
+        <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--tp">TP</span><span class="vox-text--dense">тейк-профит</span></span>
+        <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--d">D</span><span class="vox-text--dense">дивиденд</span></span>
+        <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--e">E</span><span class="vox-text--dense">событие</span></span>
+      </div>
+      <div class="ref__note" style="margin-top:10px">Размер 14px, буква 9px. Иконки-картинки вместо букв не допускаются: маркер должен читаться на плотном графике и в строке таблицы одинаково.</div>
+    </div>
+  </section>
+
+  <!-- 7 · TABLE -->
+  <section class="ref__sec" id="table">
+    <div class="ref__sec-head"><span class="ref__num">07</span><h2 class="vox-text--title">Таблица</h2>
+      <span class="ref__note">Главный компонент терминала: 12–13px, строка 26px, шапка 28px, числа справа.</span></div>
+    <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
+      <div class="vox-table">
+        <div class="vox-table__header" style="grid-template-columns:150px 78px 96px 96px 116px 92px 1fr">
+          <span class="vox-table__sort">Инструмент ▲</span><span>Кол-во</span><span class="vox-num">Средняя</span><span class="vox-num">Текущая</span><span class="vox-num">P&amp;L</span><span class="vox-num">Доля</span><span>Статус</span>
+        </div>
+        <div class="vox-table__row is-selected" style="grid-template-columns:150px 78px 96px 96px 116px 92px 1fr">
+          <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--b">B</span>SBER</span><span class="vox-num" style="text-align:left">1 200</span><span class="vox-num">288,10</span><span class="vox-num vox-flash-up">318,44</span><span class="vox-num vox-num--positive">+36 408,00</span><span class="vox-num">14,2 %</span><span><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>открыта</span></span>
+        </div>
+        <div class="vox-table__row" style="grid-template-columns:150px 78px 96px 96px 116px 92px 1fr">
+          <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--s">S</span>GAZP</span><span class="vox-num" style="text-align:left">−300</span><span class="vox-num">142,60</span><span class="vox-num">148,02</span><span class="vox-num vox-num--negative">−1 626,00</span><span class="vox-num">6,1 %</span><span><span class="vox-badge vox-badge--warning"><span class="vox-dot"></span>частично</span></span>
+        </div>
+        <div class="vox-table__row is-unknown" style="grid-template-columns:150px 78px 96px 96px 116px 92px 1fr">
+          <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--f">F</span>LKOH</span><span class="vox-num" style="text-align:left">40</span><span class="vox-num">6 812,00</span><span class="vox-num vox-num--unknown">—</span><span class="vox-num vox-num--unknown">неизвестно</span><span class="vox-num">9,8 %</span><span><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>сверка</span></span>
+        </div>
+        <div class="vox-table__row" style="grid-template-columns:150px 78px 96px 96px 116px 92px 1fr">
+          <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--tp">TP</span>MOEX</span><span class="vox-num" style="text-align:left">800</span><span class="vox-num">198,40</span><span class="vox-num vox-flash-down">196,10</span><span class="vox-num vox-num--negative">−1 840,00</span><span class="vox-num">4,4 %</span><span><span class="vox-badge"><span class="vox-dot"></span>ожидание</span></span>
+        </div>
+        <div class="vox-table__footer"><span>4 позиции · счёт «Основной»</span><span class="vox-num">Итого P&amp;L <span class="vox-num--positive">+32 942,00 ₽</span></span></div>
+      </div>
+    </div>
+    <div class="ref__note" style="margin-top:8px">Вспышка на изменении цены — 480 ms, только фон ячейки. Строка UNKNOWN окрашена своей семантикой и никогда не выглядит как ошибка. Идентификаторы брокера в обычном UI не показываются — только человекочитаемые имя счёта и инструмента.</div>
+  </section>
+
+  <!-- 8 · WIDGET -->
+  <section class="ref__sec" id="widget">
+    <div class="ref__sec-head"><span class="ref__num">08</span><h2 class="vox-text--title">Виджет</h2>
+      <span class="ref__note">Шапка 32px + тело. Перетаскивание за шапку, изменение размера с шагом 8px, контекст инструмента связан или закреплён.</span></div>
+    <div class="ref__grid">
+      <div class="vox-widget" style="position:relative">
+        <div class="vox-widget__header">
+          <span class="vox-widget__title">График<span class="vox-widget__context vox-widget__context--instrument">SBER</span></span>
+          <span class="vox-widget__tools"><span class="vox-context-link is-linked">связан</span><button class="vox-icon-btn vox-icon-btn--xs" type="button">⋯</button></span>
+        </div>
+        <div class="ref__placeholder">chart canvas · свечи + маркеры B/S/F/SL/TP</div>
+        <div class="vox-widget__footer"><span>1 мин</span><span>поток активен</span><span class="vox-num">318,44</span></div>
+        <span class="vox-widget__resize"></span>
+      </div>
+      <div class="vox-widget is-stale" style="position:relative">
+        <div class="vox-widget__header">
+          <span class="vox-widget__title">Стакан<span class="vox-widget__context">закреплён · GAZP</span></span>
+          <span class="vox-widget__tools"><span class="vox-context-link is-pinned">закреплён</span><button class="vox-icon-btn vox-icon-btn--xs" type="button">⋯</button></span>
+        </div>
+        <div class="vox-widget__body">
+          <div class="vox-book__header"><span>Цена</span><span class="vox-num">Объём</span><span class="vox-num">Итого</span></div>
+          <div class="vox-book__row vox-book__row--ask"><span class="vox-book__depth" style="width:46%"></span><span class="vox-book__cell vox-book__price--ask">148,10</span><span class="vox-book__cell vox-num">1 400</span><span class="vox-book__cell vox-num">4 100</span></div>
+          <div class="vox-book__row vox-book__row--ask is-own"><span class="vox-book__depth" style="width:30%"></span><span class="vox-book__cell vox-book__price--ask">148,06</span><span class="vox-book__cell vox-num">900</span><span class="vox-book__cell vox-num">2 700</span></div>
+          <div class="vox-book__spread"><span class="vox-text--caption">спред</span><span class="vox-num">0,04 · 0,03 %</span></div>
+          <div class="vox-book__row vox-book__row--bid"><span class="vox-book__depth" style="width:38%"></span><span class="vox-book__cell vox-book__price--bid">148,02</span><span class="vox-book__cell vox-num">1 100</span><span class="vox-book__cell vox-num">1 100</span></div>
+          <div class="vox-book__row vox-book__row--bid"><span class="vox-book__depth" style="width:64%"></span><span class="vox-book__cell vox-book__price--bid">147,98</span><span class="vox-book__cell vox-num">2 300</span><span class="vox-book__cell vox-num">3 400</span></div>
+        </div>
+        <div class="vox-stale-bar"><span class="vox-dot"></span>Данные устарели: 12 c без обновления. Показаны последние известные значения.</div>
+        <span class="vox-widget__resize"></span>
+      </div>
+      <div class="vox-widget is-error">
+        <div class="vox-widget__header"><span class="vox-widget__title">Лента сделок</span><span class="vox-widget__tools"><button class="vox-icon-btn vox-icon-btn--xs" type="button">⋯</button></span></div>
+        <div class="vox-state-note">
+          <span class="vox-state-note__title">Поток недоступен</span>
+          <span>Соединение с рыночными данными потеряно. Повтор через 3 c. Заявки в этом состоянии не отправляются.</span>
+          <div class="ref__demo"><button class="vox-btn vox-btn--secondary" type="button">Повторить</button><button class="vox-btn vox-btn--ghost" type="button">Диагностика</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 · PATTERNS -->
+  <section class="ref__sec" id="patterns">
+    <div class="ref__sec-head"><span class="ref__num">09</span><h2 class="vox-text--title">Паттерны</h2></div>
+
+    <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden;margin-bottom:12px">
+      <div class="vox-topbar">
+        <div class="vox-topbar__group vox-topbar__brand">VOX TRADER</div>
+        <div class="vox-topbar__group"><span class="vox-text--secondary">Брокер «Альфа»</span><span class="vox-badge">Счёт «Основной»</span></div>
+        <div class="vox-topbar__group"><span class="vox-env vox-env--live"><span class="vox-dot"></span>LIVE</span><span class="vox-runtime vox-runtime--ready"><span class="vox-dot"></span><span class="vox-runtime__label">READY</span></span></div>
+        <div class="vox-topbar__group"><span class="vox-text--caption">P&amp;L дня</span><span class="vox-num vox-num--positive">+32 942,00 ₽</span></div>
+        <div class="vox-topbar__group" style="border-right:0;margin-left:auto"><span class="vox-topbar__clock">17:42:08 MSK</span></div>
+      </div>
+      <div class="vox-metrics">
+        <div class="vox-metrics__cell"><div class="vox-metrics__label">Стоимость портфеля</div><div class="vox-metrics__value vox-num" style="text-align:left">1 284 730,45 ₽</div></div>
+        <div class="vox-metrics__cell"><div class="vox-metrics__label">Свободные средства</div><div class="vox-metrics__value vox-num" style="text-align:left">212 400,00 ₽</div></div>
+        <div class="vox-metrics__cell"><div class="vox-metrics__label">Дневной лимит убытка</div><div class="vox-limit" style="margin-top:4px"><div class="vox-limit__track"><div class="vox-limit__fill vox-limit__fill--warning" style="width:68%"></div></div><div class="vox-text--caption">использовано 68 %</div></div></div>
+        <div class="vox-metrics__cell"><div class="vox-metrics__label">Открытых заявок</div><div class="vox-metrics__value vox-num" style="text-align:left">3</div></div>
+      </div>
+    </div>
+
+    <div class="ref__grid">
+      <div class="vox-widget vox-ticket">
+        <div class="vox-widget__header"><span class="vox-widget__title">Заявка<span class="vox-widget__context vox-widget__context--instrument">SBER</span></span><span class="vox-env vox-env--live" style="height:18px"><span class="vox-dot"></span>LIVE</span></div>
+        <div class="vox-ticket__body">
+          <div class="vox-ticket__instrument"><span>SBER · Сбербанк</span><span class="vox-num">318,44</span></div>
+          <div class="vox-ticket__field"><span class="vox-ticket__label">Тип</span><span class="vox-select vox-grow">Лимитная<span class="ref__code">▾</span></span></div>
+          <div class="vox-ticket__field"><span class="vox-ticket__label">Объём</span><span class="vox-numeric"><button class="vox-numeric__step vox-numeric__step--dec" type="button">−</button><span class="vox-numeric__value">100</span><button class="vox-numeric__step vox-numeric__step--inc" type="button">+</button></span><span class="vox-text--caption">лот 10</span></div>
+          <div class="vox-ticket__field"><span class="vox-ticket__label">Цена</span><span class="vox-input vox-grow"><input class="vox-input__field" value="318,40"><span class="vox-unit">₽</span></span></div>
+          <div class="vox-ticket__preview">
+            <div class="vox-ticket__preview-row"><span class="vox-text--caption">Сумма</span><span class="vox-num">31 840,00 ₽</span></div>
+            <div class="vox-ticket__preview-row"><span class="vox-text--caption">Комиссия</span><span class="vox-num">9,55 ₽</span></div>
+            <div class="vox-ticket__preview-row"><span class="vox-text--caption">Маржа после</span><span class="vox-num">180 560,00 ₽</span></div>
+          </div>
+          <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Близко к лимиту концентрации</div><div class="vox-risk__reason">18 % из 20 % <span class="vox-reason-code">RISK_CONC_NEAR</span></div></div></div>
+          <div class="vox-ticket__actions">
+            <button class="vox-ticket__action vox-ticket__action--buy vox-live-action" type="button"><span class="vox-ticket__action-label">Купить</span><span class="vox-ticket__action-value">318,40</span></button>
+            <button class="vox-ticket__action vox-ticket__action--sell vox-live-action" type="button"><span class="vox-ticket__action-label">Продать</span><span class="vox-ticket__action-value">318,36</span></button>
+          </div>
+          <div class="vox-ticket__hint">B — Купить · S — Продать · Esc — сброс</div>
+        </div>
+      </div>
+
+      <div class="vox-widget vox-ticket">
+        <div class="vox-widget__header"><span class="vox-widget__title">Заявка · сторона заблокирована</span></div>
+        <div class="vox-ticket__body">
+          <div class="vox-ticket__instrument"><span>GAZP · Газпром</span><span class="vox-num">148,02</span></div>
+          <div class="vox-risk vox-risk--blocked"><span class="vox-dot"></span><div><div>Продажа недоступна</div><div class="vox-risk__reason">Нет позиции, короткие сделки по счёту запрещены <span class="vox-reason-code">RISK_NO_SHORT</span></div></div></div>
+          <div class="vox-ticket__actions">
+            <button class="vox-ticket__action vox-ticket__action--buy" type="button"><span class="vox-ticket__action-label">Купить</span><span class="vox-ticket__action-value">148,06</span></button>
+            <button class="vox-ticket__action vox-ticket__action--sell is-blocked" type="button" aria-disabled="true"><span class="vox-ticket__action-label">Продать</span><span class="vox-ticket__action-note">запрещено</span></button>
+          </div>
+          <div class="ref__note">Заблокированная сторона остаётся на месте и объясняет причину. Переключателя режима «покупка/продажа» в системе не существует.</div>
+        </div>
+      </div>
+
+      <div class="vox-widget">
+        <div class="vox-widget__header"><span class="vox-widget__title">Лента сделок<span class="vox-widget__context">связана</span></span></div>
+        <div class="vox-widget__body">
+          <div class="vox-tape__row"><span class="vox-tape__time">17:42:08</span><span class="vox-num vox-book__price--bid">318,44</span><span class="vox-num vox-tape__size--large">1 400</span><span class="vox-marker vox-marker--b">B</span></div>
+          <div class="vox-tape__row is-own"><span class="vox-tape__time">17:42:06</span><span class="vox-num vox-book__price--ask">318,40</span><span class="vox-num">300</span><span class="vox-marker vox-marker--f">F</span></div>
+          <div class="vox-tape__row"><span class="vox-tape__time">17:42:05</span><span class="vox-num vox-book__price--ask">318,38</span><span class="vox-num">120</span><span class="vox-marker vox-marker--s">S</span></div>
+          <div class="vox-tape__row"><span class="vox-tape__time">17:41:58</span><span class="vox-num vox-book__price--bid">318,46</span><span class="vox-num">640</span><span class="vox-marker vox-marker--e">E</span></div>
+        </div>
+        <div class="vox-widget__footer"><span>свои сделки подсвечены</span><span class="vox-num">4 события</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 · DON'T -->
+  <section class="ref__sec" id="dont">
+    <div class="ref__sec-head"><span class="ref__num">10</span><h2 class="vox-text--title">Запрещено</h2></div>
+    <div class="ref__grid">
+      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> крупных SaaS-карточек с одной цифрой и отступом 24px — плотная сетка метрик с границами.</div></div>
+      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> переключателя режима «Купить/Продать» — обе кнопки постоянны.</div></div>
+      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> сырых идентификаторов брокера, счёта и заявки в обычном UI — только в диагностике и копировании по требованию.</div></div>
+      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> UNKNOWN, окрашенного как ошибка: отсутствие ответа ≠ отказ.</div></div>
+      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> английского в основном UI: язык интерфейса — русский; латиницей остаются тикеры, коды причин и технические статусы (LIVE, READY).</div></div>
+      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> плотности Comfortable по умолчанию, теней на виджетах, скруглений &gt; 8px и цвета как единственного носителя смысла.</div></div>
+    </div>
+  </section>
+
+  <footer class="ref__note" style="margin-top:32px;padding-top:14px;border-top:1px solid var(--vox-border-default)">
+    Каноничный визуальный референс — <code class="ref__code">./vox-trader-design-system.reference.html</code> (самодостаточный экспорт из Claude Design).
+    Этот файл — слоевой референс на извлечённых CSS-слоях; расхождения решаются в пользу каноничного файла и <code class="ref__code">docs/design/VOX_TRADER_DESIGN_SYSTEM.md</code>.
+  </footer>
+</div>
+</body>
+</html>
