@@ -1,0 +1,158 @@
+/*
+ * Vox Trader — trading patterns
+ * Composed layouts: application shell, workspace grid, instrument header,
+ * order book, trade tape, dual-action order ticket, portfolio summary.
+ * Depends on ../tokens/tokens.css, ../primitives/primitives.css, ../components/components.css.
+ */
+
+/* ---------- Application shell ---------- */
+.vox-shell { display: flex; flex-direction: column; min-height: 100vh; background: var(--vox-bg-canvas); }
+.vox-topbar {
+  height: 44px; flex: 0 0 44px; display: flex; align-items: center; padding: 0 12px;
+  background: var(--vox-bg-workspace); border-bottom: 1px solid var(--vox-border-default);
+}
+/* Top bar answers five questions without leaving the screen:
+   where am I · which broker · which account · can I trade now · what is the portfolio doing. */
+.vox-topbar__group {
+  height: 100%; display: flex; align-items: center; gap: var(--vox-space-2);
+  padding: 0 12px; border-right: 1px solid var(--vox-border-subtle);
+}
+.vox-topbar__brand { font-size: var(--vox-text-13); font-weight: var(--vox-weight-semibold); letter-spacing: 0.06em; }
+.vox-topbar__clock { font-family: var(--vox-font-mono); font-variant-numeric: tabular-nums; font-size: var(--vox-text-12); color: var(--vox-text-tertiary); }
+
+.vox-shell__body { display: flex; align-items: stretch; flex: 1 1 auto; min-height: 0; }
+.vox-nav {
+  width: 118px; flex: 0 0 118px; display: flex; flex-direction: column; padding: 6px 0;
+  background: var(--vox-bg-workspace); border-right: 1px solid var(--vox-border-subtle);
+}
+.vox-nav__item {
+  height: var(--vox-row-height); display: flex; align-items: center; gap: var(--vox-space-2);
+  padding: 0 10px; border-left: 2px solid transparent;
+  font-size: var(--vox-text-12); color: var(--vox-text-secondary); cursor: pointer;
+}
+.vox-nav__item:hover { background: var(--vox-bg-surface-hover); color: var(--vox-text-primary); }
+.vox-nav__item.is-active {
+  background: var(--vox-accent-selected-surface); border-left-color: var(--vox-accent-primary);
+  color: var(--vox-text-primary); font-weight: var(--vox-weight-medium);
+}
+.vox-nav__secondary { margin-top: auto; padding-top: 6px; border-top: 1px solid var(--vox-border-subtle); }
+.vox-nav__secondary .vox-nav__item { height: 24px; font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+
+/* ---------- Workspace grid ---------- */
+/* 12-column desktop grid, 8px minimum resize step, layout persisted per workspace. */
+.vox-workspace {
+  flex: 1 1 auto; min-width: 0; padding: 6px;
+  display: grid; grid-template-columns: repeat(12, 1fr); grid-auto-rows: minmax(48px, auto);
+  gap: 6px; background: var(--vox-bg-workspace);
+}
+.vox-workspace .vox-widget { position: relative; }
+.vox-workspace.is-dragging { cursor: grabbing; }
+.vox-drop-target { border: 1px dashed var(--vox-accent-primary); border-radius: var(--vox-radius-md); background: var(--vox-accent-selected-surface); }
+
+/* ---------- Instrument header / quote ---------- */
+.vox-quote { display: flex; align-items: stretch; height: 56px; }
+.vox-quote__cell { display: flex; flex-direction: column; justify-content: center; padding: 0 14px; border-right: 1px solid var(--vox-border-subtle); }
+.vox-quote__symbol { font-size: var(--vox-text-16); font-weight: var(--vox-weight-semibold); color: var(--vox-text-primary); }
+.vox-quote__meta { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+.vox-quote__last { font-variant-numeric: tabular-nums; font-size: var(--vox-text-22); font-weight: var(--vox-weight-medium); }
+.vox-quote__stats { display: grid; grid-auto-flow: column; align-items: center; flex: 1 1 auto; }
+.vox-quote__stat { padding: 0 12px; }
+.vox-quote__stat-label { font-size: 10px; color: var(--vox-text-disabled); }
+.vox-quote__stat-value { font-variant-numeric: tabular-nums; font-size: var(--vox-text-13); color: var(--vox-text-secondary); }
+.vox-quote__actions { display: flex; align-items: center; gap: var(--vox-space-1); padding: 0 12px; }
+/* Instrument context is linkable and pinnable across widgets. */
+.vox-context-link { display: inline-flex; align-items: center; gap: 4px; font-size: var(--vox-text-11); color: var(--vox-text-tertiary); cursor: pointer; }
+.vox-context-link.is-linked { color: var(--vox-blue-300); }
+.vox-context-link.is-pinned { color: var(--vox-warning-base); }
+
+/* ---------- Order book ---------- */
+/* Depth sits BEHIND the number, never replaces it. Max 12% alpha so text keeps contrast. */
+.vox-book__header {
+  height: 22px; display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center; padding: 0 10px;
+  background: var(--vox-bg-surface-hover); border-bottom: 1px solid var(--vox-border-default);
+  font-size: 10px; color: var(--vox-text-tertiary);
+}
+.vox-book__row {
+  height: 20px; position: relative; display: grid; grid-template-columns: 1fr 1fr 1fr;
+  align-items: center; padding: 0 10px; font-size: var(--vox-text-12); cursor: pointer;
+}
+.vox-book__row.is-own { background: var(--vox-accent-selected-surface); border-left: 2px solid var(--vox-accent-primary); }
+.vox-book__depth { position: absolute; inset: 0 0 0 auto; }
+.vox-book__row--ask .vox-book__depth { background: var(--vox-negative-surface); }
+.vox-book__row--bid .vox-book__depth { background: var(--vox-positive-surface); }
+.vox-book__cell { position: relative; font-variant-numeric: tabular-nums; }
+.vox-book__price--ask { color: var(--vox-negative-base); }
+.vox-book__price--bid { color: var(--vox-positive-base); }
+.vox-book__spread {
+  height: 22px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px;
+  background: var(--vox-bg-workspace);
+  border-top: 1px solid var(--vox-border-subtle); border-bottom: 1px solid var(--vox-border-subtle);
+  font-size: var(--vox-text-12); font-weight: var(--vox-weight-semibold);
+}
+
+/* ---------- Trade tape ---------- */
+.vox-tape__row {
+  height: 20px; display: grid; grid-template-columns: 76px 1fr 1fr 40px; align-items: center;
+  padding: 0 10px; font-size: var(--vox-text-12); border-bottom: 1px solid var(--vox-bg-workspace);
+}
+.vox-tape__row.is-own { background: var(--vox-accent-selected-surface); }
+.vox-tape__time { font-family: var(--vox-font-mono); font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+.vox-tape__size--large { font-weight: var(--vox-weight-semibold); color: var(--vox-text-primary); }
+
+/* ---------- Order ticket — DUAL ACTION ----------
+   One shared body. Both actions are permanently visible.
+   There is NO buy/sell mode toggle: the side IS the final action.
+   Shortcuts map straight to the actions (B = Купить, S = Продать). */
+.vox-ticket { width: 300px; }
+.vox-ticket__body { padding: 10px; display: flex; flex-direction: column; gap: var(--vox-space-2); }
+.vox-ticket__instrument {
+  height: var(--vox-row-height); display: flex; align-items: center; justify-content: space-between;
+  padding: 0 8px; background: var(--vox-bg-input);
+  border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-sm);
+}
+.vox-ticket__field { display: flex; align-items: center; gap: var(--vox-space-2); }
+.vox-ticket__label { width: 56px; font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+.vox-ticket__preview {
+  padding: 8px; background: var(--vox-bg-input);
+  border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-sm);
+}
+.vox-ticket__preview-row { height: 20px; display: flex; align-items: center; justify-content: space-between; }
+.vox-ticket__disclosure {
+  height: 24px; display: flex; align-items: center; gap: var(--vox-space-1);
+  background: transparent; border: 0; padding: 0; color: var(--vox-text-secondary);
+  font: inherit; font-size: var(--vox-text-12); cursor: pointer;
+}
+.vox-ticket__actions { display: flex; gap: var(--vox-space-1); }
+.vox-ticket__action {
+  flex: 1; height: 34px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  border-radius: var(--vox-radius-sm); font-family: inherit; cursor: pointer;
+  transition: background var(--vox-motion-normal) var(--vox-motion-ease);
+}
+.vox-ticket__action-label { font-size: var(--vox-text-12); font-weight: var(--vox-weight-semibold); }
+.vox-ticket__action-value { font-variant-numeric: tabular-nums; font-size: 10px; opacity: 0.75; }
+.vox-ticket__action--buy { background: var(--vox-positive-base); border: 1px solid var(--vox-positive-strong); color: #08120E; }
+.vox-ticket__action--buy:hover { background: var(--vox-positive-hover); }
+.vox-ticket__action--buy:active { background: var(--vox-positive-strong); }
+.vox-ticket__action--sell { background: var(--vox-negative-base); border: 1px solid var(--vox-negative-strong); color: #1A0A0A; }
+.vox-ticket__action--sell:hover { background: var(--vox-negative-hover); }
+.vox-ticket__action--sell:active { background: var(--vox-negative-strong); }
+/* Blocked side stays visible: the restriction affects execution, not the widget concept. */
+.vox-ticket__action.is-blocked { cursor: not-allowed; }
+.vox-ticket__action--buy.is-blocked { background: var(--vox-positive-surface); color: var(--vox-positive-base); }
+.vox-ticket__action--sell.is-blocked { background: var(--vox-negative-surface); color: var(--vox-negative-base); }
+.vox-ticket__action-note { font-size: 10px; color: var(--vox-neutral-400); }
+.vox-ticket__hint { font-family: var(--vox-font-mono); font-size: 10px; color: var(--vox-text-disabled); text-align: center; }
+
+/* ---------- Portfolio / risk summary ---------- */
+/* Dense metric grid separated by borders. No oversized card for a single number. */
+.vox-metrics { display: grid; grid-template-columns: repeat(4, 1fr); }
+.vox-metrics__cell { padding: 10px 12px; border-right: 1px solid var(--vox-bg-surface-hover); border-bottom: 1px solid var(--vox-bg-surface-hover); }
+.vox-metrics__cell:last-child { border-right: 0; }
+.vox-metrics__label { font-size: 10px; color: var(--vox-text-disabled); }
+.vox-metrics__value { font-variant-numeric: tabular-nums; font-size: var(--vox-text-16); font-weight: var(--vox-weight-medium); color: var(--vox-text-primary); }
+.vox-limit { display: flex; flex-direction: column; gap: var(--vox-space-1); }
+.vox-limit__track { height: 4px; background: var(--vox-bg-elevated); border-radius: 2px; overflow: hidden; }
+.vox-limit__fill { height: 4px; background: var(--vox-positive-base); }
+.vox-limit__fill--warning { background: var(--vox-warning-base); }
+.vox-limit__fill--blocked { background: var(--vox-negative-base); }
+.vox-limit__fill--neutral { background: var(--vox-accent-primary); }
