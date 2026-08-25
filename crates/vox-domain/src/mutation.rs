@@ -1,4 +1,4 @@
-use crate::{BrokerOrderId, ClientRequestId, ExchangeOrderId};
+use crate::{BrokerOrderId, BrokerStopOrderId, ClientRequestId, ExchangeOrderId};
 use core::fmt;
 use serde::{Deserialize, Serialize};
 
@@ -32,7 +32,11 @@ pub struct MutationEvidence {
     client_request_id: ClientRequestId,
     outcome: MutationOutcome,
     broker_order_id: Option<BrokerOrderId>,
+    #[serde(default)]
+    broker_stop_order_id: Option<BrokerStopOrderId>,
     exchange_order_id: Option<ExchangeOrderId>,
+    #[serde(default)]
+    provider_operation_id: Option<String>,
     correlation_id: Option<String>,
 }
 
@@ -43,7 +47,9 @@ impl MutationEvidence {
             client_request_id,
             outcome: MutationOutcome::NotDispatched,
             broker_order_id: None,
+            broker_stop_order_id: None,
             exchange_order_id: None,
+            provider_operation_id: None,
             correlation_id: None,
         }
     }
@@ -71,6 +77,11 @@ impl MutationEvidence {
     }
 
     #[must_use]
+    pub const fn broker_stop_order_id(&self) -> Option<&BrokerStopOrderId> {
+        self.broker_stop_order_id.as_ref()
+    }
+
+    #[must_use]
     pub const fn exchange_order_id(&self) -> Option<&ExchangeOrderId> {
         self.exchange_order_id.as_ref()
     }
@@ -78,6 +89,11 @@ impl MutationEvidence {
     #[must_use]
     pub fn correlation_id(&self) -> Option<&str> {
         self.correlation_id.as_deref()
+    }
+
+    #[must_use]
+    pub fn provider_operation_id(&self) -> Option<&str> {
+        self.provider_operation_id.as_deref()
     }
 
     #[must_use]
@@ -89,6 +105,18 @@ impl MutationEvidence {
     #[must_use]
     pub fn with_exchange_order_id(mut self, exchange_order_id: ExchangeOrderId) -> Self {
         self.exchange_order_id = Some(exchange_order_id);
+        self
+    }
+
+    #[must_use]
+    pub fn with_broker_stop_order_id(mut self, broker_stop_order_id: BrokerStopOrderId) -> Self {
+        self.broker_stop_order_id = Some(broker_stop_order_id);
+        self
+    }
+
+    #[must_use]
+    pub fn with_provider_operation_id(mut self, provider_operation_id: impl Into<String>) -> Self {
+        self.provider_operation_id = Some(provider_operation_id.into());
         self
     }
 }

@@ -1,6 +1,10 @@
 use prost::Message;
 use std::collections::BTreeSet;
 use vox_tinvest::TInvestGrpcClient;
+use vox_tinvest::execution::{
+    EXECUTION_STREAM_PAYLOADS, ORDERS_SERVICE_METHODS, ORDERS_STREAM_METHODS,
+    STOP_ORDERS_SERVICE_METHODS,
+};
 use vox_tinvest::generated::v1;
 use vox_tinvest::market_data::{MARKET_DATA_SERVICE_METHODS, MARKET_DATA_STREAM_METHODS};
 use vox_tinvest::reference::INSTRUMENTS_SERVICE_METHODS;
@@ -10,6 +14,8 @@ const MARKET_DATA_PROTO: &str = include_str!("../proto/tinkoff/marketdata.proto"
 const USERS_PROTO: &str = include_str!("../proto/tinkoff/users.proto");
 const OPERATIONS_PROTO: &str = include_str!("../proto/tinkoff/operations.proto");
 const SANDBOX_PROTO: &str = include_str!("../proto/tinkoff/sandbox.proto");
+const ORDERS_PROTO: &str = include_str!("../proto/tinkoff/orders.proto");
+const STOP_ORDERS_PROTO: &str = include_str!("../proto/tinkoff/stoporders.proto");
 
 #[test]
 fn generated_contract_inventory_matches_all_43_capability_rows() {
@@ -228,6 +234,123 @@ fn rpc_inventory(proto: &str) -> Vec<(String, String)> {
         }
     }
     methods
+}
+
+#[test]
+fn execution_matrix_matches_every_pinned_rpc_and_stream_branch() {
+    let matrix: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../qualification/tinvest_execution_contracts.json"
+    ))
+    .expect("execution contract matrix must be valid JSON");
+    assert_eq!(
+        matrix["revision"],
+        "762e720e27164213f41cac0b226c5698c2ae8199"
+    );
+    let official = rpc_inventory(ORDERS_PROTO)
+        .into_iter()
+        .chain(rpc_inventory(STOP_ORDERS_PROTO))
+        .chain(rpc_inventory(SANDBOX_PROTO))
+        .collect::<BTreeSet<_>>();
+    let rows = matrix["methods"].as_array().expect("method rows");
+    let inventoried = rows
+        .iter()
+        .map(|row| {
+            for field in [
+                "service",
+                "method",
+                "request",
+                "response",
+                "class",
+                "environment",
+                "requirements",
+                "identifiers",
+                "idempotency",
+                "variants",
+                "constraints",
+                "semantics",
+                "adapter",
+                "state",
+                "routing",
+                "canonical",
+                "evidence",
+                "qualification",
+                "limitations",
+            ] {
+                assert!(
+                    row[field].as_str().is_some_and(|value| !value.is_empty()),
+                    "execution inventory row missing {field}: {row}"
+                );
+            }
+            (
+                row["service"].as_str().expect("service").to_owned(),
+                row["method"].as_str().expect("method").to_owned(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        rows.len(),
+        inventoried.len(),
+        "duplicate execution inventory row"
+    );
+    assert_eq!(
+        official, inventoried,
+        "official execution RPC inventory drift"
+    );
+
+    let branches = matrix["stream_branches"]
+        .as_array()
+        .expect("stream branches");
+    assert_eq!(branches.len(), EXECUTION_STREAM_PAYLOADS.len());
+    for branch in EXECUTION_STREAM_PAYLOADS {
+        let (stream, payload) = branch.split_once('.').expect("stream branch");
+        assert!(
+            branches
+                .iter()
+                .any(|row| { row["method"] == stream && row["branch"] == payload }),
+            "official execution stream branch missing: {branch}"
+        );
+    }
+    assert_eq!(ORDERS_SERVICE_METHODS.len(), 8);
+    assert_eq!(ORDERS_STREAM_METHODS.len(), 2);
+    assert_eq!(STOP_ORDERS_SERVICE_METHODS.len(), 3);
+}
+
+#[test]
+fn every_execution_rpc_request_and_response_is_generated_and_round_trips() {
+    macro_rules! round_trip {
+        ($($type:ty),+ $(,)?) => {$({
+            let value = <$type>::default();
+            <$type>::decode(value.encode_to_vec().as_slice())
+                .expect(concat!("generated round trip: ", stringify!($type)));
+        })+};
+    }
+    round_trip!(
+        v1::PostOrderRequest,
+        v1::PostOrderResponse,
+        v1::PostOrderAsyncRequest,
+        v1::PostOrderAsyncResponse,
+        v1::CancelOrderRequest,
+        v1::CancelOrderResponse,
+        v1::GetOrderStateRequest,
+        v1::OrderState,
+        v1::GetOrdersRequest,
+        v1::GetOrdersResponse,
+        v1::ReplaceOrderRequest,
+        v1::GetMaxLotsRequest,
+        v1::GetMaxLotsResponse,
+        v1::GetOrderPriceRequest,
+        v1::GetOrderPriceResponse,
+        v1::TradesStreamRequest,
+        v1::TradesStreamResponse,
+        v1::OrderStateStreamRequest,
+        v1::OrderStateStreamResponse,
+        v1::PostStopOrderRequest,
+        v1::PostStopOrderResponse,
+        v1::GetStopOrdersRequest,
+        v1::GetStopOrdersResponse,
+        v1::CancelStopOrderRequest,
+        v1::CancelStopOrderResponse,
+    );
 }
 
 #[test]

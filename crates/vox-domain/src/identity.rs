@@ -37,6 +37,8 @@ identity!(ClientRequestId);
 identity!(ClientOrderId);
 identity!(BrokerOrderId);
 identity!(ExchangeOrderId);
+identity!(BrokerStopOrderId);
+identity!(BrokerFillId);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IdentityError {
@@ -60,8 +62,12 @@ mod tests {
         let client = ClientOrderId::new("same-text")?;
         let broker = BrokerOrderId::new("same-text")?;
         let exchange = ExchangeOrderId::new("same-text")?;
+        let stop = BrokerStopOrderId::new("same-text")?;
+        let fill = BrokerFillId::new("same-text")?;
         assert_eq!(client.as_str(), broker.as_str());
         assert_eq!(broker.as_str(), exchange.as_str());
+        assert_eq!(exchange.as_str(), stop.as_str());
+        assert_eq!(stop.as_str(), fill.as_str());
         Ok(())
     }
 
