@@ -6,12 +6,14 @@
 //! [`vox_domain::FixedPoint`]; no binary floating-point conversion is available here.
 
 mod exact;
+mod execution_mapping;
 mod mapping;
 mod market_mapping;
 mod market_spec;
 mod spec;
 
 pub use exact::{ExactDecimal, future_money_per_point, to_nautilus_price};
+pub use execution_mapping::{NautilusRegularOrderCommand, to_nautilus_regular_order};
 pub use mapping::{MappedEquity, MappedFuture, to_nautilus_equity, to_nautilus_future};
 pub use market_mapping::{to_nautilus_bar, to_nautilus_order_book_snapshot, to_nautilus_trade};
 pub use market_spec::{
@@ -51,4 +53,6 @@ pub enum MappingError {
     IncompleteBar,
     #[error("inconsistent provider order book cannot become a Nautilus snapshot")]
     InconsistentOrderBook,
+    #[error("execution semantic has no faithful Nautilus representation: {semantic}")]
+    UnsupportedExecutionSemantic { semantic: &'static str },
 }

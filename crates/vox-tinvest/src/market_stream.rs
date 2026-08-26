@@ -837,6 +837,7 @@ mod tests {
                         message: "80004: No active subscriptions".into(),
                         details: Vec::new(),
                         tracking_id: Some("track-80004".into()),
+                        rate_limit: Box::default(),
                     }),
                 ));
             }
@@ -889,6 +890,7 @@ mod tests {
                 message: "80004".into(),
                 details: Vec::new(),
                 tracking_id: None,
+                rate_limit: Box::default(),
             },
         ));
         assert!(should_reconnect(&no_active, true));

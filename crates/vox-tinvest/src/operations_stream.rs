@@ -480,8 +480,13 @@ impl OperationsStreamError {
             Self::Connect(GrpcError {
                 kind: crate::GrpcErrorKind::Provider(provider),
                 ..
-            })
-            | Self::Stream(GrpcStreamError::Provider(provider)) => matches!(
+            }) => matches!(
+                provider.code,
+                tonic::Code::Unavailable
+                    | tonic::Code::ResourceExhausted
+                    | tonic::Code::DeadlineExceeded
+            ),
+            Self::Stream(GrpcStreamError::Provider(provider)) => matches!(
                 provider.code,
                 tonic::Code::Unavailable
                     | tonic::Code::ResourceExhausted
@@ -615,12 +620,13 @@ mod tests {
                 attempt: 1,
                 mutation: false,
             },
-            kind: GrpcErrorKind::Provider(GrpcProviderError {
+            kind: GrpcErrorKind::Provider(Box::new(GrpcProviderError {
                 code: tonic::Code::PermissionDenied,
                 message: "permission denied".to_owned(),
                 details: Vec::new(),
                 tracking_id: None,
-            }),
+                rate_limit: Box::default(),
+            })),
         });
         assert!(!error.reconnectable());
     }

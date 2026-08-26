@@ -512,6 +512,7 @@ mod tests {
             message: format!("provider code {provider_code}"),
             details: Vec::new(),
             tracking_id: None,
+            rate_limit: Box::default(),
         }
     }
 
@@ -523,7 +524,7 @@ mod tests {
                 attempt: 1,
                 mutation: false,
             },
-            kind: GrpcErrorKind::Provider(provider(code, provider_code)),
+            kind: GrpcErrorKind::Provider(Box::new(provider(code, provider_code))),
         }
     }
 

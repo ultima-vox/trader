@@ -562,23 +562,25 @@ mod tests {
                 attempt: 1,
                 mutation: false,
             },
-            kind: GrpcErrorKind::Provider(GrpcProviderError {
+            kind: GrpcErrorKind::Provider(Box::new(GrpcProviderError {
                 code,
                 message: code.description().to_owned(),
                 details: Vec::new(),
                 tracking_id: None,
-            }),
+                rate_limit: Box::default(),
+            })),
         };
         assert!(matches!(
             observe_documented_gate::<()>(
                 "GetBrokerReport",
                 Err(GrpcError {
-                    kind: GrpcErrorKind::Provider(GrpcProviderError {
+                    kind: GrpcErrorKind::Provider(Box::new(GrpcProviderError {
                         code: tonic::Code::PermissionDenied,
                         message: "provider code 40002".to_owned(),
                         details: Vec::new(),
                         tracking_id: None,
-                    }),
+                        rate_limit: Box::default(),
+                    })),
                     ..error(tonic::Code::PermissionDenied)
                 })
             ),

@@ -37,6 +37,10 @@ type OperationsGeneratedClient = v1::operations_service_client::OperationsServic
 type OperationsStreamGeneratedClient =
     v1::operations_stream_service_client::OperationsStreamServiceClient<Channel>;
 type SandboxGeneratedClient = v1::sandbox_service_client::SandboxServiceClient<Channel>;
+type OrdersGeneratedClient = v1::orders_service_client::OrdersServiceClient<Channel>;
+type OrdersStreamGeneratedClient =
+    v1::orders_stream_service_client::OrdersStreamServiceClient<Channel>;
+type StopOrdersGeneratedClient = v1::stop_orders_service_client::StopOrdersServiceClient<Channel>;
 type GrpcFuture<'a, T> = Pin<Box<dyn Future<Output = Result<Response<T>, Status>> + Send + 'a>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -221,6 +225,11 @@ impl TInvestGrpcClient {
     }
 
     #[must_use]
+    pub const fn environment(&self) -> Environment {
+        self.config.environment
+    }
+
+    #[must_use]
     pub fn with_retry_observer<O>(mut self, observer: O) -> Self
     where
         O: RetryObserver + 'static,
@@ -267,6 +276,24 @@ impl TInvestGrpcClient {
 
     fn sandbox_generated_client(&self) -> SandboxGeneratedClient {
         SandboxGeneratedClient::new(self.channel.clone())
+            .max_encoding_message_size(self.config.max_request_bytes)
+            .max_decoding_message_size(self.config.max_response_bytes)
+    }
+
+    fn orders_generated_client(&self) -> OrdersGeneratedClient {
+        OrdersGeneratedClient::new(self.channel.clone())
+            .max_encoding_message_size(self.config.max_request_bytes)
+            .max_decoding_message_size(self.config.max_response_bytes)
+    }
+
+    fn orders_stream_generated_client(&self) -> OrdersStreamGeneratedClient {
+        OrdersStreamGeneratedClient::new(self.channel.clone())
+            .max_encoding_message_size(self.config.max_request_bytes)
+            .max_decoding_message_size(self.config.max_response_bytes)
+    }
+
+    fn stop_orders_generated_client(&self) -> StopOrdersGeneratedClient {
+        StopOrdersGeneratedClient::new(self.channel.clone())
             .max_encoding_message_size(self.config.max_request_bytes)
             .max_decoding_message_size(self.config.max_response_bytes)
     }
@@ -353,7 +380,9 @@ impl TInvestGrpcClient {
                 Err(status) => {
                     return Err(GrpcError {
                         metadata,
-                        kind: GrpcErrorKind::Provider(GrpcProviderError::from_status(status)),
+                        kind: GrpcErrorKind::Provider(Box::new(GrpcProviderError::from_status(
+                            status,
+                        ))),
                     });
                 }
             }
@@ -400,7 +429,7 @@ impl TInvestGrpcClient {
             .map(|response| GrpcResponse::from_tonic(request_id, 1, response))
             .map_err(|status| GrpcError {
                 metadata,
-                kind: GrpcErrorKind::Provider(GrpcProviderError::from_status(status)),
+                kind: GrpcErrorKind::Provider(Box::new(GrpcProviderError::from_status(status))),
             })
     }
 
@@ -453,7 +482,9 @@ impl TInvestGrpcClient {
                 Err(status) => {
                     return Err(GrpcError {
                         metadata,
-                        kind: GrpcErrorKind::Provider(GrpcProviderError::from_status(status)),
+                        kind: GrpcErrorKind::Provider(Box::new(GrpcProviderError::from_status(
+                            status,
+                        ))),
                     });
                 }
             }
@@ -515,12 +546,60 @@ impl TInvestGrpcClient {
                 Err(status) => {
                     return Err(GrpcError {
                         metadata,
-                        kind: GrpcErrorKind::Provider(GrpcProviderError::from_status(status)),
+                        kind: GrpcErrorKind::Provider(Box::new(GrpcProviderError::from_status(
+                            status,
+                        ))),
                     });
                 }
             }
         }
         unreachable!("read always has at least one attempt")
+    }
+
+    async fn service_mutation<Req, Resp, Client, Build, Dispatch>(
+        &self,
+        authorization: MutationAuthorization,
+        method: &'static str,
+        body: Req,
+        build: Build,
+        dispatch: Dispatch,
+    ) -> Result<GrpcResponse<Resp>, GrpcError>
+    where
+        Req: Send + Sync + 'static,
+        Resp: Send + 'static,
+        Client: Send,
+        Build: FnOnce() -> Client,
+        Dispatch: for<'a> FnOnce(&'a mut Client, Request<Req>) -> GrpcFuture<'a, Resp>,
+    {
+        let request_id = Uuid::new_v4();
+        let metadata = GrpcRequestMetadata {
+            request_id,
+            method,
+            attempt: 1,
+            mutation: true,
+        };
+        if authorization.environment() != self.config.environment
+            || self.config.environment == Environment::Paper
+        {
+            return Err(GrpcError {
+                metadata,
+                kind: GrpcErrorKind::MutationEnvironmentMismatch {
+                    authorized: authorization.environment(),
+                    configured: self.config.environment,
+                },
+            });
+        }
+        let request = self
+            .unary_request(body, request_id)
+            .map_err(|kind| GrpcError { metadata, kind })?;
+        let mut client = build();
+        dispatch(&mut client, request)
+            .await
+            .map(|response| GrpcResponse::from_tonic(request_id, 1, response))
+            .map_err(|status| GrpcError {
+                metadata,
+                kind: GrpcErrorKind::Provider(Box::new(GrpcProviderError::from_status(status))),
+            })
     }
 
     /// Opens verified, authenticated generated bidirectional market-data stream.
@@ -564,9 +643,10 @@ impl TInvestGrpcClient {
             .await
             .map_err(|status| GrpcError {
                 metadata,
-                kind: GrpcErrorKind::Provider(GrpcProviderError::from_status(status)),
+                kind: GrpcErrorKind::Provider(Box::new(GrpcProviderError::from_status(status))),
             })?;
         let tracking_id = metadata_text(response.metadata(), "x-tracking-id");
+        let rate_limit = rate_limit_metadata(response.metadata());
         Ok(GrpcMarketDataStream {
             outbound,
             inbound: response.into_inner(),
@@ -574,6 +654,7 @@ impl TInvestGrpcClient {
                 request_id,
                 tracking_id,
                 attempt: 1,
+                rate_limit,
             },
         })
     }
@@ -600,15 +681,17 @@ impl TInvestGrpcClient {
             .await
             .map_err(|status| GrpcError {
                 metadata,
-                kind: GrpcErrorKind::Provider(GrpcProviderError::from_status(status)),
+                kind: GrpcErrorKind::Provider(Box::new(GrpcProviderError::from_status(status))),
             })?;
         let tracking_id = metadata_text(response.metadata(), "x-tracking-id");
+        let rate_limit = rate_limit_metadata(response.metadata());
         Ok(GrpcMarketDataServerStream {
             inbound: response.into_inner(),
             metadata: GrpcResponseMetadata {
                 request_id,
                 tracking_id,
                 attempt: 1,
+                rate_limit,
             },
         })
     }
@@ -745,6 +828,65 @@ service_safe_reads!(sandbox_generated_client;
     (get_sandbox_withdraw_limits, "GetSandboxWithdrawLimits", v1::WithdrawLimitsRequest, v1::WithdrawLimitsResponse),
     (get_sandbox_operations, "GetSandboxOperations", v1::OperationsRequest, v1::OperationsResponse),
     (get_sandbox_operations_by_cursor, "GetSandboxOperationsByCursor", v1::GetOperationsByCursorRequest, v1::GetOperationsByCursorResponse),
+    (get_sandbox_orders, "GetSandboxOrders", v1::GetOrdersRequest, v1::GetOrdersResponse),
+    (get_sandbox_order_state, "GetSandboxOrderState", v1::GetOrderStateRequest, v1::OrderState),
+    (get_sandbox_order_price, "GetSandboxOrderPrice", v1::GetOrderPriceRequest, v1::GetOrderPriceResponse),
+    (get_sandbox_max_lots, "GetSandboxMaxLots", v1::GetMaxLotsRequest, v1::GetMaxLotsResponse),
+    (get_sandbox_stop_orders, "GetSandboxStopOrders", v1::GetStopOrdersRequest, v1::GetStopOrdersResponse),
+);
+
+service_safe_reads!(orders_generated_client;
+    (get_order_state, "GetOrderState", v1::GetOrderStateRequest, v1::OrderState),
+    (get_orders, "GetOrders", v1::GetOrdersRequest, v1::GetOrdersResponse),
+    (get_max_lots, "GetMaxLots", v1::GetMaxLotsRequest, v1::GetMaxLotsResponse),
+    (get_order_price, "GetOrderPrice", v1::GetOrderPriceRequest, v1::GetOrderPriceResponse),
+);
+
+service_safe_reads!(stop_orders_generated_client;
+    (get_stop_orders, "GetStopOrders", v1::GetStopOrdersRequest, v1::GetStopOrdersResponse),
+);
+
+macro_rules! service_mutations {
+    ($builder:ident; $(($name:ident, $provider_name:literal, $request:ty, $response:ty)),+ $(,)?) => {
+        impl TInvestGrpcClient {
+            $(
+                pub async fn $name(
+                    &self,
+                    authorization: MutationAuthorization,
+                    request: $request,
+                ) -> Result<GrpcResponse<$response>, GrpcError> {
+                    self.service_mutation(
+                        authorization,
+                        $provider_name,
+                        request,
+                        || self.$builder(),
+                        |client, request| Box::pin(client.$name(request)),
+                    ).await
+                }
+            )+
+        }
+    };
+}
+
+service_mutations!(orders_generated_client;
+    (post_order, "PostOrder", v1::PostOrderRequest, v1::PostOrderResponse),
+    (post_order_async, "PostOrderAsync", v1::PostOrderAsyncRequest, v1::PostOrderAsyncResponse),
+    (cancel_order, "CancelOrder", v1::CancelOrderRequest, v1::CancelOrderResponse),
+    (replace_order, "ReplaceOrder", v1::ReplaceOrderRequest, v1::PostOrderResponse),
+);
+
+service_mutations!(stop_orders_generated_client;
+    (post_stop_order, "PostStopOrder", v1::PostStopOrderRequest, v1::PostStopOrderResponse),
+    (cancel_stop_order, "CancelStopOrder", v1::CancelStopOrderRequest, v1::CancelStopOrderResponse),
+);
+
+service_mutations!(sandbox_generated_client;
+    (post_sandbox_order, "PostSandboxOrder", v1::PostOrderRequest, v1::PostOrderResponse),
+    (post_sandbox_order_async, "PostSandboxOrderAsync", v1::PostOrderAsyncRequest, v1::PostOrderAsyncResponse),
+    (replace_sandbox_order, "ReplaceSandboxOrder", v1::ReplaceOrderRequest, v1::PostOrderResponse),
+    (cancel_sandbox_order, "CancelSandboxOrder", v1::CancelOrderRequest, v1::CancelOrderResponse),
+    (post_sandbox_stop_order, "PostSandboxStopOrder", v1::PostStopOrderRequest, v1::PostStopOrderResponse),
+    (cancel_sandbox_stop_order, "CancelSandboxStopOrder", v1::CancelStopOrderRequest, v1::CancelStopOrderResponse),
 );
 
 impl TInvestGrpcClient {
@@ -786,6 +928,70 @@ impl TInvestGrpcClient {
         .await
     }
 
+    async fn open_orders_server_stream<Req, Resp, Dispatch>(
+        &self,
+        method: &'static str,
+        body: Req,
+        mut dispatch: Dispatch,
+    ) -> Result<GrpcServerStream<Resp>, GrpcError>
+    where
+        Req: Send + Sync + 'static,
+        Resp: Send + 'static,
+        Dispatch: for<'a> FnMut(
+            &'a mut OrdersStreamGeneratedClient,
+            Request<Req>,
+        ) -> GrpcFuture<'a, tonic::codec::Streaming<Resp>>,
+    {
+        let request_id = Uuid::new_v4();
+        let metadata = GrpcRequestMetadata {
+            request_id,
+            method,
+            attempt: 1,
+            mutation: false,
+        };
+        let request = self
+            .stream_request(body, request_id)
+            .map_err(|kind| GrpcError { metadata, kind })?;
+        let mut client = self.orders_stream_generated_client();
+        let response = dispatch(&mut client, request)
+            .await
+            .map_err(|status| GrpcError {
+                metadata,
+                kind: GrpcErrorKind::Provider(Box::new(GrpcProviderError::from_status(status))),
+            })?;
+        let tracking_id = metadata_text(response.metadata(), "x-tracking-id");
+        let rate_limit = rate_limit_metadata(response.metadata());
+        Ok(GrpcServerStream {
+            inbound: response.into_inner(),
+            metadata: GrpcResponseMetadata {
+                request_id,
+                tracking_id,
+                attempt: 1,
+                rate_limit,
+            },
+        })
+    }
+
+    pub async fn open_trades_stream(
+        &self,
+        request: v1::TradesStreamRequest,
+    ) -> Result<GrpcServerStream<v1::TradesStreamResponse>, GrpcError> {
+        self.open_orders_server_stream("TradesStream", request, |client, request| {
+            Box::pin(client.trades_stream(request))
+        })
+        .await
+    }
+
+    pub async fn open_order_state_stream(
+        &self,
+        request: v1::OrderStateStreamRequest,
+    ) -> Result<GrpcServerStream<v1::OrderStateStreamResponse>, GrpcError> {
+        self.open_orders_server_stream("OrderStateStream", request, |client, request| {
+            Box::pin(client.order_state_stream(request))
+        })
+        .await
+    }
+
     async fn open_operations_server_stream<Req, Resp, Dispatch>(
         &self,
         method: &'static str,
@@ -815,15 +1021,17 @@ impl TInvestGrpcClient {
             .await
             .map_err(|status| GrpcError {
                 metadata,
-                kind: GrpcErrorKind::Provider(GrpcProviderError::from_status(status)),
+                kind: GrpcErrorKind::Provider(Box::new(GrpcProviderError::from_status(status))),
             })?;
         let tracking_id = metadata_text(response.metadata(), "x-tracking-id");
+        let rate_limit = rate_limit_metadata(response.metadata());
         Ok(GrpcServerStream {
             inbound: response.into_inner(),
             metadata: GrpcResponseMetadata {
                 request_id,
                 tracking_id,
                 attempt: 1,
+                rate_limit,
             },
         })
     }
@@ -1140,6 +1348,25 @@ pub struct GrpcResponseMetadata {
     pub request_id: Uuid,
     pub tracking_id: Option<String>,
     pub attempt: u32,
+    pub rate_limit: GrpcRateLimitMetadata,
+}
+
+/// Provider-advertised unary quota state. Values come only from T-Bank response metadata.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GrpcRateLimitMetadata {
+    pub limit: Option<u64>,
+    pub remaining: Option<u64>,
+    pub reset_seconds: Option<u64>,
+}
+
+impl fmt::Display for GrpcRateLimitMetadata {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "limit={:?}; remaining={:?}; reset_seconds={:?}",
+            self.limit, self.remaining, self.reset_seconds
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1223,12 +1450,14 @@ impl GrpcStreamError {
 impl<T> GrpcResponse<T> {
     fn from_tonic(request_id: Uuid, attempt: u32, response: Response<T>) -> Self {
         let tracking_id = metadata_text(response.metadata(), "x-tracking-id");
+        let rate_limit = rate_limit_metadata(response.metadata());
         Self {
             body: response.into_inner(),
             metadata: GrpcResponseMetadata {
                 request_id,
                 tracking_id,
                 attempt,
+                rate_limit,
             },
         }
     }
@@ -1240,6 +1469,7 @@ pub struct GrpcProviderError {
     pub message: String,
     pub details: Vec<u8>,
     pub tracking_id: Option<String>,
+    pub rate_limit: Box<GrpcRateLimitMetadata>,
 }
 
 impl GrpcProviderError {
@@ -1249,6 +1479,7 @@ impl GrpcProviderError {
             message: status.message().to_owned(),
             details: status.details().to_vec(),
             tracking_id: metadata_text(status.metadata(), "x-tracking-id"),
+            rate_limit: Box::new(rate_limit_metadata(status.metadata())),
         }
     }
 
@@ -1292,7 +1523,11 @@ fn digit_tokens(value: &str) -> impl Iterator<Item = &str> {
 
 impl fmt::Display for GrpcProviderError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "provider gRPC {:?}: {}", self.code, self.message)
+        write!(
+            formatter,
+            "provider gRPC {:?}: {}; rate_limit=[{}]",
+            self.code, self.message, self.rate_limit
+        )
     }
 }
 
@@ -1318,7 +1553,7 @@ pub enum GrpcErrorKind {
         configured: Environment,
     },
     #[error("{0}")]
-    Provider(GrpcProviderError),
+    Provider(Box<GrpcProviderError>),
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -1333,6 +1568,18 @@ fn metadata_text(metadata: &MetadataMap, key: &'static str) -> Option<String> {
         .get(key)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
+}
+
+fn metadata_u64(metadata: &MetadataMap, key: &'static str) -> Option<u64> {
+    metadata_text(metadata, key)?.parse().ok()
+}
+
+fn rate_limit_metadata(metadata: &MetadataMap) -> GrpcRateLimitMetadata {
+    GrpcRateLimitMetadata {
+        limit: metadata_u64(metadata, "x-ratelimit-limit"),
+        remaining: metadata_u64(metadata, "x-ratelimit-remaining"),
+        reset_seconds: metadata_u64(metadata, "x-ratelimit-reset"),
+    }
 }
 
 impl fmt::Debug for TInvestGrpcClient {
@@ -1352,6 +1599,22 @@ mod tests {
 
     fn token() -> SecretToken {
         SecretToken::new("secret").unwrap_or_else(|error| panic!("token failed: {error}"))
+    }
+
+    #[test]
+    fn provider_rate_limit_headers_survive_as_typed_metadata() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("x-ratelimit-limit", "200".parse().expect("limit"));
+        metadata.insert("x-ratelimit-remaining", "17".parse().expect("remaining"));
+        metadata.insert("x-ratelimit-reset", "6".parse().expect("reset"));
+        assert_eq!(
+            rate_limit_metadata(&metadata),
+            GrpcRateLimitMetadata {
+                limit: Some(200),
+                remaining: Some(17),
+                reset_seconds: Some(6),
+            }
+        );
     }
 
     #[tokio::test]

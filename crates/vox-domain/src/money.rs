@@ -54,6 +54,10 @@ impl UnitsNano {
 pub struct FixedPoint(i128);
 
 impl FixedPoint {
+    #[must_use]
+    pub const fn from_total_nanos(total_nanos: i128) -> Self {
+        Self(total_nanos)
+    }
     pub fn from_units_nano(units: i64, nano: i32) -> Result<Self, FixedPointError> {
         Ok(UnitsNano::new(units, nano)?.fixed_point())
     }
