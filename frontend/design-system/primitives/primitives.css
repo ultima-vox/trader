@@ -119,8 +119,8 @@
 }
 
 /* ---------- Motion ---------- */
-@keyframes voxFlashUp { from { background: rgba(39, 176, 125, 0.28); } to { background: transparent; } }
-@keyframes voxFlashDown { from { background: rgba(228, 88, 88, 0.28); } to { background: transparent; } }
+@keyframes voxFlashUp { from { background: var(--vox-positive-flash); } to { background: transparent; } }
+@keyframes voxFlashDown { from { background: var(--vox-negative-flash); } to { background: transparent; } }
 @keyframes voxSkeleton { 0% { opacity: 0.35; } 50% { opacity: 0.75; } 100% { opacity: 0.35; } }
 @keyframes voxSpin { to { transform: rotate(360deg); } }
 @keyframes voxPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }

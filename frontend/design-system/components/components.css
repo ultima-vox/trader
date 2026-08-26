@@ -48,15 +48,15 @@
 
 .vox-btn--danger { background: transparent; border-color: var(--vox-negative-strong); color: var(--vox-negative-base); }
 .vox-btn--danger:hover { background: var(--vox-negative-surface); border-color: var(--vox-negative-base); }
-.vox-btn--danger:active { background: rgba(228, 88, 88, 0.22); color: var(--vox-text-primary); }
+.vox-btn--danger:active { background: var(--vox-negative-surface-active); color: var(--vox-text-primary); }
 
 /* BUY / SELL are financial actions, not generic design-system buttons.
    They are always both present in the ticket — never behind a mode toggle. */
-.vox-btn--buy { background: var(--vox-positive-base); border-color: var(--vox-positive-strong); color: #08120E; font-weight: var(--vox-weight-semibold); }
+.vox-btn--buy { background: var(--vox-positive-base); border-color: var(--vox-positive-strong); color: var(--vox-on-positive); font-weight: var(--vox-weight-semibold); }
 .vox-btn--buy:hover { background: var(--vox-positive-hover); }
 .vox-btn--buy:active { background: var(--vox-positive-strong); color: var(--vox-text-primary); }
 
-.vox-btn--sell { background: var(--vox-negative-base); border-color: var(--vox-negative-strong); color: #1A0A0A; font-weight: var(--vox-weight-semibold); }
+.vox-btn--sell { background: var(--vox-negative-base); border-color: var(--vox-negative-strong); color: var(--vox-on-negative); font-weight: var(--vox-weight-semibold); }
 .vox-btn--sell:hover { background: var(--vox-negative-hover); }
 .vox-btn--sell:active { background: var(--vox-negative-strong); color: var(--vox-text-primary); }
 
@@ -156,10 +156,11 @@
 
 .vox-segmented {
   height: var(--vox-control-height); display: inline-flex; gap: 2px; padding: 2px;
+  flex: 0 0 auto; min-width: min-content; white-space: nowrap;
   background: var(--vox-bg-input); border: 1px solid var(--vox-border-default); border-radius: var(--vox-radius-sm);
 }
 .vox-segmented__item {
-  display: flex; align-items: center; padding: 0 10px; border-radius: var(--vox-radius-xs);
+  display: flex; align-items: center; flex: 0 0 auto; padding: 0 10px; border-radius: var(--vox-radius-xs);
   font-size: var(--vox-text-12); color: var(--vox-text-tertiary); cursor: pointer;
 }
 .vox-segmented__item:hover { background: var(--vox-bg-surface-hover); color: var(--vox-text-primary); }
@@ -200,7 +201,7 @@
 .vox-menu__item:hover { background: var(--vox-neutral-700); }
 .vox-menu__item.is-disabled { color: var(--vox-text-disabled); cursor: not-allowed; }
 .vox-menu__item--danger { color: var(--vox-negative-base); }
-.vox-menu__item--danger:hover { background: rgba(228, 88, 88, 0.14); }
+.vox-menu__item--danger:hover { background: var(--vox-negative-surface-hover); }
 .vox-menu__shortcut { font-family: var(--vox-font-mono); font-size: 10px; color: var(--vox-text-tertiary); }
 .vox-menu__sep { height: 1px; background: var(--vox-border-strong); margin: var(--vox-space-1) 0; }
 
@@ -225,12 +226,12 @@
   border-radius: var(--vox-radius-xs); font-size: var(--vox-text-11);
   font-weight: var(--vox-weight-semibold); letter-spacing: 0.07em;
 }
-.vox-env--live { background: rgba(228, 88, 88, 0.14); border: 1px solid var(--vox-negative-strong); color: var(--vox-negative-base); }
+.vox-env--live { background: var(--vox-negative-surface-hover); border: 1px solid var(--vox-negative-strong); color: var(--vox-negative-base); }
 .vox-env--sandbox { background: var(--vox-info-surface); border: 1px solid var(--vox-blue-600); color: var(--vox-blue-300); }
 .vox-env--paper { background: var(--vox-unknown-surface); border: 1px solid var(--vox-unknown-base); color: var(--vox-unknown-base); }
 .vox-env--backtest { background: var(--vox-bg-surface-hover); border: 1px solid var(--vox-border-strong); color: var(--vox-text-secondary); }
 /* LIVE actions get an extra inset marker — the UI itself does not turn red. */
-.vox-live-action { box-shadow: inset 0 0 0 1px rgba(228, 88, 88, 0.5); }
+.vox-live-action { box-shadow: inset 0 0 0 1px var(--vox-negative-outline); }
 
 /* Runtime status — clickable, opens diagnostics. */
 .vox-runtime {
@@ -293,7 +294,7 @@
 }
 .vox-table__row:hover { background: var(--vox-bg-surface-hover); }
 .vox-table__row.is-selected { background: var(--vox-accent-selected-surface); border-left-color: var(--vox-accent-primary); }
-.vox-table__row.is-unknown { background: rgba(167, 123, 232, 0.06); border-left-color: var(--vox-unknown-base); }
+.vox-table__row.is-unknown { background: var(--vox-unknown-surface-subtle); border-left-color: var(--vox-unknown-base); }
 .vox-table__footer {
   height: 24px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px;
   border-top: 1px solid var(--vox-border-subtle); background: var(--vox-bg-workspace);
@@ -321,7 +322,7 @@
   display: flex; align-items: center; justify-content: space-between; gap: var(--vox-space-2);
   padding: 0 8px 0 12px; border-bottom: 1px solid var(--vox-border-subtle);
   font-size: var(--vox-text-13); font-weight: var(--vox-weight-medium); color: var(--vox-text-primary);
-  cursor: grab;
+  cursor: grab; /* draggable by the header */
 }
 .vox-widget__title { display: flex; align-items: center; gap: var(--vox-space-2); min-width: 0; }
 .vox-widget__tools { display: flex; align-items: center; gap: 2px; }
@@ -331,6 +332,7 @@
   border-top: 1px solid var(--vox-border-subtle); background: var(--vox-bg-workspace);
   font-size: var(--vox-text-11); color: var(--vox-text-tertiary);
 }
+/* Resize handle — minimum resize step is 8px on the workspace grid. */
 .vox-widget__resize {
   position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; cursor: nwse-resize;
 }
@@ -347,6 +349,100 @@
 .vox-state-note__title { font-size: var(--vox-text-12); color: var(--vox-text-primary); }
 .vox-stale-bar {
   display: flex; align-items: center; gap: var(--vox-space-1); height: var(--vox-row-height);
-  padding: 0 10px; background: rgba(217, 164, 65, 0.14);
+  padding: 0 10px; background: var(--vox-warning-surface-strong);
   border-top: 1px solid var(--vox-warning-strong); font-size: var(--vox-text-11); color: var(--vox-text-primary);
 }
+
+/* =========================================================
+   AccountSelector — execution target
+   Always visible in the shell. It answers: which broker connection, which
+   account, which environment receives a capital-affecting command.
+   A token is NOT an account and is never shown here (see .vox-secret).
+   Owned semantics: Platform Foundation (issue #17).
+   ========================================================= */
+.vox-account {
+  height: var(--vox-control-height); max-width: 300px;
+  display: inline-flex; align-items: center; gap: var(--vox-space-2);
+  padding: 0 8px; background: var(--vox-bg-input);
+  border: 1px solid var(--vox-border-default); border-radius: var(--vox-radius-sm);
+  font-size: var(--vox-text-12); color: var(--vox-text-primary); cursor: pointer;
+}
+.vox-account:hover { border-color: var(--vox-border-strong); }
+.vox-account__broker { color: var(--vox-text-secondary); white-space: nowrap; }
+.vox-account__sep { color: var(--vox-text-disabled); }
+.vox-account__label { font-weight: var(--vox-weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* LIVE target is marked, but the shell does not turn red. */
+.vox-account.is-live { box-shadow: inset 0 0 0 1px var(--vox-negative-outline); }
+.vox-account.is-degraded { border-color: var(--vox-warning-strong); }
+.vox-account.is-unknown { border-color: var(--vox-unknown-base); }
+
+/* Row inside the account popover / settings list. */
+.vox-account-row {
+  display: grid; grid-template-columns: 1fr 92px 82px 92px; align-items: center; gap: var(--vox-space-2);
+  height: var(--vox-row-height); padding: 0 10px; cursor: pointer;
+  border-left: 2px solid transparent; font-size: var(--vox-text-12);
+}
+.vox-account-row:hover { background: var(--vox-bg-surface-hover); }
+.vox-account-row.is-selected { background: var(--vox-accent-selected-surface); border-left-color: var(--vox-accent-primary); }
+.vox-account-row__name { display: flex; flex-direction: column; min-width: 0; }
+.vox-account-row__meta { font-size: 10px; color: var(--vox-text-tertiary); }
+
+/* Connection health — a connection, not a portfolio. */
+.vox-conn {
+  height: 20px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px;
+  border-radius: var(--vox-radius-xs); font-family: var(--vox-font-mono);
+  font-size: var(--vox-text-11); letter-spacing: 0.06em;
+}
+.vox-conn--ok { background: var(--vox-positive-surface); border: 1px solid var(--vox-positive-strong); color: var(--vox-positive-base); }
+.vox-conn--degraded { background: var(--vox-warning-surface); border: 1px solid var(--vox-warning-strong); color: var(--vox-warning-base); }
+.vox-conn--invalid { background: var(--vox-negative-surface); border: 1px solid var(--vox-negative-strong); color: var(--vox-negative-base); }
+.vox-conn--expiring { background: var(--vox-warning-surface); border: 1px solid var(--vox-warning-base); color: var(--vox-warning-base); }
+/* Credential revoked by its owner and scope-limited credential are distinct from a
+   merely invalid token: same colour family, different reason code and different action. */
+.vox-conn--revoked { background: var(--vox-negative-surface); border: 1px solid var(--vox-negative-base); color: var(--vox-negative-base); }
+.vox-conn--scope { background: var(--vox-warning-surface); border: 1px solid var(--vox-warning-strong); color: var(--vox-warning-base); }
+.vox-conn--disabled { background: var(--vox-bg-surface-hover); border: 1px solid var(--vox-border-strong); color: var(--vox-text-tertiary); }
+/* Transient connection states. VALIDATING and RECONNECTING are work in progress,
+   not verdicts, so they never borrow the negative semantic. */
+.vox-conn--validating { background: var(--vox-bg-surface-hover); border: 1px solid var(--vox-border-strong); color: var(--vox-text-secondary); }
+.vox-conn--reconnecting { background: var(--vox-info-surface); border: 1px solid var(--vox-blue-600); color: var(--vox-blue-300); }
+/* The provider is down — the credential is not at fault and must not be blamed. */
+.vox-conn--provider { background: var(--vox-warning-surface); border: 1px solid var(--vox-warning-base); color: var(--vox-warning-base); }
+/* Never rendered as a failure: the answer is missing, not negative. */
+.vox-conn--unknown { background: var(--vox-unknown-surface); border: 1px solid var(--vox-unknown-base); color: var(--vox-unknown-base); }
+
+/* =========================================================
+   SecretInput — broker token entry
+   Write-only. The stored value is never returned to normal UI: after saving,
+   the field shows a masked fingerprint and a rotation action, never the token.
+   ========================================================= */
+.vox-secret { display: flex; flex-direction: column; gap: var(--vox-space-1); }
+.vox-secret__field {
+  height: var(--vox-control-height); display: flex; align-items: center; gap: var(--vox-space-1);
+  padding: 0 8px; background: var(--vox-bg-input);
+  border: 1px solid var(--vox-border-default); border-radius: var(--vox-radius-sm);
+}
+.vox-secret__field:focus-within { border-color: var(--vox-border-focus); box-shadow: var(--vox-focus-ring); }
+.vox-secret__input {
+  flex: 1; min-width: 0; background: transparent; border: 0; outline: none;
+  color: var(--vox-text-primary); font-family: var(--vox-font-mono); font-size: var(--vox-text-12);
+  letter-spacing: 0.14em;
+}
+/* Saved state: fingerprint only — no reveal control exists in normal UI. */
+.vox-secret__fingerprint { font-family: var(--vox-font-mono); font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+.vox-secret__note { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); line-height: 1.45; }
+.vox-secret.is-invalid .vox-secret__field { border-color: var(--vox-negative-base); background: var(--vox-negative-surface); }
+.vox-secret.is-validating .vox-secret__field { border-color: var(--vox-border-strong); }
+
+/* =========================================================
+   Inherited value chip — a value that is not the object's own
+   Marks "this comes from the strategy policy / account default".
+   Editing it locally creates an override; see .vox-precedence in patterns.
+   ========================================================= */
+.vox-inherited {
+  height: 18px; display: inline-flex; align-items: center; gap: 4px; padding: 0 6px;
+  border-radius: var(--vox-radius-xs); background: var(--vox-protect-inherited-surface);
+  border: 1px dashed var(--vox-border-strong);
+  font-size: 10px; color: var(--vox-protect-inherited);
+}
+.vox-inherited--override { border-style: solid; border-color: var(--vox-accent-primary); color: var(--vox-blue-300); background: var(--vox-accent-selected-surface); }

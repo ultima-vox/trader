@@ -7,8 +7,8 @@ implementation disagrees with it, the implementation is wrong.
 Related files
 
 - `COMPONENT_SPEC.md` — anatomy, variants and states per component.
-- `../../frontend/design-system/reference/vox-trader-design-system.reference.html` — **canonical visual reference** (self-contained export from Claude Design).
-- `../../frontend/design-system/reference/index.html` — layered reference sheet built on the extracted CSS layers.
+- `../../frontend/design-system/reference/index.html` — **the maintainable rendered reference**, built on the CSS layers and extended whenever a component or state is added.
+- `../../frontend/design-system/reference/vox-trader-design-system.reference.html` — a stable local viewing entry point for that reference. It is not a separate design authority.
 - `../../frontend/design-system/README.md` — how to view locally, layer map.
 
 ---
@@ -110,6 +110,34 @@ layout structure, column count or which information is shown.
   selection, `.is-linked`) or *pinned* (fixed to one instrument, `.is-pinned`). The
   current context is always visible as a chip in the widget header — a widget must
   never show data whose instrument the user cannot name from the header.
+- **Every widget declares a minimum and a preferred size** (width in grid columns,
+  height in 8px steps) and what it drops first when squeezed. Nothing that carries
+  money may be dropped: instrument, account, environment, P&L and protection survive
+  every resize; legends, secondary metrics and row counts go first. The Order Ticket
+  does not shrink below its minimum at all — execution target, protection and both
+  actions are mandatory. The catalogue lives in `reference/index.html` §9.
+
+### 4.1 Workspace inventory
+
+One widget system, several saved layouts. The product has these workspaces, all built
+from the same shell and the same 12-column grid:
+
+| Workspace | Purpose | Capital-affecting |
+| --- | --- | --- |
+| Рынки | watchlist, instrument search, session state | no |
+| Торговля | quote, chart, ticket, book, tape, positions, portfolio | **yes** |
+| Портфель | positions, exposure, limits, operations, event journal | no |
+| Стратегии | strategy list, account binding, protection policy, mode | **yes** (via authorization) |
+| Решения | candidates/intents, evidence, risk verdict, approval | **yes** |
+| Исследования | backtests, parameters, comparison — `BACKTEST` only | no |
+| ML / Модели | datasets, training, registry, validation, promotion | no |
+| Система | runtime diagnostics, emergency halt, audit, permissions | **yes** (halt) |
+| Настройки → Брокеры и счета | connections, secrets, discovery, defaults, authorization | **yes** |
+
+A capital-affecting workspace always states broker, account and environment on the
+screen itself; a non-capital-affecting one still names the account whose data it shows.
+The event journal reuses the marker letters `B/S/F/SL/TP/D/E` unchanged — it is the same
+vocabulary as the chart, the tape and the orders table, never a second one.
 
 ## 5. Trading semantics
 
@@ -166,6 +194,147 @@ older than its freshness budget switches to `is-stale`: amber border plus a stal
 naming the age and stating that last known values are shown. Stale data is never
 silently displayed as current.
 
+### 5.7 Position protection — Stop Loss / Take Profit
+
+Protection is part of the canonical Order Ticket, not a separate advanced screen.
+
+- **Stop Loss and Take Profit are independent and optional.** Enabling one never
+  requires the other. Either may be off; that is a normal ticket.
+- **Stop Loss has two modes: `Фиксированный` and `Трейлинг`.** Trailing is
+  **broker-native**: it maps to the provider's own trailing-stop order.
+- Trailing offset supports **relative %** and, where the provider supports it,
+  **absolute** currency distance. If the provider does not support a mode, the UI
+  **states that** with a reason code (`BRK_TRAIL_ABS_UNSUPPORTED`) and refuses the
+  mode. Client-side emulation of broker protection is prohibited: protection must
+  survive a closed terminal.
+- Where the broker reports it, the ticket and the position show the trailing
+  **current level** and **reference level** (the extreme the trail is measured from).
+  A level the broker does not report is `UNKNOWN` — never an error, never 0.
+- Every protection control names the **resulting broker order** (`STOP_LOSS`,
+  `TAKE_PROFIT`, `TRAILING_STOP`) and the level in both absolute price and distance.
+  Protection UI that does not map to an execution object owned by
+  **Broker Foundation 05 — orders, stop orders, sandbox parity and execution streams
+  (issue #10)** is decoration and is not allowed to ship.
+- Protection state follows the same runtime language as any order: `READY`,
+  `RECONCILING`, `DEGRADED`, `HALTED`, plus `UNKNOWN` when the broker has not
+  answered yet.
+- **The broker is the authority on a live trailing stop.** The readback shown in the
+  ticket and on the position is whatever the provider last confirmed: order state
+  (`ACTIVE`, `PENDING`, `REPLACED`), current level, reference level, activation
+  condition and the time of the broker's answer. The terminal never recomputes a
+  level, never smooths a discrepancy and never fills a gap with a plausible number.
+- Direction semantics are displayed, not enforced, by the UI: for a long position the
+  level follows the favourable high-water mark and never widens downward when price
+  falls; for a short it mirrors against the favourable low-water mark. A field the
+  broker does not report stays `UNKNOWN`.
+
+### 5.8 Protection defaults and precedence
+
+A default protection policy exists at **portfolio/account scope**, including a global
+trailing default.
+
+Precedence is fixed, explicit and **visible in the UI**:
+
+```
+order / position override   >   strategy policy   >   portfolio / account default
+```
+
+- The effective value is marked as effective; the values it overrides stay readable
+  (struck through), never hidden. A value that is not the object's own is labelled as
+  inherited (`.vox-inherited`); editing it locally creates an explicit override.
+- **A default is not a hard risk limit.** Guardrails (hard limits that can refuse an
+  order) are a separate policy with their own screen, their own reason codes and their
+  own `BLOCKED` semantics. Never present a default as a limit or a limit as a default.
+- **Changing a default never silently rewrites existing broker stop orders.** The
+  change applies to new orders; affected existing orders are migrated only through an
+  explicit action that lists them. Silent server-side rewriting of live protection is
+  prohibited.
+- Where the backend exposes bulk re-application, it is a **separate capital-affecting
+  action** with a fixed anatomy: preview before anything is sent · count of affected
+  positions with a breakdown · per-position `было → станет` stated in broker orders ·
+  consequences in words, including the window in which a position carries no
+  protection · typed confirmation that keyboard shortcuts cannot bypass · and a
+  per-position result, including `ОТКЛОНЕНО` and reconciliation. Positions with a manual
+  override are never touched by a bulk action, and a single aggregate "done" is not an
+  acceptable result screen.
+
+### 5.9 Execution target — broker, account, environment
+
+Capital-affecting commands always state where they go.
+
+- An **AccountSelector** is permanently visible in the shell: broker connection ·
+  account (human label) · environment · connection health.
+- The **Order Ticket shows its execution target as its first row**, above the
+  instrument. It is never collapsed, never inferred from "the last used account".
+  A target that differs from the workspace selection is shown as a mismatch, not
+  silently accepted.
+- The visual model must make it **impossible to confuse which account receives a
+  capital-affecting command**: LIVE targets carry the inset LIVE marker on the target
+  row, and the account label is a human name — never a raw identifier.
+- **A token is not a portfolio and not an account.** One connection may discover
+  several accounts; execution permission is a property of the *account*, not of the
+  connection.
+- Stored secrets are **write-only in the UI**: after saving, only a fingerprint,
+  expiry and a "replace token" action are shown. Normal UI never reveals a stored
+  token, and a token is never a URL parameter, log line or copyable field.
+- **Once a command is constructed and submitted, its target is frozen.** The broker
+  connection, account and environment travel with the command until it reaches a final
+  state. Switching the active account in the shell afterwards updates account-scoped
+  views but can never retarget, redirect or re-environment that command; cancelling and
+  re-submitting are two separate operator actions. The frozen row says so in words.
+- Changing the active account updates every account-scoped view atomically — portfolio,
+  positions, orders, operations, risk, ticket, protection state and strategy binding.
+  A late response belonging to the previous account never overwrites the current one,
+  and widgets pinned to an instrument keep their instrument: account context and
+  instrument context are independent.
+- Connection health is its own vocabulary: `CONNECTED`, `VALIDATING`, `RECONNECTING`,
+  `DEGRADED`, `INVALID_CREDENTIAL`, `REVOKED`, `PERMISSION_LIMITED`, `ROTATE`
+  (expiring), `PROVIDER_UNAVAILABLE`, `DISABLED`, `UNKNOWN`. These are never collapsed
+  into one generic red `Ошибка`: a revoked token, a scope-limited token and an
+  unreachable provider demand different operator actions. Ownership of these states is
+  **Platform Foundation — broker connections, secret storage, account discovery and
+  execution authorization (issue #17)**.
+
+### 5.10 Live execution authorization
+
+A broker credential that permits trading does **not** enable Vox execution. The two
+facts are separate objects on screen and separate policy states.
+
+- In `PRODUCTION` Vox execution is **off by default**. The shell shows the
+  authorization state next to the environment and the runtime chip.
+- Enabling is deliberately high-friction and scoped to one account and one
+  environment: consequences stated in words, typed confirmation, audit metadata
+  (actor, time, scope) rendered from the backend.
+- **Halting is always cheaper than enabling**: one control, no typed word, no dialog.
+  Halting stops new dispatches only; orders and stop orders already accepted by the
+  broker keep living at the broker, and the UI says that.
+- Strategy, ML and Decision Center screens may link to the authorization screen but can
+  never grant it, imply it or bypass its confirmation.
+
+### 5.11 Dispatch without an answer — reconciliation
+
+A command that left Vox without a broker answer is an **unfinished answer, not a
+refusal**.
+
+- The state is `UNKNOWN` with reason code `UNKNOWN_AFTER_DISPATCH`, the violet unknown
+  semantic, and the age of the silence stated explicitly.
+- The frozen execution target stays visible, together with the facts Vox knows for
+  certain: what was sent, when, at what price, to which account.
+- **Re-submission is blocked until reconciliation answers.** Requesting state from the
+  broker and opening diagnostics stay available; cancel and re-send remain two separate
+  actions.
+- Reconciliation outcomes are rendered distinctly: `RECON_CONFIRMED`,
+  `RECON_NOT_FOUND` (re-submission now permitted), `RECON_PENDING` (account marked
+  unreconciled). None of them is styled as a failure. Ownership of the resolution is
+  **Runtime Foundation — persistence, reconciliation and readiness (issue #11)**.
+
+### 5.12 Permissions in the interface
+
+The frontend renders the backend permission model and never treats a hidden control as
+enforcement. A denied capability is shown as a disabled control with the reason and a
+way forward; an authoritative `403` arriving against stale UI permission state must
+leave the screen coherent rather than half-submitted.
+
 ## 6. Accessibility
 
 - Contrast ≥ 4.5:1 for text, ≥ 3:1 for meaningful borders on dark surfaces.
@@ -187,6 +356,20 @@ silently displayed as current.
 6. No Comfortable-by-default, no widget shadows, no radius > 8px, no gradients as
    surface treatment, no decorative illustration, no emoji.
 7. No screenshot used as specification — the reference implementation is the artefact.
+8. No client-side emulation of broker-native protection, and no protection UI that
+   does not map to a broker execution object.
+9. No silent rewrite of existing broker stop orders when a default changes, and no
+   default presented as a hard risk limit.
+10. No revealed token in normal UI, no token treated as an account or portfolio, and
+    no capital-affecting command without an explicit, visible execution target.
+11. No retargeting of a submitted command by changing the active account, and no
+    re-submission while the outcome is `UNKNOWN_AFTER_DISPATCH`.
+12. No bulk protection change without preview, affected list, consequences, typed
+    confirmation and a per-position result.
+13. No automated execution implied by a trading-capable broker token, and no strategy,
+    model or Decision Center screen that appears to grant execution authorization.
+14. No connection failure collapsed into a generic red `Ошибка`, and no client-side
+    recomputation of a broker-reported trailing level.
 
 ## 8. Governance
 
@@ -195,3 +378,11 @@ silently displayed as current.
   demo block in `reference/index.html`.
 - Layer order is one-directional: `tokens → primitives → components → patterns`.
   A lower layer never imports an upper one.
+- Canonical hierarchy: this document and `COMPONENT_SPEC.md` are normative; the CSS
+  layers are the implementation source of truth;
+  `frontend/design-system/reference/index.html` is the maintainable rendered
+  reference built on those layers; `vox-trader-design-system.reference.html` is only
+  a stable viewing entry point for that reference and is not a design authority.
+- Before review, validate at 1280 / 1440 / 1920 px, in Compact / Standard /
+  Comfortable, and in every state: happy, loading, empty, stale, reconnecting,
+  degraded, error, permission-denied, `UNKNOWN`, `BLOCKED`.

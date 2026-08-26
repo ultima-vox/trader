@@ -37,7 +37,7 @@
   a:hover { color: var(--vox-blue-400); }
   .ref__placeholder {
     height: 168px; display: flex; align-items: center; justify-content: center;
-    background: repeating-linear-gradient(135deg, #12161B 0 8px, #161A20 8px 16px);
+    background: repeating-linear-gradient(135deg, var(--vox-bg-workspace) 0 8px, var(--vox-bg-surface) 8px 16px);
     border-bottom: 1px solid var(--vox-border-subtle);
     font-family: var(--vox-font-mono); font-size: 10px; color: var(--vox-text-tertiary);
   }
@@ -70,8 +70,21 @@
     <a class="vox-badge" href="#markers">6 · Маркеры</a>
     <a class="vox-badge" href="#table">7 · Таблица</a>
     <a class="vox-badge" href="#widget">8 · Виджет</a>
-    <a class="vox-badge" href="#patterns">9 · Паттерны</a>
-    <a class="vox-badge" href="#dont">10 · Запрещено</a>
+    <a class="vox-badge" href="#patterns">9 · Рабочее пространство «Торговля»</a>
+    <a class="vox-badge" href="#ticket">10 · Заявка · цель исполнения</a>
+    <a class="vox-badge" href="#protection">11 · Защита позиции</a>
+    <a class="vox-badge" href="#reconciliation">12 · Сверка и UNKNOWN</a>
+    <a class="vox-badge" href="#migration">13 · Массовое применение защиты</a>
+    <a class="vox-badge" href="#execution">14 · Авторизация исполнения</a>
+    <a class="vox-badge" href="#accounts">15 · Брокеры и счета</a>
+    <a class="vox-badge" href="#markets">16 · Рынки</a>
+    <a class="vox-badge" href="#portfolio">17 · Портфель</a>
+    <a class="vox-badge" href="#strategy">18 · Стратегии</a>
+    <a class="vox-badge" href="#decision">19 · Центр решений</a>
+    <a class="vox-badge" href="#research">20 · Исследования</a>
+    <a class="vox-badge" href="#ml">21 · ML / Модели</a>
+    <a class="vox-badge" href="#system">22 · Система</a>
+    <a class="vox-badge" href="#dont">23 · Запрещено</a>
   </nav>
 
   <!-- 1 · TOKENS -->
@@ -312,19 +325,19 @@
     <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
       <div class="vox-table">
         <div class="vox-table__header" style="grid-template-columns:150px 78px 96px 96px 116px 92px 1fr">
-          <span class="vox-table__sort">Инструмент ▲</span><span>Кол-во</span><span class="vox-num">Средняя</span><span class="vox-num">Текущая</span><span class="vox-num">P&amp;L</span><span class="vox-num">Доля</span><span>Статус</span>
+          <span class="vox-table__sort">Инструмент ▲</span><span>Кол-во</span><span class="vox-num">Средняя</span><span class="vox-num">Текущая</span><span class="vox-num">P&amp;L</span><span class="vox-num">Доля</span><span style="padding-left:40px">Статус</span>
         </div>
         <div class="vox-table__row is-selected" style="grid-template-columns:150px 78px 96px 96px 116px 92px 1fr">
-          <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--b">B</span>SBER</span><span class="vox-num" style="text-align:left">1 200</span><span class="vox-num">288,10</span><span class="vox-num vox-flash-up">318,44</span><span class="vox-num vox-num--positive">+36 408,00</span><span class="vox-num">14,2 %</span><span><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>открыта</span></span>
+          <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--b">B</span>SBER</span><span class="vox-num" style="text-align:left">1 200</span><span class="vox-num">288,10</span><span class="vox-num vox-flash-up">318,44</span><span class="vox-num vox-num--positive">+36 408,00</span><span class="vox-num">14,2 %</span><span style="padding-left:20px"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>открыта</span></span>
         </div>
         <div class="vox-table__row" style="grid-template-columns:150px 78px 96px 96px 116px 92px 1fr">
-          <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--s">S</span>GAZP</span><span class="vox-num" style="text-align:left">−300</span><span class="vox-num">142,60</span><span class="vox-num">148,02</span><span class="vox-num vox-num--negative">−1 626,00</span><span class="vox-num">6,1 %</span><span><span class="vox-badge vox-badge--warning"><span class="vox-dot"></span>частично</span></span>
+          <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--s">S</span>GAZP</span><span class="vox-num" style="text-align:left">−300</span><span class="vox-num">142,60</span><span class="vox-num">148,02</span><span class="vox-num vox-num--negative">−1 626,00</span><span class="vox-num">6,1 %</span><span style="padding-left:20px"><span class="vox-badge vox-badge--warning"><span class="vox-dot"></span>частично</span></span>
         </div>
         <div class="vox-table__row is-unknown" style="grid-template-columns:150px 78px 96px 96px 116px 92px 1fr">
-          <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--f">F</span>LKOH</span><span class="vox-num" style="text-align:left">40</span><span class="vox-num">6 812,00</span><span class="vox-num vox-num--unknown">—</span><span class="vox-num vox-num--unknown">неизвестно</span><span class="vox-num">9,8 %</span><span><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>сверка</span></span>
+          <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--f">F</span>LKOH</span><span class="vox-num" style="text-align:left">40</span><span class="vox-num">6 812,00</span><span class="vox-num vox-num--unknown">—</span><span class="vox-num vox-num--unknown">неизвестно</span><span class="vox-num">9,8 %</span><span style="padding-left:20px"><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>сверка</span></span>
         </div>
         <div class="vox-table__row" style="grid-template-columns:150px 78px 96px 96px 116px 92px 1fr">
-          <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--tp">TP</span>MOEX</span><span class="vox-num" style="text-align:left">800</span><span class="vox-num">198,40</span><span class="vox-num vox-flash-down">196,10</span><span class="vox-num vox-num--negative">−1 840,00</span><span class="vox-num">4,4 %</span><span><span class="vox-badge"><span class="vox-dot"></span>ожидание</span></span>
+          <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--tp">TP</span>MOEX</span><span class="vox-num" style="text-align:left">800</span><span class="vox-num">198,40</span><span class="vox-num vox-flash-down">196,10</span><span class="vox-num vox-num--negative">−1 840,00</span><span class="vox-num">4,4 %</span><span style="padding-left:20px"><span class="vox-badge"><span class="vox-dot"></span>ожидание</span></span>
         </div>
         <div class="vox-table__footer"><span>4 позиции · счёт «Основной»</span><span class="vox-num">Итого P&amp;L <span class="vox-num--positive">+32 942,00 ₽</span></span></div>
       </div>
@@ -359,7 +372,7 @@
           <div class="vox-book__row vox-book__row--bid"><span class="vox-book__depth" style="width:38%"></span><span class="vox-book__cell vox-book__price--bid">148,02</span><span class="vox-book__cell vox-num">1 100</span><span class="vox-book__cell vox-num">1 100</span></div>
           <div class="vox-book__row vox-book__row--bid"><span class="vox-book__depth" style="width:64%"></span><span class="vox-book__cell vox-book__price--bid">147,98</span><span class="vox-book__cell vox-num">2 300</span><span class="vox-book__cell vox-num">3 400</span></div>
         </div>
-        <div class="vox-stale-bar"><span class="vox-dot"></span>Данные устарели: 12 c без обновления. Показаны последние известные значения.</div>
+        <div class="vox-stale-bar" style="width:336px;height:71px"><span class="vox-dot"></span>Данные устарели: 12 c без обновления. Показаны последние известные значения.</div>
         <span class="vox-widget__resize"></span>
       </div>
       <div class="vox-widget is-error">
@@ -373,90 +386,1601 @@
     </div>
   </section>
 
-  <!-- 9 · PATTERNS -->
   <section class="ref__sec" id="patterns">
-    <div class="ref__sec-head"><span class="ref__num">09</span><h2 class="vox-text--title">Паттерны</h2></div>
+    <div class="ref__sec-head"><span class="ref__num">09</span><h2 class="vox-text--title">Рабочее пространство «Торговля»</h2>
+      <span class="ref__note">Канонический производственный экран, а не набор отдельных демонстраций. Контекст брокера и счёта, цель исполнения заявки, защита и её источник, авторизация исполнения и сетка виджетов присутствуют одновременно, потому что оператор принимает решение по ним одновременно.</span></div>
 
     <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden;margin-bottom:12px">
       <div class="vox-topbar">
         <div class="vox-topbar__group vox-topbar__brand">VOX TRADER</div>
-        <div class="vox-topbar__group"><span class="vox-text--secondary">Брокер «Альфа»</span><span class="vox-badge">Счёт «Основной»</span></div>
-        <div class="vox-topbar__group"><span class="vox-env vox-env--live"><span class="vox-dot"></span>LIVE</span><span class="vox-runtime vox-runtime--ready"><span class="vox-dot"></span><span class="vox-runtime__label">READY</span></span></div>
-        <div class="vox-topbar__group"><span class="vox-text--caption">P&amp;L дня</span><span class="vox-num vox-num--positive">+32 942,00 ₽</span></div>
-        <div class="vox-topbar__group" style="border-right:0;margin-left:auto"><span class="vox-topbar__clock">17:42:08 MSK</span></div>
+        <div class="vox-topbar__group"><span class="vox-env vox-env--live"><span class="vox-dot"></span>PRODUCTION</span></div>
+        <div class="vox-topbar__group">
+          <span class="vox-text--secondary">Т-Инвест</span>
+          <span class="vox-account is-live" title="Счёт исполнения рабочего пространства">
+            <span class="vox-account__broker">Т-Инвест</span><span class="vox-account__sep">/</span>
+            <span class="vox-account__label">Основной брокерский</span>
+            <span class="vox-conn vox-conn--ok">OK</span><span class="ref__code">▾</span>
+          </span>
+        </div>
+        <div class="vox-topbar__group"><span class="vox-runtime vox-runtime--ready"><span class="vox-dot"></span><span class="vox-runtime__label">READY</span></span></div>
+        <div class="vox-topbar__group"><span class="vox-text--caption">P&amp;L дня</span><span class="vox-num vox-num--positive">+12 450 ₽</span></div>
+        <div class="vox-topbar__group"><span class="vox-text--caption">Исполнение Vox</span><span class="vox-conn vox-conn--disabled">ВЫКЛЮЧЕНО</span></div>
+        <div class="vox-topbar__group" style="border-right:0;margin-left:auto"><span class="vox-topbar__clock">11:42:06 MSK</span></div>
       </div>
-      <div class="vox-metrics">
-        <div class="vox-metrics__cell"><div class="vox-metrics__label">Стоимость портфеля</div><div class="vox-metrics__value vox-num" style="text-align:left">1 284 730,45 ₽</div></div>
-        <div class="vox-metrics__cell"><div class="vox-metrics__label">Свободные средства</div><div class="vox-metrics__value vox-num" style="text-align:left">212 400,00 ₽</div></div>
-        <div class="vox-metrics__cell"><div class="vox-metrics__label">Дневной лимит убытка</div><div class="vox-limit" style="margin-top:4px"><div class="vox-limit__track"><div class="vox-limit__fill vox-limit__fill--warning" style="width:68%"></div></div><div class="vox-text--caption">использовано 68 %</div></div></div>
-        <div class="vox-metrics__cell"><div class="vox-metrics__label">Открытых заявок</div><div class="vox-metrics__value vox-num" style="text-align:left">3</div></div>
+
+      <div class="vox-shell__body">
+        <nav class="vox-nav">
+          <span class="vox-nav__item">Рынки</span>
+          <span class="vox-nav__item is-active">Торговля</span>
+          <span class="vox-nav__item">Портфель</span>
+          <span class="vox-nav__item">Стратегии</span>
+          <span class="vox-nav__item">Решения</span>
+          <span class="vox-nav__item">Исследования</span>
+          <span class="vox-nav__item">ML / Модели</span>
+          <span class="vox-nav__item">Система</span>
+          <span class="vox-nav__secondary">
+            <span class="vox-nav__item">Настройки</span>
+            <span class="vox-nav__item">Брокеры и счета</span>
+          </span>
+        </nav>
+
+        <div class="vox-workspace">
+
+          <div class="vox-widget" style="grid-column:span 12">
+            <div class="vox-quote">
+              <div class="vox-quote__cell">
+                <span class="vox-quote__symbol">SBER</span>
+                <span class="vox-quote__meta">Сбербанк · MOEX · акция</span>
+              </div>
+              <div class="vox-quote__cell">
+                <span class="vox-quote__last vox-num vox-flash-up">318,44</span>
+                <span class="vox-quote__meta vox-num--positive">+2,14 % · +6,68 ₽</span>
+              </div>
+              <div class="vox-quote__stats">
+                <div class="vox-quote__stat"><div class="vox-quote__stat-label">BID</div><div class="vox-quote__stat-value vox-num">318,40</div></div>
+                <div class="vox-quote__stat"><div class="vox-quote__stat-label">ASK</div><div class="vox-quote__stat-value vox-num">318,46</div></div>
+                <div class="vox-quote__stat"><div class="vox-quote__stat-label">СПРЕД</div><div class="vox-quote__stat-value vox-num">0,06 · 0,02 %</div></div>
+                <div class="vox-quote__stat"><div class="vox-quote__stat-label">ОБЪЁМ</div><div class="vox-quote__stat-value vox-num">14,2 млн</div></div>
+                <div class="vox-quote__stat"><div class="vox-quote__stat-label">ПОЗИЦИЯ</div><div class="vox-quote__stat-value vox-num">1 200 · ср. 288,10</div></div>
+              </div>
+              <div class="vox-quote__actions">
+                <span class="vox-context-link is-linked">контекст связан</span>
+                <button class="vox-icon-btn vox-icon-btn--sm" type="button" aria-label="Действия">⋯</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="vox-widget" style="grid-column:span 7;position:relative">
+            <div class="vox-widget__header">
+              <span class="vox-widget__title">График<span class="vox-widget__context vox-widget__context--instrument">SBER · связан</span></span>
+              <span class="vox-widget__tools"><span class="vox-segmented"><span class="vox-segmented__item">1м</span><span class="vox-segmented__item is-selected">5м</span><span class="vox-segmented__item">1ч</span><span class="vox-segmented__item">D</span></span><button class="vox-icon-btn vox-icon-btn--xs" type="button" aria-label="Настройки виджета">⋯</button></span>
+            </div>
+            <div class="ref__placeholder">chart canvas · свечи, маркеры событий и постоянные ценовые линии</div>
+            <div class="vox-widget__body" style="padding:8px;display:flex;flex-direction:column;gap:6px">
+              <div class="ref__demo">
+                <span class="vox-text--label">Маркеры события</span>
+                <span class="vox-marker vox-marker--b">B</span><span class="vox-marker vox-marker--s">S</span><span class="vox-marker vox-marker--f">F</span>
+                <span class="vox-marker vox-marker--sl">SL</span><span class="vox-marker vox-marker--tp">TP</span>
+                <span class="vox-marker vox-marker--d">D</span><span class="vox-marker vox-marker--e">E</span>
+                <span class="vox-badge"><span class="vox-marker vox-marker--b">B</span>×3 · группа на одной свече</span>
+              </div>
+              <div class="ref__demo">
+                <span class="vox-text--label">Постоянные линии</span>
+                <span class="vox-badge">средняя <span class="vox-num">288,10</span></span>
+                <span class="vox-badge vox-badge--info">активная заявка <span class="vox-num">318,40</span></span>
+                <span class="vox-badge vox-badge--warning">SL <span class="vox-num">313,66</span></span>
+                <span class="vox-badge vox-badge--positive">TP <span class="vox-num">332,00</span></span>
+                <span class="vox-badge">последняя <span class="vox-num">318,44</span></span>
+              </div>
+              <div class="vox-tooltip" style="max-width:100%">
+                <div class="vox-text--dense">F · исполнение</div>
+                <div class="ref__note">11:42:06 · 318,40 ₽ · 300 шт · 95 520,00 ₽ · источник: ручная заявка</div>
+              </div>
+              <div class="ref__note">Буква — первичный идентификатор события; геометрия фигуры смысл не несёт. Постоянные уровни — линии, а не маркеры: это разные примитивы и они не смешиваются в одной легенде.</div>
+            </div>
+            <div class="vox-widget__footer"><span>5 мин</span><span>поток активен</span><span class="vox-num">318,44</span></div>
+            <span class="vox-widget__resize"></span>
+          </div>
+
+          <div class="vox-widget vox-ticket" style="grid-column:span 3;width:auto">
+            <div class="vox-widget__header"><span class="vox-widget__title">Заявка<span class="vox-widget__context vox-widget__context--instrument">SBER</span></span><span class="vox-env vox-env--live" style="height:18px"><span class="vox-dot"></span>LIVE</span></div>
+            <div class="vox-ticket__body">
+              <div class="vox-ticket__target is-live">
+                <span class="vox-ticket__target-account">
+                  <span class="vox-ticket__target-name">Основной брокерский</span>
+                  <span class="vox-ticket__target-broker">Т-Инвест · ****4417</span>
+                </span>
+                <span class="vox-env vox-env--live" style="height:18px"><span class="vox-dot"></span>PRODUCTION</span>
+              </div>
+              <div class="vox-ticket__instrument"><span>SBER · Сбербанк</span><span class="vox-num">318,44</span></div>
+              <div class="vox-ticket__field"><span class="vox-ticket__label">Тип</span><span class="vox-select vox-grow">Лимитная<span class="ref__code">▾</span></span></div>
+              <div class="vox-ticket__field"><span class="vox-ticket__label">Объём</span><span class="vox-numeric"><button class="vox-numeric__step vox-numeric__step--dec" type="button">−</button><span class="vox-numeric__value">10</span><button class="vox-numeric__step vox-numeric__step--inc" type="button">+</button></span><span class="vox-text--caption">лотов · 10 шт в лоте</span></div>
+              <div class="vox-ticket__field"><span class="vox-ticket__label">Цена</span><span class="vox-input vox-grow"><input class="vox-input__field vox-num" value="318,40"><span class="vox-unit">₽</span></span></div>
+              <div class="vox-ticket__preview">
+                <div class="vox-ticket__preview-row"><span class="vox-text--caption">Сумма</span><span class="vox-num">31 840,00 ₽</span></div>
+                <div class="vox-ticket__preview-row"><span class="vox-text--caption">Комиссия</span><span class="vox-num">9,55 ₽</span></div>
+                <div class="vox-ticket__preview-row"><span class="vox-text--caption">Маржа после</span><span class="vox-num">180 560,00 ₽</span></div>
+              </div>
+              <div class="vox-ticket__preview">
+                <div class="vox-ticket__preview-row"><span class="vox-text--caption">Действующая защита</span><span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--sl">SL</span><span class="vox-text--dense">Плавающий стоп 1,00 %</span></span></div>
+                <div class="vox-ticket__preview-row"><span class="vox-text--caption">Источник</span><span class="vox-inherited vox-inherited--override">заявка</span></div>
+                <div class="vox-ticket__preview-row"><span class="vox-text--caption">Тейк-профит</span><span class="vox-inherited">из настройки счёта: выкл.</span></div>
+              </div>
+              <div class="vox-risk vox-risk--safe"><span class="vox-dot"></span><div><div>Проверка риска пройдена</div><div class="vox-risk__reason">экспозиция 14,2 % из 20 % <span class="vox-reason-code">RISK_OK</span></div></div></div>
+              <div class="vox-ticket__actions">
+                <button class="vox-ticket__action vox-ticket__action--buy vox-live-action" type="button"><span class="vox-ticket__action-label">Купить 10 лотов</span><span class="vox-ticket__action-value">31 840 ₽ · 318,40</span></button>
+                <button class="vox-ticket__action vox-ticket__action--sell vox-live-action" type="button"><span class="vox-ticket__action-label">Продать 10 лотов</span><span class="vox-ticket__action-value">31 836 ₽ · 318,36</span></button>
+              </div>
+              <div class="vox-ticket__hint">B — Купить · S — Продать · Esc — сброс. Клавиши не пропускают подтверждение, риск-проверку и авторизацию исполнения.</div>
+            </div>
+          </div>
+
+          <div class="vox-widget" style="grid-column:span 2;position:relative">
+            <div class="vox-widget__header"><span class="vox-widget__title">Стакан<span class="vox-widget__context vox-widget__context--instrument">SBER · связан</span></span></div>
+            <div class="vox-widget__body">
+              <div class="vox-book__header"><span>Цена</span><span class="vox-num">Объём</span><span class="vox-num">Итого</span></div>
+              <div class="vox-book__row vox-book__row--ask"><span class="vox-book__depth" style="width:52%"></span><span class="vox-book__cell vox-book__price--ask">318,50</span><span class="vox-book__cell vox-num">1 900</span><span class="vox-book__cell vox-num">5 100</span></div>
+              <div class="vox-book__row vox-book__row--ask"><span class="vox-book__depth" style="width:34%"></span><span class="vox-book__cell vox-book__price--ask">318,46</span><span class="vox-book__cell vox-num">1 200</span><span class="vox-book__cell vox-num">3 200</span></div>
+              <div class="vox-book__spread"><span class="vox-text--caption">спред</span><span class="vox-num">0,06 · 0,02 %</span></div>
+              <div class="vox-book__row vox-book__row--bid is-own"><span class="vox-book__depth" style="width:28%"></span><span class="vox-book__cell vox-book__price--bid">318,40</span><span class="vox-book__cell vox-num">900</span><span class="vox-book__cell vox-num">900</span></div>
+              <div class="vox-book__row vox-book__row--bid"><span class="vox-book__depth" style="width:61%"></span><span class="vox-book__cell vox-book__price--bid">318,36</span><span class="vox-book__cell vox-num">2 400</span><span class="vox-book__cell vox-num">3 300</span></div>
+            </div>
+            <div class="vox-widget__footer"><span>своя заявка подсвечена</span></div>
+            <span class="vox-widget__resize"></span>
+          </div>
+
+          <div class="vox-widget" style="grid-column:span 8">
+            <div class="vox-widget__header"><span class="vox-widget__title">Позиции и заявки<span class="vox-widget__context">счёт «Основной брокерский»</span></span><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>1 в сверке</span></div>
+            <div class="vox-widget__body">
+              <div class="vox-table">
+                <div class="vox-table__header" style="grid-template-columns:132px 84px 96px 96px 116px 104px 1fr">
+                  <span class="vox-table__sort">Инструмент ▲</span><span>Кол-во</span><span class="vox-num">Средняя</span><span class="vox-num">Текущая</span><span class="vox-num">P&amp;L</span><span class="vox-num">Защита</span><span style="padding-left:24px">Статус</span>
+                </div>
+                <div class="vox-table__row is-selected" style="grid-template-columns:132px 84px 96px 96px 116px 104px 1fr">
+                  <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--b">B</span>SBER</span><span class="vox-num" style="text-align:left">1 200</span><span class="vox-num">288,10</span><span class="vox-num vox-flash-up">318,44</span><span class="vox-num vox-num--positive">+36 408,00</span><span class="vox-num">SL 1,00 %</span><span style="padding-left:12px"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>открыта</span></span>
+                </div>
+                <div class="vox-table__row" style="grid-template-columns:132px 84px 96px 96px 116px 104px 1fr">
+                  <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--s">S</span>GAZP</span><span class="vox-num" style="text-align:left">−300</span><span class="vox-num">142,60</span><span class="vox-num">148,02</span><span class="vox-num vox-num--negative">−1 626,00</span><span class="vox-num">SL 3,00 %</span><span style="padding-left:12px"><span class="vox-badge vox-badge--warning"><span class="vox-dot"></span>частично</span></span>
+                </div>
+                <div class="vox-table__row is-unknown" style="grid-template-columns:132px 84px 96px 96px 116px 104px 1fr">
+                  <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--f">F</span>LKOH</span><span class="vox-num" style="text-align:left">40</span><span class="vox-num">6 812,00</span><span class="vox-num vox-num--unknown">—</span><span class="vox-num vox-num--unknown">неизвестно</span><span class="vox-num vox-num--unknown">—</span><span style="padding-left:12px"><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>сверка · UNKNOWN</span></span>
+                </div>
+                <div class="vox-table__footer"><span>3 позиции · раскладка «Trade»</span><span class="vox-num">Итого P&amp;L <span class="vox-num--positive">+34 782,00 ₽</span></span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="vox-widget" style="grid-column:span 4">
+            <div class="vox-widget__header"><span class="vox-widget__title">Лента сделок<span class="vox-widget__context">закреплён · GAZP</span></span><span class="vox-widget__tools"><span class="vox-context-link is-pinned">закреплён</span></span></div>
+            <div class="vox-widget__body">
+              <div class="vox-tape__row"><span class="vox-tape__time">11:42:06</span><span class="vox-num vox-book__price--bid">148,02</span><span class="vox-num vox-tape__size--large">1 400</span><span class="vox-marker vox-marker--b">B</span></div>
+              <div class="vox-tape__row is-own"><span class="vox-tape__time">11:42:04</span><span class="vox-num vox-book__price--ask">148,06</span><span class="vox-num">300</span><span class="vox-marker vox-marker--f">F</span></div>
+              <div class="vox-tape__row"><span class="vox-tape__time">11:42:01</span><span class="vox-num vox-book__price--ask">148,10</span><span class="vox-num">120</span><span class="vox-marker vox-marker--s">S</span></div>
+              <div class="vox-tape__row"><span class="vox-tape__time">11:41:58</span><span class="vox-num vox-book__price--bid">147,98</span><span class="vox-num">640</span><span class="vox-marker vox-marker--e">E</span></div>
+            </div>
+            <div class="vox-widget__footer"><span>инструмент виджета закреплён и не следует за графиком</span></div>
+          </div>
+
+          <div class="vox-widget" style="grid-column:span 12">
+            <div class="vox-widget__header"><span class="vox-widget__title">Портфель и риск<span class="vox-widget__context">счёт «Основной брокерский»</span></span></div>
+            <div class="vox-metrics">
+              <div class="vox-metrics__cell"><div class="vox-metrics__label">Стоимость портфеля</div><div class="vox-metrics__value vox-num" style="text-align:left">1 284 730,45 ₽</div></div>
+              <div class="vox-metrics__cell"><div class="vox-metrics__label">Свободные средства</div><div class="vox-metrics__value vox-num" style="text-align:left">212 400,00 ₽</div></div>
+              <div class="vox-metrics__cell"><div class="vox-metrics__label">Дневной лимит убытка</div><div class="vox-limit" style="margin-top:4px"><div class="vox-limit__track"><div class="vox-limit__fill vox-limit__fill--warning" style="width:68%"></div></div><div class="vox-text--caption">использовано 68 %</div></div></div>
+              <div class="vox-metrics__cell"><div class="vox-metrics__label">Открытых заявок</div><div class="vox-metrics__value vox-num" style="text-align:left">3</div></div>
+            </div>
+          </div>
+
+        </div>
       </div>
     </div>
 
     <div class="ref__grid">
-      <div class="vox-widget vox-ticket">
-        <div class="vox-widget__header"><span class="vox-widget__title">Заявка<span class="vox-widget__context vox-widget__context--instrument">SBER</span></span><span class="vox-env vox-env--live" style="height:18px"><span class="vox-dot"></span>LIVE</span></div>
-        <div class="vox-ticket__body">
-          <div class="vox-ticket__instrument"><span>SBER · Сбербанк</span><span class="vox-num">318,44</span></div>
-          <div class="vox-ticket__field"><span class="vox-ticket__label">Тип</span><span class="vox-select vox-grow">Лимитная<span class="ref__code">▾</span></span></div>
-          <div class="vox-ticket__field"><span class="vox-ticket__label">Объём</span><span class="vox-numeric"><button class="vox-numeric__step vox-numeric__step--dec" type="button">−</button><span class="vox-numeric__value">100</span><button class="vox-numeric__step vox-numeric__step--inc" type="button">+</button></span><span class="vox-text--caption">лот 10</span></div>
-          <div class="vox-ticket__field"><span class="vox-ticket__label">Цена</span><span class="vox-input vox-grow"><input class="vox-input__field" value="318,40"><span class="vox-unit">₽</span></span></div>
-          <div class="vox-ticket__preview">
-            <div class="vox-ticket__preview-row"><span class="vox-text--caption">Сумма</span><span class="vox-num">31 840,00 ₽</span></div>
-            <div class="vox-ticket__preview-row"><span class="vox-text--caption">Комиссия</span><span class="vox-num">9,55 ₽</span></div>
-            <div class="vox-ticket__preview-row"><span class="vox-text--caption">Маржа после</span><span class="vox-num">180 560,00 ₽</span></div>
-          </div>
-          <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Близко к лимиту концентрации</div><div class="vox-risk__reason">18 % из 20 % <span class="vox-reason-code">RISK_CONC_NEAR</span></div></div></div>
-          <div class="vox-ticket__actions">
-            <button class="vox-ticket__action vox-ticket__action--buy vox-live-action" type="button"><span class="vox-ticket__action-label">Купить</span><span class="vox-ticket__action-value">318,40</span></button>
-            <button class="vox-ticket__action vox-ticket__action--sell vox-live-action" type="button"><span class="vox-ticket__action-label">Продать</span><span class="vox-ticket__action-value">318,36</span></button>
-          </div>
-          <div class="vox-ticket__hint">B — Купить · S — Продать · Esc — сброс</div>
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Раскладки — это сохранённые расстановки одного набора виджетов</div>
+        <div class="ref__demo">
+          <span class="vox-segmented">
+            <span class="vox-segmented__item is-selected">Trade</span><span class="vox-segmented__item">Scalp</span><span class="vox-segmented__item">Portfolio</span>
+            <span class="vox-segmented__item">Research</span><span class="vox-segmented__item">Strategy</span><span class="vox-segmented__item">Custom</span>
+          </span>
         </div>
+        <div class="ref__note" style="margin-top:10px">12 колонок, перетаскивание только за шапку виджета, изменение размера с шагом 8px, минимальные размеры объявляет сам виджет. Раскладка сохраняется на пользователя и рабочее пространство. Пресет — не отдельное приложение.</div>
       </div>
-
-      <div class="vox-widget vox-ticket">
-        <div class="vox-widget__header"><span class="vox-widget__title">Заявка · сторона заблокирована</span></div>
-        <div class="vox-ticket__body">
-          <div class="vox-ticket__instrument"><span>GAZP · Газпром</span><span class="vox-num">148,02</span></div>
-          <div class="vox-risk vox-risk--blocked"><span class="vox-dot"></span><div><div>Продажа недоступна</div><div class="vox-risk__reason">Нет позиции, короткие сделки по счёту запрещены <span class="vox-reason-code">RISK_NO_SHORT</span></div></div></div>
-          <div class="vox-ticket__actions">
-            <button class="vox-ticket__action vox-ticket__action--buy" type="button"><span class="vox-ticket__action-label">Купить</span><span class="vox-ticket__action-value">148,06</span></button>
-            <button class="vox-ticket__action vox-ticket__action--sell is-blocked" type="button" aria-disabled="true"><span class="vox-ticket__action-label">Продать</span><span class="vox-ticket__action-note">запрещено</span></button>
-          </div>
-          <div class="ref__note">Заблокированная сторона остаётся на месте и объясняет причину. Переключателя режима «покупка/продажа» в системе не существует.</div>
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Проверка экрана</div>
+        <div class="ref__demo">
+          <span class="vox-badge">1280</span><span class="vox-badge">1440</span><span class="vox-badge">1920</span>
+          <span class="vox-badge">Compact</span><span class="vox-badge">Standard</span><span class="vox-badge">Comfortable</span>
         </div>
+        <div class="ref__note" style="margin-top:10px">На 1280 сворачивается стакан и лента, заявка и цель исполнения не сворачиваются никогда. Планшет — наблюдательный режим, телефон — отдельный сценарий, а не сжатая сетка.</div>
       </div>
-
-      <div class="vox-widget">
-        <div class="vox-widget__header"><span class="vox-widget__title">Лента сделок<span class="vox-widget__context">связана</span></span></div>
-        <div class="vox-widget__body">
-          <div class="vox-tape__row"><span class="vox-tape__time">17:42:08</span><span class="vox-num vox-book__price--bid">318,44</span><span class="vox-num vox-tape__size--large">1 400</span><span class="vox-marker vox-marker--b">B</span></div>
-          <div class="vox-tape__row is-own"><span class="vox-tape__time">17:42:06</span><span class="vox-num vox-book__price--ask">318,40</span><span class="vox-num">300</span><span class="vox-marker vox-marker--f">F</span></div>
-          <div class="vox-tape__row"><span class="vox-tape__time">17:42:05</span><span class="vox-num vox-book__price--ask">318,38</span><span class="vox-num">120</span><span class="vox-marker vox-marker--s">S</span></div>
-          <div class="vox-tape__row"><span class="vox-tape__time">17:41:58</span><span class="vox-num vox-book__price--bid">318,46</span><span class="vox-num">640</span><span class="vox-marker vox-marker--e">E</span></div>
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Контекст счёта и контекст инструмента независимы</div>
+        <div class="ref__note">Смена активного счёта атомарно обновляет портфель, позиции, заявки, операции, риск, заявочный тикет и привязку стратегий. Виджеты с закреплённым инструментом при этом не меняют инструмент, а уже собранная или отправленная команда не меняет счёт исполнения (раздел 10).</div>
+      </div>
+      <div class="ref__spec vox-surface" style="grid-column:1 / -1">
+        <div class="ref__spec-title">Каталог виджетов · минимальный и предпочтительный размер</div>
+        <div class="vox-table">
+          <div class="vox-table__header" style="grid-template-columns:180px 104px 104px 1fr">
+            <span>Виджет</span><span class="vox-num">Минимум</span><span class="vox-num">Предпочт.</span><span style="padding-left:16px">Ниже минимума</span>
+          </div>
+          <div class="vox-table__row" style="grid-template-columns:180px 104px 104px 1fr"><span>Заголовок инструмента</span><span class="vox-num">4 × 56px</span><span class="vox-num">12 × 56px</span><span style="padding-left:8px" class="vox-text--dense">скрываются вторичные метрики, тикер и цена остаются</span></div>
+          <div class="vox-table__row" style="grid-template-columns:180px 104px 104px 1fr"><span>График</span><span class="vox-num">4 × 240px</span><span class="vox-num">7 × 420px</span><span style="padding-left:8px" class="vox-text--dense">скрывается легенда, свечи и уровни остаются</span></div>
+          <div class="vox-table__row" style="grid-template-columns:180px 104px 104px 1fr"><span>Заявка</span><span class="vox-num">3 × 420px</span><span class="vox-num">3 × 520px</span><span style="padding-left:8px" class="vox-text--dense">не сжимается: цель исполнения, защита и обе кнопки обязательны</span></div>
+          <div class="vox-table__row" style="grid-template-columns:180px 104px 104px 1fr"><span>Стакан</span><span class="vox-num">2 × 200px</span><span class="vox-num">2 × 360px</span><span style="padding-left:8px" class="vox-text--dense">уменьшается число уровней, спред остаётся</span></div>
+          <div class="vox-table__row" style="grid-template-columns:180px 104px 104px 1fr"><span>Лента сделок</span><span class="vox-num">3 × 160px</span><span class="vox-num">4 × 300px</span><span style="padding-left:8px" class="vox-text--dense">уменьшается число строк</span></div>
+          <div class="vox-table__row" style="grid-template-columns:180px 104px 104px 1fr"><span>Таблица позиций</span><span class="vox-num">6 × 160px</span><span class="vox-num">8 × 300px</span><span style="padding-left:8px" class="vox-text--dense">колонки уходят по приоритету справа налево; P&amp;L и защита не уходят</span></div>
+          <div class="vox-table__row" style="grid-template-columns:180px 104px 104px 1fr"><span>Портфель и риск</span><span class="vox-num">4 × 92px</span><span class="vox-num">12 × 92px</span><span style="padding-left:8px" class="vox-text--dense">сетка метрик переходит в 2 колонки</span></div>
+          <div class="vox-table__footer"><span>ширина — в колонках 12-колоночной сетки, высота — в пикселях с шагом 8px</span><span class="vox-num">7 виджетов</span></div>
         </div>
-        <div class="vox-widget__footer"><span>свои сделки подсвечены</span><span class="vox-num">4 события</span></div>
+        <div class="ref__note" style="margin-top:10px">Минимум объявляет сам виджет; сетка не даёт сделать его меньше. Ни один виджет при сжатии не прячет инструмент, счёт или среду — уходит второстепенное, а не то, что отвечает за деньги.</div>
       </div>
     </div>
   </section>
 
-  <!-- 10 · DON'T -->
+  <!-- 10 · ORDER TICKET / EXECUTION TARGET -->
+  <section class="ref__sec" id="ticket">
+    <div class="ref__sec-head"><span class="ref__num">10</span><h2 class="vox-text--title">Заявка · цель исполнения</h2>
+      <span class="ref__note">Первая строка тикета — всегда подключение, счёт и среда. Она не сворачивается, не выводится из «последнего использованного счёта» и после отправки команды замораживается.</span></div>
+
+    <div class="ref__grid">
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Состояния строки цели исполнения</div>
+        <div class="ref__demo" style="flex-direction:column;align-items:stretch;gap:10px">
+
+          <div>
+            <div class="vox-ticket__target is-live">
+              <span class="vox-ticket__target-account">
+                <span class="vox-ticket__target-name">Основной брокерский</span>
+                <span class="vox-ticket__target-broker">Т-Инвест · ****4417</span>
+              </span>
+              <span class="vox-env vox-env--live" style="height:18px"><span class="vox-dot"></span>PRODUCTION</span>
+            </div>
+            <div class="ref__note" style="margin-top:4px">Обычное состояние: цель совпадает с активным счётом рабочего пространства. Врезка красным волоском отмечает, что действие затрагивает реальный капитал; интерфейс при этом не краснеет целиком.</div>
+          </div>
+
+          <div>
+            <div class="vox-ticket__target is-mismatch">
+              <span class="vox-ticket__target-account">
+                <span class="vox-ticket__target-name">ИИС</span>
+                <span class="vox-ticket__target-broker">Т-Инвест · ****7702</span>
+              </span>
+              <span class="vox-env vox-env--live" style="height:18px">PRODUCTION</span>
+            </div>
+            <div class="vox-field-error" style="margin-top:4px"><span class="vox-dot"></span><span>Тикет собран на счёте «ИИС», активный счёт рабочего пространства — «Основной брокерский». Заявка уйдёт на «ИИС» <span class="vox-reason-code">EXEC_TARGET_MISMATCH</span></span></div>
+            <div class="ref__demo" style="margin-top:6px"><button class="vox-btn vox-btn--secondary" type="button">Перевести тикет на активный счёт</button><button class="vox-btn vox-btn--ghost" type="button">Оставить как есть</button></div>
+          </div>
+
+          <div>
+            <div class="vox-ticket__target is-frozen">
+              <span class="vox-ticket__target-account">
+                <span class="vox-ticket__target-name">Основной брокерский</span>
+                <span class="vox-ticket__target-broker">Т-Инвест · ****4417</span>
+              </span>
+              <span class="vox-row vox-gap-1">
+                <span class="vox-env vox-env--live" style="height:18px">PRODUCTION</span>
+                <span class="vox-ticket__target-lock">ЗАФИКСИРОВАНО</span>
+              </span>
+            </div>
+            <div class="ref__note" style="margin-top:4px">Команда собрана и отправлена: подключение, счёт и среда зафиксированы вместе с ней. Смена активного счёта в шелле после этого момента не переносит и не перенаправляет заявку — она остаётся привязанной к исходной цели до финального состояния.</div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="vox-widget vox-ticket" style="width:auto">
+        <div class="vox-widget__header"><span class="vox-widget__title">Отправленная команда<span class="vox-widget__context vox-widget__context--instrument">SBER</span></span><span class="vox-badge vox-badge--info"><span class="vox-dot"></span>ОТПРАВЛЕНА</span></div>
+        <div class="vox-ticket__body">
+          <div class="vox-ticket__target is-frozen">
+            <span class="vox-ticket__target-account">
+              <span class="vox-ticket__target-name">Основной брокерский</span>
+              <span class="vox-ticket__target-broker">Т-Инвест · ****4417</span>
+            </span>
+            <span class="vox-ticket__target-lock">ЗАФИКСИРОВАНО</span>
+          </div>
+          <div class="vox-ticket__preview">
+            <div class="vox-ticket__preview-row"><span class="vox-text--caption">Команда</span><span class="vox-text--dense">Купить 10 лотов · лимит 318,40 ₽</span></div>
+            <div class="vox-ticket__preview-row"><span class="vox-text--caption">Среда</span><span class="vox-env vox-env--live" style="height:18px">PRODUCTION</span></div>
+            <div class="vox-ticket__preview-row"><span class="vox-text--caption">Защита при исполнении</span><span class="vox-text--dense">Плавающий стоп 1,00 %</span></div>
+            <div class="vox-ticket__preview-row"><span class="vox-text--caption">Источник защиты</span><span class="vox-inherited vox-inherited--override">заявка</span></div>
+          </div>
+          <div class="vox-state-note">
+            <span class="vox-state-note__title">Активный счёт в шелле переключён на «Песочница»</span>
+            <span>Эта команда осталась на счёте «Основной брокерский», среда PRODUCTION. Перенос отправленной команды между счетами невозможен: отмена и повторная отправка — два разных действия оператора.</span>
+          </div>
+          <div class="ref__demo"><button class="vox-btn vox-btn--danger" type="button">Отменить заявку</button><button class="vox-btn vox-btn--ghost" type="button">Диагностика</button></div>
+        </div>
+      </div>
+
+      <div class="vox-widget vox-ticket" style="width:auto">
+        <div class="vox-widget__header"><span class="vox-widget__title">Сторона заблокирована<span class="vox-widget__context vox-widget__context--instrument">GAZP</span></span></div>
+        <div class="vox-ticket__body">
+          <div class="vox-ticket__target">
+            <span class="vox-ticket__target-account">
+              <span class="vox-ticket__target-name">Песочница</span>
+              <span class="vox-ticket__target-broker">Т-Инвест · ****0091</span>
+            </span>
+            <span class="vox-env vox-env--sandbox" style="height:18px"><span class="vox-dot"></span>SANDBOX</span>
+          </div>
+          <div class="vox-ticket__instrument"><span>GAZP · Газпром</span><span class="vox-num">148,02</span></div>
+          <div class="vox-risk vox-risk--blocked"><span class="vox-dot"></span><div><div>Продажа недоступна</div><div class="vox-risk__reason">Нет позиции, короткие сделки по счёту запрещены <span class="vox-reason-code">RISK_NO_SHORT</span></div></div></div>
+          <div class="vox-ticket__actions">
+            <button class="vox-ticket__action vox-ticket__action--buy" type="button"><span class="vox-ticket__action-label">Купить 5 лотов</span><span class="vox-ticket__action-value">7 403 ₽ · 148,06</span></button>
+            <button class="vox-ticket__action vox-ticket__action--sell is-blocked" type="button" aria-disabled="true"><span class="vox-ticket__action-label">Продать</span><span class="vox-ticket__action-note">запрещено по счёту</span></button>
+          </div>
+          <div class="ref__note">Заблокированная сторона остаётся на месте и называет причину. Переключателя режима «покупка/продажа» в системе не существует: сторона — это финальное действие, а не предварительный режим.</div>
+        </div>
+      </div>
+
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Единый выбор инструмента</div>
+        <div class="ref__demo" style="flex-direction:column;align-items:stretch;gap:6px">
+          <span class="vox-input"><input class="vox-input__field" value="сбер"><span class="vox-text--caption">поиск по тикеру и названию</span></span>
+          <div class="vox-popover">
+            <div class="vox-menu">
+              <div class="vox-menu__item"><span class="vox-row vox-gap-2"><b>SBER</b><span class="vox-text--secondary">Сбербанк</span></span><span class="vox-menu__shortcut">MOEX · акция</span></div>
+              <div class="vox-menu__item"><span class="vox-row vox-gap-2"><b>SBERP</b><span class="vox-text--secondary">Сбербанк — прив.</span></span><span class="vox-menu__shortcut">MOEX · акция</span></div>
+              <div class="vox-menu__sep"></div>
+              <div class="vox-menu__item is-disabled"><span class="vox-text--tertiary">Идентификаторы провайдера — только в диагностике</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="ref__note" style="margin-top:10px">Один и тот же компонент во всех экранах: тикер, имя, площадка и тип. UID/FIGI и внутренние идентификаторы брокера в обычном интерфейсе не показываются.</div>
+      </div>
+
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Безопасность числового ввода</div>
+        <div class="ref__demo" style="flex-direction:column;align-items:stretch;gap:6px">
+          <span class="vox-numeric is-invalid"><button class="vox-numeric__step vox-numeric__step--dec" type="button">−</button><span class="vox-numeric__value">13</span><button class="vox-numeric__step vox-numeric__step--inc" type="button">+</button></span>
+          <div class="vox-field-error"><span class="vox-dot"></span><span>Объём кратен лоту 10. Ближайшие допустимые значения — 10 или 20 <span class="vox-reason-code">ORD_LOT_STEP</span></span></div>
+        </div>
+        <div class="ref__note" style="margin-top:10px">Шаг, минимум, максимум и лот приходят из метаданных инструмента. Клавиши ↑/↓ и степперы работают, колесо мыши критичное значение не меняет никогда.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 · PROTECTION -->
+  <section class="ref__sec" id="protection">
+    <div class="ref__sec-head"><span class="ref__num">11</span><h2 class="vox-text--title">Защита позиции</h2>
+      <span class="ref__note">Стоп-лосс и тейк-профит независимы и опциональны. Каждый блок соответствует реальной заявке у брокера (Broker Foundation, задача #10), а не декоративному UI.</span></div>
+
+    <div class="ref__grid">
+      <div class="vox-widget vox-ticket">
+        <div class="vox-widget__header"><span class="vox-widget__title">Стоп-лосс · фиксированный</span></div>
+        <div class="vox-ticket__body">
+          <div class="vox-protect">
+            <div class="vox-protect__block vox-protect__block--sl">
+              <div class="vox-protect__head">
+                <span class="vox-protect__title"><span class="vox-protect__mark">SL</span>Стоп-лосс</span>
+                <span class="vox-protect__spacer"></span>
+                <span class="vox-switch is-on"><span class="vox-switch__knob"></span></span>
+              </div>
+              <div class="vox-protect__body">
+                <div class="vox-protect__row">
+                  <span class="vox-protect__label">Режим</span>
+                  <span class="vox-segmented"><span class="vox-segmented__item is-selected">Фиксированный</span><span class="vox-segmented__item">Трейлинг</span></span>
+                </div>
+                <div class="vox-protect__row">
+                  <span class="vox-protect__label">Уровень</span>
+                  <span class="vox-input" style="width:110px"><input class="vox-input__field vox-num" value="310,00"><span class="vox-unit">₽</span></span>
+                  <span class="vox-text--caption">−2,65 % от 318,44</span>
+                </div>
+                <div class="vox-protect__result"><span class="vox-text--caption">Заявка у брокера</span><span class="vox-protect__result-value">STOP_LOSS · 310,00 ₽</span></div>
+                <div class="vox-protect__hint">Уровень всегда показывается и в абсолютной цене, и в дистанции. Отправка защиты — часть исполнения, а не отдельный «черновик» в интерфейсе.</div>
+              </div>
+            </div>
+            <div class="vox-protect__block vox-protect__block--tp">
+              <div class="vox-protect__head">
+                <span class="vox-protect__title"><span class="vox-protect__mark">TP</span>Тейк-профит</span>
+                <span class="vox-protect__spacer"></span>
+                <span class="vox-switch is-on"><span class="vox-switch__knob"></span></span>
+              </div>
+              <div class="vox-protect__body">
+                <div class="vox-protect__row">
+                  <span class="vox-protect__label">Уровень</span>
+                  <span class="vox-input" style="width:110px"><input class="vox-input__field vox-num" value="332,00"><span class="vox-unit">₽</span></span>
+                  <span class="vox-text--caption">+4,26 %</span>
+                </div>
+                <div class="vox-protect__result"><span class="vox-text--caption">Заявка у брокера</span><span class="vox-protect__result-value">TAKE_PROFIT · 332,00 ₽</span></div>
+                <div class="vox-protect__hint">TP включается независимо от SL: один без другого — нормальный случай.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="vox-widget vox-ticket">
+        <div class="vox-widget__header"><span class="vox-widget__title">Трейлинг · состояния провайдера</span></div>
+        <div class="vox-ticket__body">
+          <div class="vox-protect__block vox-protect__block--sl">
+            <div class="vox-protect__head">
+              <span class="vox-protect__title"><span class="vox-protect__mark">SL</span>Трейлинг · %</span>
+              <span class="vox-protect__spacer"></span>
+              <span class="vox-trailing__badge">брокерский</span>
+            </div>
+            <div class="vox-protect__body">
+              <div class="vox-trailing__state">
+                <div><div class="vox-trailing__state-label">Текущий уровень</div><div class="vox-trailing__state-value">313,66 ₽</div></div>
+                <div><div class="vox-trailing__state-label">Референс</div><div class="vox-trailing__state-value is-unknown">UNKNOWN</div></div>
+              </div>
+              <div class="vox-protect__hint">Брокер подтвердил заявку, но не отдаёт референсный максимум. Это UNKNOWN, а не ошибка: заявка активна, поле состояния — неизвестно.</div>
+            </div>
+          </div>
+          <div class="vox-protect__block vox-protect__block--sl">
+            <div class="vox-protect__head">
+              <span class="vox-protect__title"><span class="vox-protect__mark">SL</span>Трейлинг · ₽</span>
+              <span class="vox-protect__spacer"></span>
+              <span class="vox-badge">режим недоступен</span>
+            </div>
+            <div class="vox-protect__body">
+              <div class="vox-trailing__unsupported"><span class="vox-dot"></span><div>Провайдер поддерживает трейлинг только в процентах. Абсолютный отступ не отправляется и не эмулируется на клиенте <span class="vox-reason-code">BRK_TRAIL_ABS_UNSUPPORTED</span></div></div>
+              <div class="vox-protect__hint">Неподдерживаемый режим называется прямо. Клиентская эмуляция брокерской защиты запрещена: защита должна выживать при закрытом терминале.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="vox-widget">
+        <div class="vox-widget__header"><span class="vox-widget__title">Приоритет значений<span class="vox-widget__context">SBER · счёт «Основной»</span></span></div>
+        <div class="vox-widget__body">
+          <div class="vox-precedence">
+            <div class="vox-precedence__row is-effective">
+              <span class="vox-precedence__rank">1</span>
+              <span class="vox-precedence__scope">Заявка / позиция — переопределение</span>
+              <span class="vox-precedence__value">трейлинг 1,50 %</span>
+              <span class="vox-inherited vox-inherited--override">действует</span>
+            </div>
+            <div class="vox-precedence__row is-overridden">
+              <span class="vox-precedence__rank">2</span>
+              <span class="vox-precedence__scope">Политика стратегии «Импульс»</span>
+              <span class="vox-precedence__value">трейлинг 2,00 %</span>
+              <span class="vox-inherited">перекрыто</span>
+            </div>
+            <div class="vox-precedence__row is-overridden">
+              <span class="vox-precedence__rank">3</span>
+              <span class="vox-precedence__scope">По умолчанию для счёта</span>
+              <span class="vox-precedence__value">фикс. −3,00 %</span>
+              <span class="vox-inherited">перекрыто</span>
+            </div>
+          </div>
+          <div class="vox-precedence__note">Порядок всегда один и тот же и всегда виден: заявка/позиция → политика стратегии → значение по умолчанию для портфеля/счёта. Перекрытые значения остаются читаемыми, а не скрываются.</div>
+        </div>
+      </div>
+
+      <div class="vox-widget">
+        <div class="vox-widget__header"><span class="vox-widget__title">Защита по умолчанию<span class="vox-widget__context">портфель / счёт</span></span></div>
+        <div class="vox-widget__body" style="padding:10px">
+          <div class="vox-policy">
+            <div class="vox-policy__row">
+              <span class="vox-policy__label">Стоп-лосс по умолчанию</span>
+              <span class="vox-segmented"><span class="vox-segmented__item">Выкл.</span><span class="vox-segmented__item is-selected">Фикс.</span><span class="vox-segmented__item">Трейлинг</span></span>
+              <span class="vox-input" style="width:96px"><input class="vox-input__field vox-num" value="3,00"><span class="vox-unit">%</span></span>
+            </div>
+            <div class="vox-policy__row">
+              <span class="vox-policy__label">Трейлинг по умолчанию</span>
+              <span class="vox-segmented"><span class="vox-segmented__item is-selected">%</span><span class="vox-segmented__item">₽</span></span>
+              <span class="vox-input" style="width:96px"><input class="vox-input__field vox-num" value="2,00"><span class="vox-unit">%</span></span>
+            </div>
+            <div class="vox-policy__row">
+              <span class="vox-policy__label">Тейк-профит по умолчанию</span>
+              <span class="vox-segmented"><span class="vox-segmented__item is-selected">Выкл.</span><span class="vox-segmented__item">Фикс.</span></span>
+              <span class="vox-policy__scope">включается вручную в заявке</span>
+            </div>
+            <div class="vox-policy__migration"><span class="vox-dot"></span><div>Изменение значения по умолчанию действует только для новых заявок. Существующие стоп-заявки у брокера не переписываются молча — для них предлагается отдельное явное действие со списком затронутых позиций.</div></div>
+            <div class="ref__note">Значение по умолчанию — не жёсткий риск-лимит. Ограничители (guardrails) — отдельная политика с собственным экраном и собственными кодами причин.</div>
+          </div>
+        </div>
+      </div>
+      <div class="vox-widget vox-ticket" style="width:auto">
+        <div class="vox-widget__header"><span class="vox-widget__title">Трейлинг · состояние у брокера</span><span class="vox-trailing__badge">брокерский</span></div>
+        <div class="vox-ticket__body">
+          <div class="vox-protect__block vox-protect__block--sl">
+            <div class="vox-protect__head">
+              <span class="vox-protect__title"><span class="vox-protect__mark">SL</span>Длинная позиция · 1,50 %</span>
+              <span class="vox-protect__spacer"></span>
+              <span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>ACTIVE</span>
+            </div>
+            <div class="vox-protect__body">
+              <div class="vox-trailing__state">
+                <div><div class="vox-trailing__state-label">Текущий уровень</div><div class="vox-trailing__state-value">313,66 ₽</div></div>
+                <div><div class="vox-trailing__state-label">Референс (максимум)</div><div class="vox-trailing__state-value">318,44 ₽</div></div>
+                <div><div class="vox-trailing__state-label">Активация</div><div class="vox-trailing__state-value">сразу</div></div>
+                <div><div class="vox-trailing__state-label">Обновлён брокером</div><div class="vox-trailing__state-value">11:42:04</div></div>
+              </div>
+              <div class="vox-protect__result"><span class="vox-text--caption">Заявка у брокера</span><span class="vox-protect__result-value">TRAILING_STOP · −4,78 ₽</span></div>
+              <div class="vox-protect__hint">Для длинной позиции уровень идёт за благоприятным максимумом и при падении цены вниз не расширяется. Показывается то, что вернул брокер: терминал не пересчитывает уровень сам и не ведёт собственный трейлинг.</div>
+            </div>
+          </div>
+          <div class="vox-protect__block vox-protect__block--sl">
+            <div class="vox-protect__head">
+              <span class="vox-protect__title"><span class="vox-protect__mark">SL</span>Короткая позиция · 2,00 %</span>
+              <span class="vox-protect__spacer"></span>
+              <span class="vox-badge vox-badge--warning"><span class="vox-dot"></span>PENDING</span>
+            </div>
+            <div class="vox-protect__body">
+              <div class="vox-trailing__state">
+                <div><div class="vox-trailing__state-label">Текущий уровень</div><div class="vox-trailing__state-value is-unknown">ожидает подтверждения</div></div>
+                <div><div class="vox-trailing__state-label">Референс (минимум)</div><div class="vox-trailing__state-value">147,98 ₽</div></div>
+                <div><div class="vox-trailing__state-label">Активация</div><div class="vox-trailing__state-value">при 146,50 ₽</div></div>
+                <div><div class="vox-trailing__state-label">Обновлён брокером</div><div class="vox-trailing__state-value is-unknown">—</div></div>
+              </div>
+              <div class="vox-protect__hint">Для короткой позиции семантика зеркальна: уровень следует за благоприятным минимумом и вверх не расширяется. Пока брокер не подтвердил заявку, состояние — PENDING, а не «ошибка».</div>
+            </div>
+          </div>
+          <div class="vox-protect__block vox-protect__block--sl">
+            <div class="vox-protect__head">
+              <span class="vox-protect__title"><span class="vox-protect__mark">SL</span>Уровень заменён брокером</span>
+              <span class="vox-protect__spacer"></span>
+              <span class="vox-badge vox-badge--info"><span class="vox-dot"></span>REPLACED</span>
+            </div>
+            <div class="vox-protect__body">
+              <div class="vox-protect__result"><span class="vox-text--caption">Было</span><span class="vox-protect__result-value">313,66 ₽</span></div>
+              <div class="vox-protect__result"><span class="vox-text--caption">Стало</span><span class="vox-protect__result-value">314,20 ₽</span></div>
+              <div class="vox-protect__hint">Брокер заменил стоп-заявку после сдвига референса. Показывается его последнее подтверждённое значение с временем ответа — расхождение не прячется и не выравнивается на клиенте.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="vox-widget" style="width:auto">
+        <div class="vox-widget__header"><span class="vox-widget__title">Значение по умолчанию и ограничение риска</span></div>
+        <div class="vox-widget__body" style="padding:10px;display:flex;flex-direction:column;gap:8px">
+          <div class="vox-migrate__policy">
+            <div class="vox-migrate__policy-cell">
+              <span class="vox-migrate__policy-label">ЗНАЧЕНИЕ ПО УМОЛЧАНИЮ</span>
+              <span class="vox-migrate__policy-value">Плавающий стоп 5,0 %</span>
+              <span class="ref__note">настройка счёта · применяется к новым заявкам</span>
+            </div>
+            <div class="vox-migrate__arrow">·</div>
+            <div class="vox-migrate__policy-cell vox-migrate__policy-cell--after">
+              <span class="vox-migrate__policy-label">ОГРАНИЧЕНИЕ РИСКА</span>
+              <span class="vox-migrate__policy-value">Максимум 8,0 %</span>
+              <span class="ref__note">политика риска · отдельный экран и свои коды причин</span>
+            </div>
+          </div>
+          <div class="vox-risk vox-risk--blocked"><span class="vox-dot"></span><div><div>Запрошено 12,0 % — превышает ограничение риска</div><div class="vox-risk__reason">Максимально допустимая дистанция трейлинга 8,0 % <span class="vox-reason-code">RISK_TRAIL_MAX</span></div></div></div>
+          <div class="vox-risk vox-risk--resize"><span class="vox-dot"></span><div><div>Бэкенд вернул скорректированное значение: 12,0 % → 8,0 %</div><div class="vox-risk__reason">Показывается решение бэкенда, а не тихое обрезание в браузере <span class="vox-reason-code">RISK_TRAIL_RESIZE</span></div></div></div>
+          <div class="ref__note">Значение по умолчанию — это не жёсткий лимит. Ограничитель живёт в политике риска, и решение по нему всегда приходит с бэкенда: BLOCKED или RESIZE с явной причиной.</div>
+        </div>
+      </div>
+
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Допустимые сочетания защиты</div>
+        <div class="ref__demo" style="flex-direction:column;align-items:stretch;gap:4px">
+          <span class="vox-badge">без защиты — если это разрешает политика риска</span>
+          <span class="vox-badge"><span class="vox-marker vox-marker--sl">SL</span>только фиксированный стоп</span>
+          <span class="vox-badge"><span class="vox-marker vox-marker--sl">SL</span>только трейлинг</span>
+          <span class="vox-badge"><span class="vox-marker vox-marker--tp">TP</span>только тейк-профит</span>
+          <span class="vox-badge"><span class="vox-marker vox-marker--sl">SL</span><span class="vox-marker vox-marker--tp">TP</span>фиксированный стоп и тейк-профит</span>
+          <span class="vox-badge"><span class="vox-marker vox-marker--sl">SL</span><span class="vox-marker vox-marker--tp">TP</span>трейлинг и тейк-профит</span>
+          <span class="vox-badge vox-badge--unknown">стоп-лимит — только там, где провайдер это исполняет</span>
+        </div>
+        <div class="ref__note" style="margin-top:10px">Стоп-лосс и тейк-профит включаются независимо: один без другого — нормальный случай, а не ошибка заполнения. Сочетание, которое провайдер не исполняет, гасится с причиной и не эмулируется в браузере.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- 12 · RECONCILIATION / UNKNOWN -->
+  <section class="ref__sec" id="reconciliation">
+    <div class="ref__sec-head"><span class="ref__num">12</span><h2 class="vox-text--title">Сверка и UNKNOWN</h2>
+      <span class="ref__note">Команда ушла к брокеру, ответ не получен. Это незавершённый ответ, а не отказ: фиолетовая семантика UNKNOWN обязательна, красная запрещена. Разрешение состояния принадлежит рантайму сверки (задача #11), интерфейс его показывает.</span></div>
+
+    <div class="ref__grid">
+      <div class="vox-widget vox-ticket" style="width:auto">
+        <div class="vox-widget__header"><span class="vox-widget__title">Заявка · ответ не получен<span class="vox-widget__context vox-widget__context--instrument">SBER</span></span><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>UNKNOWN</span></div>
+        <div class="vox-ticket__body">
+          <div class="vox-ticket__target is-frozen">
+            <span class="vox-ticket__target-account">
+              <span class="vox-ticket__target-name">Основной брокерский</span>
+              <span class="vox-ticket__target-broker">Т-Инвест · ****4417</span>
+            </span>
+            <span class="vox-ticket__target-lock">ЗАФИКСИРОВАНО</span>
+          </div>
+          <div class="vox-recon">
+            <div class="vox-recon__head">
+              <span class="vox-dot"></span>
+              <span class="vox-recon__title">Состояние заявки неизвестно</span>
+              <span class="vox-reason-code">UNKNOWN_AFTER_DISPATCH</span>
+            </div>
+            <div class="vox-recon__body">Команда отправлена брокеру, подтверждение не получено за отведённое время. Заявка могла быть принята. Повторная отправка запрещена до завершения сверки: это единственный способ не создать вторую позицию.</div>
+            <div class="vox-recon__facts">
+              <div><div class="vox-recon__fact-label">ОТПРАВЛЕНО</div><div class="vox-recon__fact-value">11:42:06</div></div>
+              <div><div class="vox-recon__fact-label">БЕЗ ОТВЕТА</div><div class="vox-recon__fact-value">00:14</div></div>
+              <div><div class="vox-recon__fact-label">КОМАНДА</div><div class="vox-recon__fact-value">Купить 10 лотов</div></div>
+              <div><div class="vox-recon__fact-label">ЦЕНА</div><div class="vox-recon__fact-value">318,40 ₽</div></div>
+            </div>
+            <div class="vox-recon__actions">
+              <button class="vox-btn vox-btn--primary" type="button">Запросить состояние у брокера</button>
+              <button class="vox-btn vox-btn--ghost" type="button">Диагностика</button>
+              <button class="vox-btn vox-btn--secondary" type="button" aria-disabled="true">Повторить отправку</button>
+            </div>
+            <div class="ref__note">Повтор недоступен, пока сверка не дала ответ. Причина написана словами, код причины — вспомогательный.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="vox-widget is-degraded" style="width:auto;position:relative">
+        <div class="vox-widget__header"><span class="vox-widget__title">Рантайм · сверка<span class="vox-widget__context">счёт «Основной брокерский»</span></span><span class="vox-runtime vox-runtime--reconciling"><span class="vox-dot"></span><span class="vox-runtime__label">RECONCILING</span></span></div>
+        <div class="vox-widget__body">
+          <div class="vox-table">
+            <div class="vox-table__header" style="grid-template-columns:120px 1fr 116px 132px">
+              <span>Объект</span><span>Что известно</span><span class="vox-num">Возраст</span><span style="padding-left:16px">Состояние</span>
+            </div>
+            <div class="vox-table__row is-unknown" style="grid-template-columns:120px 1fr 116px 132px">
+              <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--b">B</span>SBER</span><span class="vox-text--dense">команда отправлена, подтверждения нет</span><span class="vox-num">00:14</span><span style="padding-left:8px"><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>UNKNOWN</span></span>
+            </div>
+            <div class="vox-table__row" style="grid-template-columns:120px 1fr 116px 132px">
+              <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--f">F</span>LKOH</span><span class="vox-text--dense">исполнение подтверждено, позиция сверена</span><span class="vox-num">00:02</span><span style="padding-left:8px"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>СВЕРЕНО</span></span>
+            </div>
+            <div class="vox-table__row" style="grid-template-columns:120px 1fr 116px 132px">
+              <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--sl">SL</span>GAZP</span><span class="vox-text--dense">стоп-заявка у брокера не найдена</span><span class="vox-num">00:31</span><span style="padding-left:8px"><span class="vox-badge vox-badge--warning"><span class="vox-dot"></span>РАСХОЖДЕНИЕ</span></span>
+            </div>
+            <div class="vox-table__footer"><span>сверка идёт · новые заявки по счёту принимаются с оговоркой</span><span class="vox-num">3 объекта</span></div>
+          </div>
+        </div>
+        <div class="vox-stale-bar"><span class="vox-dot"></span>Пока идёт сверка, показываются последние известные значения и их возраст.</div>
+      </div>
+
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Чем заканчивается сверка</div>
+        <div class="ref__demo" style="flex-direction:column;align-items:stretch;gap:6px">
+          <div class="vox-risk vox-risk--safe"><span class="vox-dot"></span><div><div>Заявка подтверждена брокером</div><div class="vox-risk__reason">исполнена 10 лотов по 318,40 ₽ · позиция обновлена <span class="vox-reason-code">RECON_CONFIRMED</span></div></div></div>
+          <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Заявка у брокера не найдена</div><div class="vox-risk__reason">команда не была принята, позиция не изменилась, повтор теперь разрешён <span class="vox-reason-code">RECON_NOT_FOUND</span></div></div></div>
+          <div class="vox-risk vox-risk--unknown"><span class="vox-dot"></span><div><div>Ответа по-прежнему нет</div><div class="vox-risk__reason">сверка продолжается, счёт помечен как несверенный, автоматическое исполнение по нему приостановлено <span class="vox-reason-code">RECON_PENDING</span></div></div></div>
+        </div>
+        <div class="ref__note" style="margin-top:10px">Ни одно из этих состояний не окрашивается как отказ. «Нет ответа» и «отказано» — разные факты и разные действия оператора.</div>
+      </div>
+
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Правила отображения</div>
+        <div class="ref__rule"><b>UNKNOWN</b> — фиолетовая семантика, отдельная от WARNING и BLOCKED, и никогда не «Ошибка».</div>
+        <div class="ref__rule" style="margin-top:6px"><b>Возраст</b> данных называется явно: «без ответа 00:14», а не пустая ячейка.</div>
+        <div class="ref__rule" style="margin-top:6px"><b>Повтор</b> отправки блокируется до результата сверки; отмена и повтор — разные действия.</div>
+        <div class="ref__rule" style="margin-top:6px"><b>Строка</b> в таблице получает свою левую границу и фон UNKNOWN, а не красный.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13 · BULK PROTECTION MIGRATION -->
+  <section class="ref__sec" id="migration">
+    <div class="ref__sec-head"><span class="ref__num">13</span><h2 class="vox-text--title">Массовое применение защиты</h2>
+      <span class="ref__note">Смена значения по умолчанию действует только на новые заявки. Перенос новой политики на уже открытые позиции — отдельное действие, затрагивающее капитал: предпросмотр, список затронутых позиций, «было → станет», последствия, подтверждение словом и результат сверки.</span></div>
+
+    <div class="vox-widget" style="margin-bottom:12px">
+      <div class="vox-widget__header"><span class="vox-widget__title">Применить защиту по умолчанию к открытым позициям<span class="vox-widget__context">счёт «Основной брокерский»</span></span><span class="vox-env vox-env--live" style="height:18px"><span class="vox-dot"></span>PRODUCTION</span></div>
+      <div class="vox-widget__body" style="padding:10px">
+        <div class="vox-migrate">
+
+          <div class="vox-migrate__policy">
+            <div class="vox-migrate__policy-cell">
+              <span class="vox-migrate__policy-label">БЫЛО · ДЕЙСТВУЮЩАЯ ЗАЩИТА ПОЗИЦИЙ</span>
+              <span class="vox-migrate__policy-value">Фиксированный стоп −3,00 %</span>
+              <span class="ref__note">источник: значение по умолчанию для счёта до изменения</span>
+            </div>
+            <div class="vox-migrate__arrow">→</div>
+            <div class="vox-migrate__policy-cell vox-migrate__policy-cell--after">
+              <span class="vox-migrate__policy-label">СТАНЕТ · НОВОЕ ЗНАЧЕНИЕ ПО УМОЛЧАНИЮ</span>
+              <span class="vox-migrate__policy-value">Плавающий стоп 5,00 %</span>
+              <span class="ref__note">брокерский трейлинг · тейк-профит не включается</span>
+            </div>
+          </div>
+
+          <div class="vox-migrate__count">
+            <span class="vox-migrate__count-value">7</span><span>позиций затронуто</span>
+            <span class="vox-badge">4 будут заменены</span>
+            <span class="vox-badge vox-badge--unknown">2 без собственной защиты</span>
+            <span class="vox-badge vox-badge--warning">1 переопределена вручную и не трогается</span>
+          </div>
+
+          <div class="vox-table">
+            <div class="vox-table__header" style="grid-template-columns:120px 92px 148px 148px 1fr">
+              <span>Инструмент</span><span class="vox-num">Кол-во</span><span>Было у брокера</span><span>Станет</span><span style="padding-left:16px">Действие</span>
+            </div>
+            <div class="vox-table__row" style="grid-template-columns:120px 92px 148px 148px 1fr">
+              <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--sl">SL</span>SBER</span><span class="vox-num" style="text-align:left">1 200</span><span class="vox-text--dense">STOP_LOSS 279,45 ₽</span><span class="vox-text--dense">TRAILING_STOP 5,00 %</span><span style="padding-left:8px"><span class="vox-badge vox-badge--info">заменить</span></span>
+            </div>
+            <div class="vox-table__row" style="grid-template-columns:120px 92px 148px 148px 1fr">
+              <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--sl">SL</span>GAZP</span><span class="vox-num" style="text-align:left">−300</span><span class="vox-text--dense">STOP_LOSS 152,46 ₽</span><span class="vox-text--dense">TRAILING_STOP 5,00 %</span><span style="padding-left:8px"><span class="vox-badge vox-badge--info">заменить</span></span>
+            </div>
+            <div class="vox-table__row" style="grid-template-columns:120px 92px 148px 148px 1fr">
+              <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--f">F</span>MOEX</span><span class="vox-num" style="text-align:left">800</span><span class="vox-text--dense vox-text--tertiary">защиты нет</span><span class="vox-text--dense">TRAILING_STOP 5,00 %</span><span style="padding-left:8px"><span class="vox-badge vox-badge--positive">создать</span></span>
+            </div>
+            <div class="vox-table__row" style="grid-template-columns:120px 92px 148px 148px 1fr">
+              <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--sl">SL</span>LKOH</span><span class="vox-num" style="text-align:left">40</span><span class="vox-text--dense">TRAILING_STOP 1,00 %</span><span class="vox-text--dense vox-text--tertiary">без изменений</span><span style="padding-left:8px"><span class="vox-inherited vox-inherited--override">переопределено вручную</span></span>
+            </div>
+            <div class="vox-table__footer"><span>предпросмотр · ни одна заявка ещё не отправлена</span><span class="vox-num">7 позиций</span></div>
+          </div>
+
+          <div class="vox-exec-consequences">
+            Действие снимает существующие стоп-заявки у брокера и ставит новые. В промежутке между отменой и постановкой позиция остаётся без защиты. Позиции с ручным переопределением не затрагиваются. Отменённые заявки не восстанавливаются автоматически: возврат к прежней политике — такое же явное действие.
+          </div>
+
+          <div class="vox-exec-confirm">
+            <span class="vox-text--dense">Для подтверждения введите</span>
+            <span class="ref__code">ПРИМЕНИТЬ</span>
+            <span class="vox-input" style="width:170px"><input class="vox-input__field" value=""></span>
+            <button class="vox-btn vox-btn--danger vox-live-action" type="button" aria-disabled="true">Применить к 6 позициям</button>
+            <button class="vox-btn vox-btn--ghost" type="button">Отмена</button>
+          </div>
+
+          <div class="vox-policy__migration"><span class="vox-dot"></span><div>Само по себе изменение значения по умолчанию существующие стоп-заявки у брокера не переписывает. Это отдельный экран и отдельное решение оператора.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ref__grid">
+      <div class="vox-widget" style="width:auto">
+        <div class="vox-widget__header"><span class="vox-widget__title">Результат применения<span class="vox-widget__context">сверка с брокером</span></span><span class="vox-runtime vox-runtime--reconciling"><span class="vox-dot"></span><span class="vox-runtime__label">RECONCILING</span></span></div>
+        <div class="vox-widget__body">
+          <div class="vox-table">
+            <div class="vox-table__header" style="grid-template-columns:120px 1fr 148px">
+              <span>Инструмент</span><span>Результат</span><span style="padding-left:16px">Состояние</span>
+            </div>
+            <div class="vox-table__row" style="grid-template-columns:120px 1fr 148px">
+              <span>SBER</span><span class="vox-text--dense">старая заявка снята, TRAILING_STOP 5,00 % принят</span><span style="padding-left:8px"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>ПРИМЕНЕНО</span></span>
+            </div>
+            <div class="vox-table__row" style="grid-template-columns:120px 1fr 148px">
+              <span>GAZP</span><span class="vox-text--dense">брокер отклонил: трейлинг недоступен для короткой позиции по этому инструменту <span class="vox-reason-code">BRK_TRAIL_SHORT_UNSUPPORTED</span></span><span style="padding-left:8px"><span class="vox-badge vox-badge--negative"><span class="vox-dot"></span>ОТКЛОНЕНО</span></span>
+            </div>
+            <div class="vox-table__row is-unknown" style="grid-template-columns:120px 1fr 148px">
+              <span>MOEX</span><span class="vox-text--dense">старая заявка снята, подтверждение новой не получено <span class="vox-reason-code">UNKNOWN_AFTER_DISPATCH</span></span><span style="padding-left:8px"><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>СВЕРКА</span></span>
+            </div>
+            <div class="vox-table__footer"><span>1 применено · 1 отклонено · 1 в сверке</span><span class="vox-num">3 из 6</span></div>
+          </div>
+        </div>
+        <div class="vox-widget__footer"><span>позиции без подтверждённой защиты перечислены отдельно и не считаются защищёнными</span></div>
+      </div>
+
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Обязательные части действия</div>
+        <div class="ref__rule"><b>Предпросмотр</b> до отправки: ни одной заявки у брокера не изменено.</div>
+        <div class="ref__rule" style="margin-top:6px"><b>Количество</b> затронутых позиций и разбивка по типу изменения.</div>
+        <div class="ref__rule" style="margin-top:6px"><b>«Было → станет»</b> для каждой позиции в терминах заявок брокера, а не процентов «вообще».</div>
+        <div class="ref__rule" style="margin-top:6px"><b>Последствия</b> названы прямо, включая окно без защиты.</div>
+        <div class="ref__rule" style="margin-top:6px"><b>Подтверждение</b> словом; горячие клавиши его не обходят.</div>
+        <div class="ref__rule" style="margin-top:6px"><b>Результат</b> по каждой позиции, включая ОТКЛОНЕНО и СВЕРКА, без общего «готово».</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 14 · EXECUTION AUTHORIZATION -->
+  <section class="ref__sec" id="execution">
+    <div class="ref__sec-head"><span class="ref__num">14</span><h2 class="vox-text--title">Авторизация исполнения</h2>
+      <span class="ref__note">Токен брокера с правом торговли и разрешение Vox на исполнение — два разных факта. В PRODUCTION исполнение выключено по умолчанию: включение высокотрудное, выключение — одно действие.</span></div>
+
+    <div class="vox-widget" style="margin-bottom:12px">
+      <div class="vox-widget__header"><span class="vox-widget__title">Исполнение Vox<span class="vox-widget__context">Т-Инвест · Основной брокерский</span></span><span class="vox-env vox-env--live" style="height:18px"><span class="vox-dot"></span>PRODUCTION</span></div>
+      <div class="vox-widget__body" style="padding:10px">
+        <div class="vox-exec-auth">
+          <div class="vox-stack vox-gap-2">
+            <div class="vox-exec-fact">
+              <span class="vox-exec-fact__label">Токен брокера</span>
+              <span class="vox-exec-fact__state is-on">ТОРГОВЫЕ ОПЕРАЦИИ РАЗРЕШЕНЫ</span>
+              <span class="ref__note">свойство доступа у брокера · sha256:9f41…c2 · проверено 2 мин назад</span>
+            </div>
+            <div class="vox-exec-fact vox-exec-fact--vox">
+              <span class="vox-exec-fact__label">Исполнение Vox</span>
+              <span class="vox-exec-fact__state is-off">ВЫКЛЮЧЕНО</span>
+              <span class="ref__note">решение платформы · по умолчанию выключено в PRODUCTION</span>
+            </div>
+            <div class="vox-exec-fact">
+              <span class="vox-exec-fact__label">Область действия</span>
+              <span class="vox-exec-fact__state">счёт «Основной брокерский» · PRODUCTION</span>
+              <span class="ref__note">разрешение выдаётся на счёт и среду, а не на подключение целиком</span>
+            </div>
+          </div>
+
+          <div class="vox-stack vox-gap-2">
+            <div class="vox-exec-consequences">
+              После включения стратегии, модели и Центр решений смогут отправлять заявки на этот счёт без отдельного подтверждения по каждой заявке. Заявки будут затрагивать реальный капитал. Ограничители риска продолжают действовать, но они не заменяют это разрешение. Выключение останавливает только новые отправки: уже принятые брокером заявки и стоп-заявки остаются жить у брокера.
+            </div>
+            <div class="vox-exec-confirm">
+              <span class="vox-text--dense">Введите</span>
+              <span class="ref__code">ОСНОВНОЙ БРОКЕРСКИЙ</span>
+              <span class="vox-input" style="width:220px"><input class="vox-input__field" value=""></span>
+              <button class="vox-btn vox-btn--danger vox-live-action" type="button" aria-disabled="true">Включить исполнение</button>
+            </div>
+            <div class="ref__note">Имя счёта вводится вручную. Горячие клавиши, шаблоны и повтор последнего действия это подтверждение не проходят.</div>
+            <button class="vox-exec-halt" type="button"><span class="vox-dot"></span>Немедленно остановить исполнение</button>
+            <div class="ref__note">Остановка всегда дешевле включения: одно нажатие, без ввода слова и без диалога.</div>
+            <div class="vox-precedence__note">Аудит: включено — оператор «А. Иванов», 2026-08-25 09:14 MSK, область «Основной брокерский · PRODUCTION». Метаданные приходят с бэкенда; интерфейс их только показывает.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ref__grid">
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Что видно в шелле</div>
+        <div class="ref__demo" style="flex-direction:column;align-items:flex-start;gap:6px">
+          <span class="vox-row vox-gap-2"><span class="vox-text--caption">Исполнение Vox</span><span class="vox-conn vox-conn--disabled">ВЫКЛЮЧЕНО</span></span>
+          <span class="vox-row vox-gap-2"><span class="vox-text--caption">Исполнение Vox</span><span class="vox-conn vox-conn--ok">ВКЛЮЧЕНО · ОСНОВНОЙ</span></span>
+          <span class="vox-row vox-gap-2"><span class="vox-text--caption">Рантайм</span><span class="vox-runtime vox-runtime--halted"><span class="vox-dot"></span><span class="vox-runtime__label">HALTED</span></span></span>
+        </div>
+        <div class="ref__note" style="margin-top:10px">Состояние авторизации всегда видно в верхней панели рядом со средой и рантаймом. HALTED запрещает новые заявки и оставляет доступной отмену.</div>
+      </div>
+
+      <div class="vox-widget" style="width:auto">
+        <div class="vox-widget__header"><span class="vox-widget__title">Стратегия «Импульс»<span class="vox-widget__context">счёт «Основной брокерский»</span></span><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>СОВЕТУЮЩИЙ РЕЖИМ</span></div>
+        <div class="vox-state-note">
+          <span class="vox-state-note__title">Стратегия не может включить исполнение сама</span>
+          <span>Сигналы формируются и показываются, заявки не отправляются: исполнение Vox для этого счёта выключено. Экран стратегии ведёт к разрешению, но не выдаёт его и не обходит подтверждение.</span>
+          <div class="ref__demo"><button class="vox-btn vox-btn--secondary" type="button">Открыть авторизацию исполнения</button></div>
+        </div>
+      </div>
+
+      <div class="vox-widget" style="width:auto">
+        <div class="vox-widget__header"><span class="vox-widget__title">Права оператора</span><span class="vox-conn vox-conn--scope">PERMISSION_LIMITED</span></div>
+        <div class="vox-state-note">
+          <span class="vox-state-note__title">Недостаточно прав для изменения авторизации</span>
+          <span>Роль позволяет наблюдать и отменять заявки, но не включать автоматическое исполнение и не менять политику защиты. Скрытая кнопка не является защитой: решение принимает бэкенд, интерфейс показывает его ответ.</span>
+          <div class="ref__demo"><button class="vox-btn vox-btn--ghost" type="button" aria-disabled="true">Включить исполнение</button><button class="vox-btn vox-btn--ghost" type="button">Запросить доступ</button></div>
+        </div>
+        <div class="vox-widget__footer"><span>ответ 403 от бэкенда не ломает экран и не оставляет форму в подвешенном состоянии</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 15 · BROKERS & ACCOUNTS -->
+  <section class="ref__sec" id="accounts">
+    <div class="ref__sec-head"><span class="ref__num">15</span><h2 class="vox-text--title">Брокеры и счета</h2>
+      <span class="ref__note">Подключение — не портфель. Токен никогда не раскрывается в обычном UI. Семантика — Platform Foundation, задача #17.</span></div>
+
+    <div class="ref__grid" style="margin-bottom:12px">
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">AccountSelector · всегда виден в шелле</div>
+        <div class="ref__demo" style="align-items:flex-start;flex-direction:column;gap:8px">
+          <span class="vox-account is-live"><span class="vox-account__broker">Альфа</span><span class="vox-account__sep">/</span><span class="vox-account__label">Основной</span><span class="vox-env vox-env--live" style="height:16px">LIVE</span><span class="ref__code">▾</span></span>
+          <span class="vox-account"><span class="vox-account__broker">Т-Инвест</span><span class="vox-account__sep">/</span><span class="vox-account__label">Песочница</span><span class="vox-env vox-env--sandbox" style="height:16px">SANDBOX</span><span class="ref__code">▾</span></span>
+          <span class="vox-account is-degraded"><span class="vox-account__broker">Альфа</span><span class="vox-account__sep">/</span><span class="vox-account__label">ИИС</span><span class="vox-conn vox-conn--degraded"><span class="vox-dot"></span>DEGRADED</span><span class="ref__code">▾</span></span>
+          <span class="vox-account is-unknown"><span class="vox-account__broker">Финам</span><span class="vox-account__sep">/</span><span class="vox-account__label">Резервный</span><span class="vox-conn vox-conn--unknown"><span class="vox-dot"></span>UNKNOWN</span><span class="ref__code">▾</span></span>
+        </div>
+        <div class="ref__note" style="margin-top:10px">Селектор показывает подключение, счёт и среду. Человеческое имя счёта — обязательно; сырой идентификатор — только в диагностике.</div>
+      </div>
+
+      <div class="vox-popover" style="width:100%;max-width:420px">
+        <div class="vox-brokers__discovered-head"><span>ПОДКЛЮЧЕНИЕ · СЧЁТ</span><span>СРЕДА · СОСТОЯНИЕ</span></div>
+        <div class="vox-account-row is-selected">
+          <span class="vox-account-row__name">Основной<span class="vox-account-row__meta">Альфа · ****4417</span></span>
+          <span class="vox-env vox-env--live" style="height:18px">LIVE</span>
+          <span class="vox-conn vox-conn--ok">OK</span>
+          <span class="vox-num vox-num--positive">1 284 730 ₽</span>
+        </div>
+        <div class="vox-account-row">
+          <span class="vox-account-row__name">Песочница<span class="vox-account-row__meta">Т-Инвест · ****0091</span></span>
+          <span class="vox-env vox-env--sandbox" style="height:18px">SANDBOX</span>
+          <span class="vox-conn vox-conn--ok">OK</span>
+          <span class="vox-num vox-num--neutral">500 000 ₽</span>
+        </div>
+        <div class="vox-account-row">
+          <span class="vox-account-row__name">ИИС<span class="vox-account-row__meta">Альфа · ****7702</span></span>
+          <span class="vox-env vox-env--live" style="height:18px">LIVE</span>
+          <span class="vox-conn vox-conn--expiring">ROTATE</span>
+          <span class="vox-num vox-num--neutral">312 004 ₽</span>
+        </div>
+        <div class="vox-account-row">
+          <span class="vox-account-row__name">Резервный<span class="vox-account-row__meta">Финам · ****3310</span></span>
+          <span class="vox-env vox-env--paper" style="height:18px">PAPER</span>
+          <span class="vox-conn vox-conn--unknown">UNKNOWN</span>
+          <span class="vox-num vox-num--unknown">— ₽</span>
+        </div>
+        <div class="vox-precedence__note">Одно подключение может дать несколько счетов. Токен не равен портфелю, поэтому счета перечисляются отдельно от подключения.</div>
+      </div>
+    </div>
+
+    <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
+      <div class="vox-topbar" style="height:32px;flex:0 0 32px">
+        <div class="vox-topbar__group" style="border-right:0"><span class="vox-text--label">Настройки → Брокеры и счета</span></div>
+      </div>
+      <div class="vox-brokers">
+        <div class="vox-brokers__list">
+          <div class="vox-brokers__item is-selected">
+            <div class="vox-brokers__item-top"><span>Альфа · рабочее</span><span class="vox-conn vox-conn--ok">OK</span></div>
+            <div class="vox-brokers__item-meta"><span class="vox-env vox-env--live" style="height:16px">LIVE</span><span>2 счёта</span></div>
+          </div>
+          <div class="vox-brokers__item">
+            <div class="vox-brokers__item-top"><span>Т-Инвест · тесты</span><span class="vox-conn vox-conn--ok">OK</span></div>
+            <div class="vox-brokers__item-meta"><span class="vox-env vox-env--sandbox" style="height:16px">SANDBOX</span><span>1 счёт</span></div>
+          </div>
+          <div class="vox-brokers__item">
+            <div class="vox-brokers__item-top"><span>Финам · резерв</span><span class="vox-conn vox-conn--invalid">INVALID</span></div>
+            <div class="vox-brokers__item-meta"><span class="vox-env vox-env--paper" style="height:16px">PAPER</span><span>счета недоступны</span></div>
+          </div>
+          <div class="vox-brokers__item" style="border-bottom:0">
+            <div class="vox-brokers__item-top"><span class="vox-text--secondary">+ Добавить подключение</span></div>
+          </div>
+        </div>
+
+        <div class="vox-brokers__detail">
+          <div class="vox-brokers__section">
+            <div class="vox-brokers__section-title">Подключение</div>
+            <div class="vox-brokers__field"><span class="vox-brokers__field-label">Брокер</span><span class="vox-select" style="width:200px">Альфа-Инвестиции<span class="ref__code">▾</span></span></div>
+            <div class="vox-brokers__field"><span class="vox-brokers__field-label">Среда</span><span class="vox-segmented"><span class="vox-segmented__item is-selected">LIVE</span><span class="vox-segmented__item">SANDBOX</span><span class="vox-segmented__item">PAPER</span></span></div>
+            <div class="vox-brokers__field"><span class="vox-brokers__field-label">Название</span><span class="vox-input" style="width:220px"><input class="vox-input__field" value="Альфа · рабочее"></span></div>
+          </div>
+
+          <div class="vox-brokers__section">
+            <div class="vox-brokers__section-title">Секрет</div>
+            <div class="vox-brokers__field">
+              <span class="vox-brokers__field-label">Токен</span>
+              <div class="vox-secret">
+                <div class="vox-secret__field"><input class="vox-secret__input" type="password" value="••••••••••••••••••••"><span class="vox-secret__fingerprint">sha256:9f41…c2</span></div>
+                <div class="vox-secret__note">Токен сохраняется в защищённое хранилище и больше не возвращается в интерфейс. Показывается только отпечаток, срок действия и действие «Заменить токен».</div>
+              </div>
+            </div>
+            <div class="vox-brokers__actions">
+              <button class="vox-btn vox-btn--primary" type="button">Проверить</button>
+              <button class="vox-btn vox-btn--secondary" type="button">Заменить токен</button>
+              <span class="vox-conn vox-conn--expiring"><span class="vox-dot"></span>ИСТЕКАЕТ 12 дн.</span>
+            </div>
+            <div class="vox-secret" style="max-width:520px">
+              <div class="vox-secret__field" style="border-color:var(--vox-border-strong)"><span class="vox-spinner"></span><span class="vox-secret__note" style="margin:0">Проверка подключения и прав на исполнение…</span></div>
+            </div>
+            <div class="vox-field-error"><span class="vox-dot"></span><span>Токен отклонён брокером: нет разрешения на исполнение заявок <span class="vox-reason-code">BRK_TOKEN_NO_TRADE_SCOPE</span></span></div>
+          </div>
+
+          <div class="vox-brokers__section">
+            <div class="vox-brokers__section-title">Обнаруженные счета</div>
+            <div class="vox-brokers__discovered">
+              <div class="vox-brokers__discovered-head"><span>СЧЁТ · ИМЯ ДЛЯ ИНТЕРФЕЙСА</span><span>СРЕДА · ДОСТУП</span></div>
+              <div class="vox-account-row">
+                <span class="vox-account-row__name">Основной<span class="vox-account-row__meta">брокерский · ****4417</span></span>
+                <span class="vox-env vox-env--live" style="height:18px">LIVE</span>
+                <span class="vox-conn vox-conn--ok">ИСПОЛНЕНИЕ</span>
+                <span class="vox-text--caption">по умолчанию</span>
+              </div>
+              <div class="vox-account-row">
+                <span class="vox-account-row__name">ИИС<span class="vox-account-row__meta">ИИС · ****7702</span></span>
+                <span class="vox-env vox-env--live" style="height:18px">LIVE</span>
+                <span class="vox-conn vox-conn--degraded">ТОЛЬКО ЧТЕНИЕ</span>
+                <span class="vox-text--caption">исполнение выключено</span>
+              </div>
+              <div class="vox-precedence__note">Счета обнаруживаются по подключению и не вводятся руками. Разрешение на исполнение — свойство счёта, а не подключения.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ref__grid" style="margin-top:12px">
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Словарь состояний подключения</div>
+        <div class="ref__demo" style="gap:6px">
+          <span class="vox-conn vox-conn--ok"><span class="vox-dot"></span>CONNECTED</span>
+          <span class="vox-conn vox-conn--validating"><span class="vox-spinner"></span>VALIDATING</span>
+          <span class="vox-conn vox-conn--reconnecting"><span class="vox-dot"></span>RECONNECTING</span>
+          <span class="vox-conn vox-conn--degraded"><span class="vox-dot"></span>DEGRADED</span>
+          <span class="vox-conn vox-conn--invalid"><span class="vox-dot"></span>INVALID_CREDENTIAL</span>
+          <span class="vox-conn vox-conn--revoked"><span class="vox-dot"></span>REVOKED</span>
+          <span class="vox-conn vox-conn--scope"><span class="vox-dot"></span>PERMISSION_LIMITED</span>
+          <span class="vox-conn vox-conn--expiring"><span class="vox-dot"></span>ROTATE</span>
+          <span class="vox-conn vox-conn--provider"><span class="vox-dot"></span>PROVIDER_UNAVAILABLE</span>
+          <span class="vox-conn vox-conn--disabled"><span class="vox-dot"></span>DISABLED</span>
+          <span class="vox-conn vox-conn--unknown"><span class="vox-dot"></span>UNKNOWN</span>
+        </div>
+        <div class="ref__note" style="margin-top:10px">Каждое состояние — свой смысл, своё действие и свой код причины. Они не сворачиваются в общую красную «Ошибку»: отозванный токен, урезанные права и недоступность провайдера требуют разных действий оператора.</div>
+      </div>
+
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Причина словами, код — вспомогательный</div>
+        <div class="ref__demo" style="flex-direction:column;align-items:stretch;gap:6px">
+          <div class="vox-field-error"><span class="vox-dot"></span><span>Токен отозван владельцем в личном кабинете брокера. Нужен новый токен <span class="vox-reason-code">BRK_TOKEN_REVOKED</span></span></div>
+          <div class="vox-field-error"><span class="vox-dot"></span><span>У токена нет права на исполнение заявок: доступно только чтение портфеля <span class="vox-reason-code">BRK_TOKEN_NO_TRADE_SCOPE</span></span></div>
+          <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Провайдер недоступен</div><div class="vox-risk__reason">Сторона брокера не отвечает. Токен и счета не при чём, повторная проверка через 30 c <span class="vox-reason-code">BRK_PROVIDER_UNAVAILABLE</span></div></div></div>
+          <div class="vox-risk vox-risk--unknown"><span class="vox-dot"></span><div><div>Состояние подключения неизвестно</div><div class="vox-risk__reason">Последняя успешная проверка 14 мин назад; счета показаны по последним известным данным <span class="vox-reason-code">BRK_HEALTH_UNKNOWN</span></div></div></div>
+        </div>
+        <div class="ref__note" style="margin-top:10px">Сырой ответ провайдера остаётся в диагностике. В обычном интерфейсе оператор читает предложение на русском и код причины как ссылку на него.</div>
+      </div>
+
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Счета обнаружены, но не привязаны</div>
+        <div class="ref__demo" style="flex-direction:column;align-items:stretch;gap:6px">
+          <div class="vox-account-row">
+            <span class="vox-account-row__name">Брокерский<span class="vox-account-row__meta">Т-Инвест · ****4417</span></span>
+            <span class="vox-env vox-env--live" style="height:18px">PRODUCTION</span>
+            <span class="vox-conn vox-conn--ok">ИСПОЛНЕНИЕ</span>
+            <span class="vox-check is-checked"></span>
+          </div>
+          <div class="vox-account-row">
+            <span class="vox-account-row__name">ИИС<span class="vox-account-row__meta">Т-Инвест · ****7702</span></span>
+            <span class="vox-env vox-env--live" style="height:18px">PRODUCTION</span>
+            <span class="vox-conn vox-conn--scope">ТОЛЬКО ЧТЕНИЕ</span>
+            <span class="vox-check"></span>
+          </div>
+          <div class="vox-state-note">
+            <span class="vox-state-note__title">Подключение проверено, счетов не найдено</span>
+            <span>Токен действителен, но брокер не вернул ни одного счёта. Подключение остаётся в списке; это не ошибка ввода и не повод удалять его.</span>
+            <div class="ref__demo"><button class="vox-btn vox-btn--secondary" type="button">Обновить список счетов</button></div>
+          </div>
+        </div>
+        <div class="ref__note" style="margin-top:10px">Одно подключение может дать несколько счетов; привязывается выборочно. Токен — не портфель и не счёт, а право на исполнение — свойство счёта.</div>
+      </div>
+    </div>
+
+
+    <div class="ref__grid" style="margin-top:12px">
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Несколько подключений к одному провайдеру</div>
+        <div class="ref__demo" style="flex-direction:column;align-items:stretch;gap:0">
+          <div class="vox-brokers__item is-selected">
+            <div class="vox-brokers__item-top"><span>Т-Инвест · рабочее</span><span class="vox-conn vox-conn--ok">CONNECTED</span></div>
+            <div class="vox-brokers__item-meta"><span class="vox-env vox-env--live" style="height:16px">PRODUCTION</span><span>2 счёта</span></div>
+          </div>
+          <div class="vox-brokers__item">
+            <div class="vox-brokers__item-top"><span>Т-Инвест · тесты</span><span class="vox-conn vox-conn--ok">CONNECTED</span></div>
+            <div class="vox-brokers__item-meta"><span class="vox-env vox-env--sandbox" style="height:16px">SANDBOX</span><span>1 счёт</span></div>
+          </div>
+          <div class="vox-brokers__item">
+            <div class="vox-brokers__item-top"><span>Т-Инвест · счёт партнёра</span><span class="vox-conn vox-conn--disabled">DISABLED</span></div>
+            <div class="vox-brokers__item-meta"><span class="vox-env vox-env--live" style="height:16px">PRODUCTION</span><span>отключено оператором</span></div>
+          </div>
+        </div>
+        <div class="ref__note" style="margin-top:10px">Один провайдер — сколько угодно подключений, и рабочий контур с песочницей никогда не смешиваются. Различает их человеческое имя подключения, а не токен и не идентификатор.</div>
+      </div>
+
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Жизненный цикл подключения</div>
+        <div class="ref__demo" style="gap:6px">
+          <button class="vox-btn vox-btn--secondary" type="button">Счета</button>
+          <button class="vox-btn vox-btn--secondary" type="button">Проверить</button>
+          <button class="vox-btn vox-btn--secondary" type="button">Изменить</button>
+          <button class="vox-btn vox-btn--secondary" type="button">Обновить список счетов</button>
+          <button class="vox-btn vox-btn--danger" type="button">Отключить</button>
+          <button class="vox-btn vox-btn--danger vox-live-action" type="button">Удалить</button>
+        </div>
+        <div class="ref__demo" style="margin-top:8px;gap:6px">
+          <span class="vox-conn vox-conn--disabled"><span class="vox-dot"></span>DISABLED</span>
+          <button class="vox-btn vox-btn--secondary" type="button">Включить снова</button>
+        </div>
+        <div class="ref__note" style="margin-top:10px">Отключение оставляет подключение и привязанные счета в системе и лишь запрещает работу с ними; удаление — отдельное действие с подтверждением. Доступность каждого действия решает бэкенд (роли и права, задача #17), а не скрытая кнопка.</div>
+      </div>
+
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Замена токена</div>
+        <div class="ref__demo" style="flex-direction:column;align-items:stretch;gap:6px">
+          <div class="vox-secret">
+            <div class="vox-secret__field"><input class="vox-secret__input" type="password" value="••••••••••••"><span class="vox-secret__fingerprint">новый токен</span></div>
+            <div class="vox-secret__note">Шаг 1. Поле пустое: старый токен в форму не подставляется и в интерфейс не возвращается.</div>
+          </div>
+          <div class="vox-secret is-validating">
+            <div class="vox-secret__field"><span class="vox-spinner"></span><span class="vox-secret__note" style="margin:0">Шаг 2. Проверка нового токена и прав на исполнение…</span></div>
+          </div>
+          <div class="vox-secret">
+            <div class="vox-secret__field"><span class="vox-secret__fingerprint">sha256:1b7d…4a</span><span class="vox-conn vox-conn--ok">CONNECTED</span></div>
+            <div class="vox-secret__note">Шаг 3. Токен заменён. Показываются отпечаток, срок действия и действие «Заменить токен». Привязка счетов и защита позиций при замене не сбрасываются.</div>
+          </div>
+          <div class="vox-field-error"><span class="vox-dot"></span><span>Вставленное значение не похоже на токен этого брокера. Полный секрет в сообщении не повторяется <span class="vox-reason-code">BRK_TOKEN_MALFORMED</span></span></div>
+        </div>
+      </div>
+
+      <div class="ref__spec vox-surface">
+        <div class="ref__spec-title">Возможности провайдера</div>
+        <div class="ref__demo" style="gap:6px">
+          <span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>трейлинг %</span>
+          <span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>стоп-лосс</span>
+          <span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>тейк-профит</span>
+          <span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>песочница</span>
+          <span class="vox-badge"><span class="vox-dot"></span>трейлинг ₽ — не поддерживается</span>
+          <span class="vox-badge"><span class="vox-dot"></span>стоп-лимит — не поддерживается</span>
+          <span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>OCO — неизвестно</span>
+        </div>
+        <div class="ref__note" style="margin-top:10px">Возможности приходят из метаданных подключения и не раскрывают секрет. Контрол, который провайдер не исполняет, гасится вместе с причиной; несуществующая возможность в интерфейсе не предлагается и в браузере не эмулируется.</div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- 16 · MARKETS -->
+  <section class="ref__sec" id="markets">
+    <div class="ref__sec-head"><span class="ref__num">16</span><h2 class="vox-text--title">Рынки</h2>
+      <span class="ref__note">Наблюдение и выбор инструмента. Экран не отправляет заявки: отсюда инструмент уходит в контекст рабочего пространства, а не в исполнение.</span></div>
+
+    <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
+      <div class="vox-topbar" style="height:32px;flex:0 0 32px">
+        <div class="vox-topbar__group"><span class="vox-text--label">Рынки</span></div>
+        <div class="vox-topbar__group"><span class="vox-account"><span class="vox-account__broker">Т-Инвест</span><span class="vox-account__sep">/</span><span class="vox-account__label">Основной брокерский</span><span class="ref__code">▾</span></span></div>
+        <div class="vox-topbar__group"><span class="vox-env vox-env--live" style="height:18px">PRODUCTION</span></div>
+        <div class="vox-topbar__group" style="border-right:0;margin-left:auto"><span class="vox-badge vox-badge--warning"><span class="vox-dot"></span>основная сессия закрыта · вечерняя до 23:50</span></div>
+      </div>
+      <div class="vox-workspace">
+
+        <div class="vox-widget" style="grid-column:span 8">
+          <div class="vox-widget__header">
+            <span class="vox-widget__title">Список наблюдения<span class="vox-widget__context">связан с рабочим пространством</span></span>
+            <span class="vox-widget__tools"><span class="vox-tabs"><span class="vox-tab is-selected">Мои<span class="vox-tab__count">12</span></span><span class="vox-tab">Акции</span><span class="vox-tab">Фьючерсы</span><span class="vox-tab">Облигации</span></span></span>
+          </div>
+          <div class="vox-widget__body">
+            <div class="vox-table">
+              <div class="vox-table__header" style="grid-template-columns:150px 1fr 96px 104px 96px 104px">
+                <span class="vox-table__sort">Тикер ▲</span><span>Название</span><span class="vox-num">Цена</span><span class="vox-num">Изм.</span><span class="vox-num">Спред</span><span class="vox-num">Объём</span>
+              </div>
+              <div class="vox-table__row is-selected" style="grid-template-columns:150px 1fr 96px 104px 96px 104px">
+                <span>SBER</span><span class="vox-text--secondary">Сбербанк · MOEX</span><span class="vox-num vox-flash-up">318,44</span><span class="vox-num vox-num--positive">+2,14 %</span><span class="vox-num">0,06</span><span class="vox-num">14,2 млн</span>
+              </div>
+              <div class="vox-table__row" style="grid-template-columns:150px 1fr 96px 104px 96px 104px">
+                <span>GAZP</span><span class="vox-text--secondary">Газпром · MOEX</span><span class="vox-num">148,02</span><span class="vox-num vox-num--negative">−0,84 %</span><span class="vox-num">0,04</span><span class="vox-num">9,1 млн</span>
+              </div>
+              <div class="vox-table__row" style="grid-template-columns:150px 1fr 96px 104px 96px 104px">
+                <span>SiZ5</span><span class="vox-text--secondary">USD/RUB · фьючерс · MOEX</span><span class="vox-num">92 140</span><span class="vox-num vox-num--positive">+0,31 %</span><span class="vox-num">4</span><span class="vox-num">312 тыс</span>
+              </div>
+              <div class="vox-table__row is-unknown" style="grid-template-columns:150px 1fr 96px 104px 96px 104px">
+                <span>LKOH</span><span class="vox-text--secondary">Лукойл · MOEX</span><span class="vox-num vox-num--unknown">—</span><span class="vox-num vox-num--unknown">нет данных</span><span class="vox-num vox-num--unknown">—</span><span class="vox-num vox-num--unknown">—</span>
+              </div>
+              <div class="vox-table__footer"><span>12 инструментов · щелчок меняет инструмент связанных виджетов</span><span class="vox-num">обновлено 11:42:06</span></div>
+            </div>
+          </div>
+          <div class="vox-stale-bar"><span class="vox-dot"></span>Поток котировок по LKOH молчит 42 c. Показаны последние известные значения, статус — UNKNOWN, а не ошибка <span class="vox-reason-code">MD_STREAM_SILENT</span></div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 4">
+          <div class="vox-widget__header"><span class="vox-widget__title">Поиск инструмента</span></div>
+          <div class="vox-widget__body" style="padding:10px;display:flex;flex-direction:column;gap:6px">
+            <span class="vox-input"><input class="vox-input__field" value="газ"><span class="vox-text--caption">тикер или название</span></span>
+            <div class="vox-menu">
+              <div class="vox-menu__item"><span class="vox-row vox-gap-2"><b>GAZP</b><span class="vox-text--secondary">Газпром</span></span><span class="vox-menu__shortcut">MOEX · акция</span></div>
+              <div class="vox-menu__item"><span class="vox-row vox-gap-2"><b>GAZPP</b><span class="vox-text--secondary">Газпром нефть</span></span><span class="vox-menu__shortcut">MOEX · акция</span></div>
+              <div class="vox-menu__sep"></div>
+              <div class="vox-menu__item"><span class="vox-text--tertiary">Недавние: SBER · SiZ5 · MOEX</span></div>
+            </div>
+            <div class="ref__note">Тот же компонент, что в заявке и виджетах. Идентификаторы провайдера остаются в диагностике.</div>
+          </div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 12">
+          <div class="vox-widget__header"><span class="vox-widget__title">Пустой список</span></div>
+          <div class="vox-state-note">
+            <span class="vox-state-note__title">В списке наблюдения нет инструментов</span>
+            <span>Добавьте инструмент через поиск. Пустой экран объясняет причину и предлагает действие — пустая панель без текста запрещена.</span>
+            <div class="ref__demo"><button class="vox-btn vox-btn--secondary" type="button">Добавить инструмент</button></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- 17 · PORTFOLIO -->
+  <section class="ref__sec" id="portfolio">
+    <div class="ref__sec-head"><span class="ref__num">17</span><h2 class="vox-text--title">Портфель</h2>
+      <span class="ref__note">Позиции, экспозиция, лимиты, операции и журнал событий — всё в разрезе одного счёта исполнения. Смена активного счёта меняет весь экран атомарно.</span></div>
+
+    <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
+      <div class="vox-topbar" style="height:32px;flex:0 0 32px">
+        <div class="vox-topbar__group"><span class="vox-text--label">Портфель</span></div>
+        <div class="vox-topbar__group"><span class="vox-account is-live"><span class="vox-account__broker">Т-Инвест</span><span class="vox-account__sep">/</span><span class="vox-account__label">Основной брокерский</span><span class="ref__code">▾</span></span></div>
+        <div class="vox-topbar__group"><span class="vox-env vox-env--live" style="height:18px">PRODUCTION</span><span class="vox-runtime vox-runtime--reconciling"><span class="vox-dot"></span><span class="vox-runtime__label">RECONCILING</span></span></div>
+      </div>
+      <div class="vox-workspace">
+
+        <div class="vox-widget" style="grid-column:span 12">
+          <div class="vox-metrics">
+            <div class="vox-metrics__cell"><div class="vox-metrics__label">Стоимость портфеля</div><div class="vox-metrics__value vox-num" style="text-align:left">1 284 730,45 ₽</div></div>
+            <div class="vox-metrics__cell"><div class="vox-metrics__label">Нереализованный P&amp;L</div><div class="vox-metrics__value vox-num vox-num--positive" style="text-align:left">+34 782,00 ₽</div></div>
+            <div class="vox-metrics__cell"><div class="vox-metrics__label">Реализованный P&amp;L за день</div><div class="vox-metrics__value vox-num vox-num--positive" style="text-align:left">+12 450,00 ₽</div></div>
+            <div class="vox-metrics__cell"><div class="vox-metrics__label">Свободные средства</div><div class="vox-metrics__value vox-num" style="text-align:left">212 400,00 ₽</div></div>
+          </div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 8">
+          <div class="vox-widget__header"><span class="vox-widget__title">Позиции<span class="vox-widget__context">счёт «Основной брокерский»</span></span><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>1 в сверке</span></div>
+          <div class="vox-widget__body">
+            <div class="vox-table">
+              <div class="vox-table__header" style="grid-template-columns:120px 84px 96px 112px 128px 1fr">
+                <span class="vox-table__sort">Инструмент ▲</span><span>Кол-во</span><span class="vox-num">Средняя</span><span class="vox-num">P&amp;L</span><span>Защита</span><span style="padding-left:16px">Источник защиты</span>
+              </div>
+              <div class="vox-table__row" style="grid-template-columns:120px 84px 96px 112px 128px 1fr">
+                <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--b">B</span>SBER</span><span class="vox-num" style="text-align:left">1 200</span><span class="vox-num">288,10</span><span class="vox-num vox-num--positive">+36 408,00</span><span class="vox-text--dense">TRAILING_STOP 1,00 %</span><span style="padding-left:8px"><span class="vox-inherited vox-inherited--override">заявка</span></span>
+              </div>
+              <div class="vox-table__row" style="grid-template-columns:120px 84px 96px 112px 128px 1fr">
+                <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--s">S</span>GAZP</span><span class="vox-num" style="text-align:left">−300</span><span class="vox-num">142,60</span><span class="vox-num vox-num--negative">−1 626,00</span><span class="vox-text--dense">STOP_LOSS 152,46 ₽</span><span style="padding-left:8px"><span class="vox-inherited">настройка счёта</span></span>
+              </div>
+              <div class="vox-table__row" style="grid-template-columns:120px 84px 96px 112px 128px 1fr">
+                <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--tp">TP</span>MOEX</span><span class="vox-num" style="text-align:left">800</span><span class="vox-num">198,40</span><span class="vox-num vox-num--negative">−1 840,00</span><span class="vox-text--dense vox-text--tertiary">защиты нет</span><span style="padding-left:8px"><span class="vox-badge vox-badge--warning"><span class="vox-dot"></span>не защищена</span></span>
+              </div>
+              <div class="vox-table__row is-unknown" style="grid-template-columns:120px 84px 96px 112px 128px 1fr">
+                <span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--f">F</span>LKOH</span><span class="vox-num" style="text-align:left">40</span><span class="vox-num">6 812,00</span><span class="vox-num vox-num--unknown">неизвестно</span><span class="vox-text--dense vox-num--unknown">UNKNOWN</span><span style="padding-left:8px"><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>сверка</span></span>
+              </div>
+              <div class="vox-table__footer"><span>4 позиции · «не защищена» — это факт, а не предупреждение об ошибке</span><span class="vox-num">Итого +32 942,00 ₽</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 4">
+          <div class="vox-widget__header"><span class="vox-widget__title">Лимиты и концентрация</span></div>
+          <div class="vox-widget__body" style="padding:10px;display:flex;flex-direction:column;gap:10px">
+            <div class="vox-limit">
+              <span class="vox-text--caption">Дневной лимит убытка · 68 % использовано</span>
+              <div class="vox-limit__track"><div class="vox-limit__fill vox-limit__fill--warning" style="width:68%"></div></div>
+              <span class="ref__note">−34 000 ₽ из −50 000 ₽</span>
+            </div>
+            <div class="vox-limit">
+              <span class="vox-text--caption">Концентрация SBER · 14,2 % из 20 %</span>
+              <div class="vox-limit__track"><div class="vox-limit__fill" style="width:71%"></div></div>
+            </div>
+            <div class="vox-limit">
+              <span class="vox-text--caption">Маржинальная нагрузка · 92 % из 100 %</span>
+              <div class="vox-limit__track"><div class="vox-limit__fill vox-limit__fill--blocked" style="width:92%"></div></div>
+              <span class="ref__note">новые позиции по этому счёту будут отклонены риском</span>
+            </div>
+            <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Приближение к дневному лимиту</div><div class="vox-risk__reason">осталось 16 000 ₽ до остановки торговли <span class="vox-reason-code">RISK_DAY_LOSS_NEAR</span></div></div></div>
+          </div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 6">
+          <div class="vox-widget__header"><span class="vox-widget__title">Операции<span class="vox-widget__context">счёт «Основной брокерский»</span></span></div>
+          <div class="vox-widget__body">
+            <div class="vox-table">
+              <div class="vox-table__header" style="grid-template-columns:104px 1fr 128px">
+                <span>Дата</span><span>Операция</span><span class="vox-num">Сумма</span>
+              </div>
+              <div class="vox-table__row" style="grid-template-columns:104px 1fr 128px"><span class="vox-tape__time">25.08 11:42</span><span>Покупка SBER · 100 шт</span><span class="vox-num vox-num--negative">−31 840,00 ₽</span></div>
+              <div class="vox-table__row" style="grid-template-columns:104px 1fr 128px"><span class="vox-tape__time">25.08 11:42</span><span>Комиссия брокера</span><span class="vox-num vox-num--negative">−9,55 ₽</span></div>
+              <div class="vox-table__row" style="grid-template-columns:104px 1fr 128px"><span class="vox-tape__time">22.08 10:00</span><span>Дивиденды SBER</span><span class="vox-num vox-num--positive">+8 400,00 ₽</span></div>
+              <div class="vox-table__row" style="grid-template-columns:104px 1fr 128px"><span class="vox-tape__time">20.08 09:30</span><span>Пополнение счёта</span><span class="vox-num vox-num--positive">+200 000,00 ₽</span></div>
+              <div class="vox-table__footer"><span>тип операции назван словами · валюта указана всегда</span><span class="vox-num">4 записи</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 6">
+          <div class="vox-widget__header"><span class="vox-widget__title">Журнал событий</span><span class="vox-widget__tools"><span class="vox-segmented"><span class="vox-segmented__item is-selected">Все</span><span class="vox-segmented__item">Заявки</span><span class="vox-segmented__item">Защита</span><span class="vox-segmented__item">Система</span></span></span></div>
+          <div class="vox-widget__body">
+            <div class="vox-table">
+              <div class="vox-table__header" style="grid-template-columns:82px 40px 1fr 104px">
+                <span>Время</span><span>Тип</span><span>Событие</span><span style="padding-left:8px">Источник</span>
+              </div>
+              <div class="vox-table__row" style="grid-template-columns:82px 40px 1fr 104px"><span class="vox-tape__time">11:42:06</span><span class="vox-marker vox-marker--b">B</span><span>Заявка на покупку SBER · 10 лотов по 318,40 ₽</span><span class="vox-text--caption">ручная</span></div>
+              <div class="vox-table__row" style="grid-template-columns:82px 40px 1fr 104px"><span class="vox-tape__time">11:42:07</span><span class="vox-marker vox-marker--f">F</span><span>Исполнено 300 шт по 318,40 ₽</span><span class="vox-text--caption">брокер</span></div>
+              <div class="vox-table__row" style="grid-template-columns:82px 40px 1fr 104px"><span class="vox-tape__time">11:42:08</span><span class="vox-marker vox-marker--sl">SL</span><span>Поставлен TRAILING_STOP 1,00 % · уровень 313,66 ₽</span><span class="vox-text--caption">брокер</span></div>
+              <div class="vox-table__row" style="grid-template-columns:82px 40px 1fr 104px"><span class="vox-tape__time">10:15:00</span><span class="vox-marker vox-marker--d">D</span><span>Дивиденды SBER зачислены</span><span class="vox-text--caption">брокер</span></div>
+              <div class="vox-table__row is-unknown" style="grid-template-columns:82px 40px 1fr 104px"><span class="vox-tape__time">09:58:41</span><span class="vox-marker vox-marker--e">E</span><span>Ответ брокера по заявке LKOH не получен <span class="vox-reason-code">UNKNOWN_AFTER_DISPATCH</span></span><span class="vox-text--caption">система</span></div>
+              <div class="vox-table__footer"><span>тот же буквенный язык, что на графике, в ленте и в заявках</span><span class="vox-num">5 событий</span></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- 18 · STRATEGY -->
+  <section class="ref__sec" id="strategy">
+    <div class="ref__sec-head"><span class="ref__num">18</span><h2 class="vox-text--title">Стратегии</h2>
+      <span class="ref__note">Стратегия привязана к конкретному счёту и среде и не может выдать себе право на исполнение. Её политика защиты — второй уровень приоритета, ниже заявки и выше значения по умолчанию для счёта.</span></div>
+
+    <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
+      <div class="vox-topbar" style="height:32px;flex:0 0 32px">
+        <div class="vox-topbar__group"><span class="vox-text--label">Стратегии</span></div>
+        <div class="vox-topbar__group"><span class="vox-account is-live"><span class="vox-account__broker">Т-Инвест</span><span class="vox-account__sep">/</span><span class="vox-account__label">Основной брокерский</span></span><span class="vox-env vox-env--live" style="height:18px">PRODUCTION</span></div>
+        <div class="vox-topbar__group"><span class="vox-text--caption">Исполнение Vox</span><span class="vox-conn vox-conn--disabled">ВЫКЛЮЧЕНО</span></div>
+      </div>
+      <div class="vox-workspace">
+
+        <div class="vox-widget" style="grid-column:span 7">
+          <div class="vox-widget__header"><span class="vox-widget__title">Стратегии счёта<span class="vox-widget__context">Т-Инвест · Основной брокерский</span></span></div>
+          <div class="vox-widget__body">
+            <div class="vox-table">
+              <div class="vox-table__header" style="grid-template-columns:150px 128px 1fr 128px">
+                <span class="vox-table__sort">Стратегия ▲</span><span>Счёт · среда</span><span>Защита стратегии</span><span style="padding-left:8px">Режим</span>
+              </div>
+              <div class="vox-table__row is-selected" style="grid-template-columns:150px 128px 1fr 128px">
+                <span>Импульс</span><span class="vox-text--caption">Основной · PRODUCTION</span><span class="vox-text--dense">трейлинг 2,00 %</span><span style="padding-left:4px"><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>СОВЕТУЮЩИЙ</span></span>
+              </div>
+              <div class="vox-table__row" style="grid-template-columns:150px 128px 1fr 128px">
+                <span>Возврат к среднему</span><span class="vox-text--caption">Песочница · SANDBOX</span><span class="vox-text--dense">фикс. −3,00 %</span><span style="padding-left:4px"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>АВТОНОМНЫЙ</span></span>
+              </div>
+              <div class="vox-table__row" style="grid-template-columns:150px 128px 1fr 128px">
+                <span>Календарный спред</span><span class="vox-text--caption">ИИС · PRODUCTION</span><span class="vox-text--dense vox-text--tertiary">своей нет · берётся счёт</span><span style="padding-left:4px"><span class="vox-badge"><span class="vox-dot"></span>ОСТАНОВЛЕНА</span><span class="vox-reason-code">STR_ACCOUNT_READ_ONLY</span></span>
+              </div>
+              <div class="vox-table__footer"><span>привязка к счёту явная · «последний использованный счёт» не применяется</span><span class="vox-num">3 стратегии</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 5">
+          <div class="vox-widget__header"><span class="vox-widget__title">Импульс · защита и приоритет</span></div>
+          <div class="vox-widget__body">
+            <div class="vox-precedence">
+              <div class="vox-precedence__row is-overridden"><span class="vox-precedence__rank">1</span><span class="vox-precedence__scope">Заявка / позиция</span><span class="vox-precedence__value">не задана</span><span class="vox-inherited">нет значения</span></div>
+              <div class="vox-precedence__row is-effective"><span class="vox-precedence__rank">2</span><span class="vox-precedence__scope">Политика стратегии «Импульс»</span><span class="vox-precedence__value">трейлинг 2,00 %</span><span class="vox-inherited vox-inherited--override">действует</span></div>
+              <div class="vox-precedence__row is-overridden"><span class="vox-precedence__rank">3</span><span class="vox-precedence__scope">По умолчанию для счёта</span><span class="vox-precedence__value">фикс. −3,00 %</span><span class="vox-inherited">перекрыто</span></div>
+            </div>
+            <div class="vox-precedence__note">Приоритет считает бэкенд. Экран стратегии показывает результат и его источник, но не вычисляет его сам.</div>
+          </div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 12">
+          <div class="vox-widget__header"><span class="vox-widget__title">Импульс · сигналы</span><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>СОВЕТУЮЩИЙ РЕЖИМ</span></div>
+          <div class="vox-state-note">
+            <span class="vox-state-note__title">Сигналы формируются, заявки не отправляются</span>
+            <span>Исполнение Vox для счёта «Основной брокерский» выключено. Стратегия не может включить его сама и не показывает элементов, которые бы это подразумевали: переход ведёт на экран авторизации, где решение принимает оператор с подтверждением.</span>
+            <div class="ref__demo"><button class="vox-btn vox-btn--secondary" type="button">Открыть авторизацию исполнения</button><button class="vox-btn vox-btn--ghost" type="button">Журнал сигналов</button></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- 19 · DECISION CENTER -->
+  <section class="ref__sec" id="decision">
+    <div class="ref__sec-head"><span class="ref__num">19</span><h2 class="vox-text--title">Центр решений</h2>
+      <span class="ref__note">Кандидаты и намерения с доказательствами, риск-вердиктом и состоянием согласования. Пустой экран объясняет, почему кандидатов нет, и не остаётся мёртвой панелью.</span></div>
+
+    <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
+      <div class="vox-topbar" style="height:32px;flex:0 0 32px">
+        <div class="vox-topbar__group"><span class="vox-text--label">Решения</span></div>
+        <div class="vox-topbar__group"><span class="vox-account is-live"><span class="vox-account__broker">Т-Инвест</span><span class="vox-account__sep">/</span><span class="vox-account__label">Основной брокерский</span></span><span class="vox-env vox-env--live" style="height:18px">PRODUCTION</span></div>
+        <div class="vox-topbar__group"><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>ТРЕБУЕТСЯ СОГЛАСОВАНИЕ</span></div>
+      </div>
+      <div class="vox-workspace">
+
+        <div class="vox-widget vox-ticket" style="grid-column:span 5;width:auto">
+          <div class="vox-widget__header"><span class="vox-widget__title">Кандидат<span class="vox-widget__context vox-widget__context--instrument">SBER</span></span><span class="vox-badge vox-badge--positive">уверенность 0,82</span></div>
+          <div class="vox-ticket__body">
+            <div class="vox-ticket__target is-live">
+              <span class="vox-ticket__target-account"><span class="vox-ticket__target-name">Основной брокерский</span><span class="vox-ticket__target-broker">Т-Инвест · ****4417</span></span>
+              <span class="vox-env vox-env--live" style="height:18px"><span class="vox-dot"></span>PRODUCTION</span>
+            </div>
+            <div class="vox-ticket__preview">
+              <div class="vox-ticket__preview-row"><span class="vox-text--caption">Намерение</span><span class="vox-text--dense">Купить 10 лотов · лимит 318,40 ₽</span></div>
+              <div class="vox-ticket__preview-row"><span class="vox-text--caption">Источник</span><span class="vox-text--dense">стратегия «Импульс»</span></div>
+              <div class="vox-ticket__preview-row"><span class="vox-text--caption">Защита при исполнении</span><span class="vox-text--dense">трейлинг 2,00 % · источник: стратегия</span></div>
+            </div>
+            <div class="ref__spec" style="padding:0">
+              <div class="ref__spec-title">Доказательства</div>
+              <div class="ref__note">Пробой уровня 316,80 на объёме ×2,4 · подтверждение в стакане · корреляция с индексом 0,74 · последняя проверка модели 11:41:58.</div>
+            </div>
+            <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Разрешено с оговоркой</div><div class="vox-risk__reason">концентрация вырастет до 18 % при пределе 20 % <span class="vox-reason-code">RISK_CONC_NEAR</span></div></div></div>
+            <div class="vox-ticket__actions">
+              <button class="vox-ticket__action vox-ticket__action--buy vox-live-action" type="button"><span class="vox-ticket__action-label">Согласовать и купить</span><span class="vox-ticket__action-value">31 840 ₽ · 318,40</span></button>
+              <button class="vox-btn vox-btn--secondary" type="button">Отклонить</button>
+            </div>
+            <div class="ref__note">Согласование — это обычная заявка с явной целью исполнения и обычной риск-проверкой, а не отдельный «быстрый путь».</div>
+          </div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 7">
+          <div class="vox-widget__header"><span class="vox-widget__title">Очередь намерений</span><span class="vox-widget__tools"><span class="vox-tabs"><span class="vox-tab is-selected">Ожидают<span class="vox-tab__count">2</span></span><span class="vox-tab">Согласованы</span><span class="vox-tab">Отклонены</span></span></span></div>
+          <div class="vox-widget__body">
+            <div class="vox-table">
+              <div class="vox-table__header" style="grid-template-columns:110px 1fr 120px 132px">
+                <span>Инструмент</span><span>Намерение</span><span class="vox-num">Уверенность</span><span style="padding-left:8px">Состояние</span>
+              </div>
+              <div class="vox-table__row is-selected" style="grid-template-columns:110px 1fr 120px 132px"><span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--b">B</span>SBER</span><span>Купить 10 лотов · «Импульс»</span><span class="vox-num">0,82</span><span style="padding-left:4px"><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>СОГЛАСОВАНИЕ</span></span></div>
+              <div class="vox-table__row" style="grid-template-columns:110px 1fr 120px 132px"><span class="vox-row vox-gap-1"><span class="vox-marker vox-marker--s">S</span>GAZP</span><span>Сократить 100 шт · «Возврат к среднему»</span><span class="vox-num">0,61</span><span style="padding-left:4px"><span class="vox-badge vox-badge--negative"><span class="vox-dot"></span>ОТКЛОНЕНО РИСКОМ</span></span></div>
+              <div class="vox-table__footer"><span>отклонение риском названо словами и кодом причины</span><span class="vox-num">2 намерения</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 12">
+          <div class="vox-widget__header"><span class="vox-widget__title">Кандидатов нет</span></div>
+          <div class="vox-state-note">
+            <span class="vox-state-note__title">Сегодня кандидатов не сформировано</span>
+            <span>Стратегия «Импульс» работает, но условия входа не выполнены с 09:30. Модель обновлена 11:41:58, поток данных активен. Это нормальное состояние, а не сбой.</span>
+            <div class="ref__demo"><button class="vox-btn vox-btn--ghost" type="button">Журнал сигналов</button><button class="vox-btn vox-btn--ghost" type="button">Условия входа</button></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- 20 · RESEARCH -->
+  <section class="ref__sec" id="research">
+    <div class="ref__sec-head"><span class="ref__num">20</span><h2 class="vox-text--title">Исследования</h2>
+      <span class="ref__note">Историческое исследование и бэктесты. Экран не отправляет заявки на реальный счёт: среда BACKTEST видна постоянно, чтобы результат прогона нельзя было принять за состояние портфеля.</span></div>
+
+    <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
+      <div class="vox-topbar" style="height:32px;flex:0 0 32px">
+        <div class="vox-topbar__group"><span class="vox-text--label">Исследования</span></div>
+        <div class="vox-topbar__group"><span class="vox-env vox-env--backtest" style="height:18px"><span class="vox-dot"></span>BACKTEST</span></div>
+        <div class="vox-topbar__group" style="border-right:0;margin-left:auto"><span class="vox-text--caption">данные: MOEX · 2019-01-01 … 2026-08-01</span></div>
+      </div>
+      <div class="vox-workspace">
+
+        <div class="vox-widget" style="grid-column:span 4">
+          <div class="vox-widget__header"><span class="vox-widget__title">Параметры прогона</span></div>
+          <div class="vox-widget__body" style="padding:10px;display:flex;flex-direction:column;gap:8px">
+            <div class="vox-ticket__field"><span class="vox-ticket__label">Стратегия</span><span class="vox-select vox-grow">Импульс<span class="ref__code">▾</span></span></div>
+            <div class="vox-ticket__field"><span class="vox-ticket__label">Инструмент</span><span class="vox-select vox-grow">SBER · Сбербанк<span class="ref__code">▾</span></span></div>
+            <div class="vox-ticket__field"><span class="vox-ticket__label">Период</span><span class="vox-input vox-grow"><input class="vox-input__field" value="2024-01-01 … 2026-08-01"></span></div>
+            <div class="vox-ticket__field"><span class="vox-ticket__label">Защита</span><span class="vox-segmented"><span class="vox-segmented__item">Нет</span><span class="vox-segmented__item is-selected">Трейлинг</span><span class="vox-segmented__item">Фикс.</span></span></div>
+            <div class="vox-ticket__field"><span class="vox-ticket__label">Отступ</span><span class="vox-input" style="width:96px"><input class="vox-input__field vox-num" value="2,00"><span class="vox-unit">%</span></span></div>
+            <div class="ref__demo"><button class="vox-btn vox-btn--primary" type="button">Запустить прогон</button><button class="vox-btn vox-btn--ghost" type="button">Сохранить набор</button></div>
+            <div class="ref__note">Модель защиты в прогоне та же, что в бою: если провайдер не исполняет режим, прогон с ним не запускается и говорит об этом.</div>
+          </div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 8">
+          <div class="vox-widget__header"><span class="vox-widget__title">Прогоны и сравнение</span></div>
+          <div class="vox-widget__body">
+            <div class="vox-table">
+              <div class="vox-table__header" style="grid-template-columns:150px 104px 104px 104px 104px 1fr">
+                <span class="vox-table__sort">Прогон ▲</span><span class="vox-num">Доходность</span><span class="vox-num">Просадка</span><span class="vox-num">Шарп</span><span class="vox-num">Сделок</span><span style="padding-left:16px">Состояние</span>
+              </div>
+              <div class="vox-table__row is-selected" style="grid-template-columns:150px 104px 104px 104px 104px 1fr"><span>Импульс · трейл 2 %</span><span class="vox-num vox-num--positive">+18,4 %</span><span class="vox-num vox-num--negative">−7,2 %</span><span class="vox-num">1,32</span><span class="vox-num">184</span><span style="padding-left:8px"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>ГОТОВ</span></span></div>
+              <div class="vox-table__row" style="grid-template-columns:150px 104px 104px 104px 104px 1fr"><span>Импульс · трейл 1 %</span><span class="vox-num vox-num--positive">+12,1 %</span><span class="vox-num vox-num--negative">−4,9 %</span><span class="vox-num">1,18</span><span class="vox-num">263</span><span style="padding-left:8px"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>ГОТОВ</span></span></div>
+              <div class="vox-table__row" style="grid-template-columns:150px 104px 104px 104px 104px 1fr"><span>Импульс · без защиты</span><span class="vox-num vox-num--negative">−3,7 %</span><span class="vox-num vox-num--negative">−22,8 %</span><span class="vox-num">0,21</span><span class="vox-num">184</span><span style="padding-left:8px"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>ГОТОВ</span></span></div>
+              <div class="vox-table__row" style="grid-template-columns:150px 104px 104px 104px 104px 1fr"><span>Возврат · фикс 3 %</span><span class="vox-num vox-num--unknown">—</span><span class="vox-num vox-num--unknown">—</span><span class="vox-num vox-num--unknown">—</span><span class="vox-num vox-num--unknown">—</span><span style="padding-left:8px"><span class="vox-badge vox-badge--info"><span class="vox-dot"></span>СЧИТАЕТСЯ 62 %</span></span></div>
+              <div class="vox-table__footer"><span>сравнение по одной и той же истории и одной и той же модели защиты</span><span class="vox-num">4 прогона</span></div>
+            </div>
+          </div>
+          <div class="vox-widget__footer"><span>результат прогона не является состоянием портфеля и не переносится в него автоматически</span></div>
+        </div>
+
+        <div class="vox-widget is-error" style="grid-column:span 12">
+          <div class="vox-widget__header"><span class="vox-widget__title">Прогон прерван</span></div>
+          <div class="vox-state-note">
+            <span class="vox-state-note__title">Не хватает исторических данных</span>
+            <span>По инструменту SiZ5 нет свечей за 2019–2021. Прогон остановлен на 2022-01-01, частичный результат не показывается как полный <span class="vox-reason-code">RSH_HISTORY_GAP</span>.</span>
+            <div class="ref__demo"><button class="vox-btn vox-btn--secondary" type="button">Сократить период</button><button class="vox-btn vox-btn--ghost" type="button">Диагностика данных</button></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- 21 · ML / MODELS -->
+  <section class="ref__sec" id="ml">
+    <div class="ref__sec-head"><span class="ref__num">21</span><h2 class="vox-text--title">ML / Модели</h2>
+      <span class="ref__note">Отдельное рабочее пространство, а не раздел настроек: наборы данных, обучение, реестр, валидация и продвижение — операционные процессы. Продвижение в бой не даёт права на исполнение и не обходит авторизацию.</span></div>
+
+    <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
+      <div class="vox-topbar" style="height:32px;flex:0 0 32px">
+        <div class="vox-topbar__group"><span class="vox-text--label">ML / Модели</span></div>
+        <div class="vox-topbar__group"><span class="vox-text--caption">продвижение затронет счёт</span><span class="vox-account is-live"><span class="vox-account__broker">Т-Инвест</span><span class="vox-account__sep">/</span><span class="vox-account__label">Основной брокерский</span></span><span class="vox-env vox-env--live" style="height:18px">PRODUCTION</span></div>
+        <div class="vox-topbar__group"><span class="vox-tabs"><span class="vox-tab">Наборы данных</span><span class="vox-tab">Обучение</span><span class="vox-tab is-selected">Реестр</span><span class="vox-tab">Валидация</span></span></div>
+      </div>
+      <div class="vox-workspace">
+
+        <div class="vox-widget" style="grid-column:span 7">
+          <div class="vox-widget__header"><span class="vox-widget__title">Реестр моделей</span></div>
+          <div class="vox-widget__body">
+            <div class="vox-table">
+              <div class="vox-table__header" style="grid-template-columns:170px 84px 104px 104px 1fr">
+                <span class="vox-table__sort">Модель ▲</span><span>Версия</span><span class="vox-num">ROC-AUC</span><span class="vox-num">Дрейф</span><span style="padding-left:16px">Состояние</span>
+              </div>
+              <div class="vox-table__row is-selected" style="grid-template-columns:170px 84px 104px 104px 1fr"><span>impulse-classifier</span><span class="vox-num" style="text-align:left">v7</span><span class="vox-num">0,74</span><span class="vox-num vox-num--positive">0,03</span><span style="padding-left:8px"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>В БОЮ</span></span></div>
+              <div class="vox-table__row" style="grid-template-columns:170px 84px 104px 104px 1fr"><span>impulse-classifier</span><span class="vox-num" style="text-align:left">v8</span><span class="vox-num">0,79</span><span class="vox-num">0,05</span><span style="padding-left:8px"><span class="vox-badge vox-badge--info"><span class="vox-dot"></span>ВАЛИДАЦИЯ</span></span></div>
+              <div class="vox-table__row" style="grid-template-columns:170px 84px 104px 104px 1fr"><span>meanrev-regressor</span><span class="vox-num" style="text-align:left">v3</span><span class="vox-num">0,61</span><span class="vox-num vox-num--negative">0,21</span><span style="padding-left:8px"><span class="vox-badge vox-badge--warning"><span class="vox-dot"></span>ДРЕЙФ</span></span></div>
+              <div class="vox-table__row is-unknown" style="grid-template-columns:170px 84px 104px 104px 1fr"><span>vol-forecast</span><span class="vox-num" style="text-align:left">v1</span><span class="vox-num vox-num--unknown">—</span><span class="vox-num vox-num--unknown">—</span><span style="padding-left:8px"><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>МЕТРИК НЕТ</span><span class="vox-reason-code">ML_METRICS_MISSING</span></span></div>
+              <div class="vox-table__footer"><span>«метрик нет» — это UNKNOWN, а не провал валидации</span><span class="vox-num">4 модели</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 5">
+          <div class="vox-widget__header"><span class="vox-widget__title">impulse-classifier v8 · продвижение</span><span class="vox-badge vox-badge--info">кандидат</span></div>
+          <div class="vox-widget__body" style="padding:10px;display:flex;flex-direction:column;gap:8px">
+            <div class="vox-trailing__state">
+              <div><div class="vox-trailing__state-label">Обучена</div><div class="vox-trailing__state-value">2026-08-24</div></div>
+              <div><div class="vox-trailing__state-label">Набор данных</div><div class="vox-trailing__state-value">moex-5m-v12</div></div>
+              <div><div class="vox-trailing__state-label">Валидация</div><div class="vox-trailing__state-value">пройдена</div></div>
+              <div><div class="vox-trailing__state-label">Используют стратегии</div><div class="vox-trailing__state-value">«Импульс»</div></div>
+            </div>
+            <div class="vox-exec-consequences">Продвижение заменит v7 в стратегии «Импульс» на счетах, где она включена. Само по себе оно не включает исполнение Vox и не меняет авторизацию: если исполнение выключено, стратегия останется советующей.</div>
+            <div class="vox-exec-confirm">
+              <span class="vox-text--dense">Введите</span><span class="ref__code">v8</span>
+              <span class="vox-input" style="width:110px"><input class="vox-input__field" value=""></span>
+              <button class="vox-btn vox-btn--danger" type="button" aria-disabled="true">Продвинуть в бой</button>
+            </div>
+            <div class="ref__demo"><button class="vox-btn vox-btn--secondary" type="button">Откатить на v7</button></div>
+          </div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 12">
+          <div class="vox-widget__header"><span class="vox-widget__title">Обучение · очередь</span><span class="vox-runtime vox-runtime--degraded"><span class="vox-dot"></span><span class="vox-runtime__label">DEGRADED</span></span></div>
+          <div class="vox-widget__body" style="padding:10px;display:flex;flex-direction:column;gap:6px">
+            <div class="vox-skeleton" style="width:60%"></div>
+            <div class="vox-skeleton" style="width:38%"></div>
+            <div class="ref__note">Обучение meanrev-regressor v4 — 3 из 8 эпох. Узел обучения отвечает медленно, очередь принимается с оговоркой. Скелетон повторяет геометрию будущих строк, поэтому появление данных не сдвигает вёрстку.</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- 22 · SYSTEM -->
+  <section class="ref__sec" id="system">
+    <div class="ref__sec-head"><span class="ref__num">22</span><h2 class="vox-text--title">Система</h2>
+      <span class="ref__note">Диагностика рантайма, аварийная остановка, аудит и права. Здесь живут сырые технические подробности, которых нет в обычном интерфейсе.</span></div>
+
+    <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
+      <div class="vox-topbar" style="height:32px;flex:0 0 32px">
+        <div class="vox-topbar__group"><span class="vox-text--label">Система</span></div>
+        <div class="vox-topbar__group"><span class="vox-text--caption">активный счёт</span><span class="vox-account is-live"><span class="vox-account__broker">Т-Инвест</span><span class="vox-account__sep">/</span><span class="vox-account__label">Основной брокерский</span></span></div>
+        <div class="vox-topbar__group"><span class="vox-runtime vox-runtime--degraded"><span class="vox-dot"></span><span class="vox-runtime__label">DEGRADED</span></span></div>
+        <div class="vox-topbar__group"><span class="vox-text--caption">Vox 1.4.2 · сборка 2026-08-24</span></div>
+      </div>
+      <div class="vox-workspace">
+
+        <div class="vox-widget" style="grid-column:span 6">
+          <div class="vox-widget__header"><span class="vox-widget__title">Диагностика рантайма</span></div>
+          <div class="vox-widget__body">
+            <div class="vox-table">
+              <div class="vox-table__header" style="grid-template-columns:190px 1fr 128px"><span>Компонент</span><span>Показатель</span><span style="padding-left:8px">Состояние</span></div>
+              <div class="vox-table__row" style="grid-template-columns:190px 1fr 128px"><span>Поток рыночных данных</span><span class="vox-text--dense">задержка 42 мс · последний пакет 11:42:06</span><span style="padding-left:4px"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>OK</span></span></div>
+              <div class="vox-table__row" style="grid-template-columns:190px 1fr 128px"><span>Сессия брокера</span><span class="vox-text--dense">переподключение 2 из 5 · последняя ошибка 11:41:12</span><span style="padding-left:4px"><span class="vox-conn vox-conn--reconnecting"><span class="vox-dot"></span>RECONNECTING</span></span></div>
+              <div class="vox-table__row" style="grid-template-columns:190px 1fr 128px"><span>Очередь сверки</span><span class="vox-text--dense">1 объект без ответа 00:14</span><span style="padding-left:4px"><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>UNKNOWN</span></span></div>
+              <div class="vox-table__row" style="grid-template-columns:190px 1fr 128px"><span>Хранилище</span><span class="vox-text--dense">запись 3 мс · отставание журнала 0</span><span style="padding-left:4px"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>OK</span></span></div>
+              <div class="vox-table__footer"><span>сырые коды провайдера доступны здесь и только здесь</span><span class="vox-num">4 компонента</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 6">
+          <div class="vox-widget__header"><span class="vox-widget__title">Аварийная остановка</span><span class="vox-env vox-env--live" style="height:18px"><span class="vox-dot"></span>PRODUCTION</span></div>
+          <div class="vox-widget__body" style="padding:10px;display:flex;flex-direction:column;gap:8px">
+            <div class="vox-exec-fact vox-exec-fact--vox">
+              <span class="vox-exec-fact__label">Торговля на всех счетах · Т-Инвест «Основной брокерский», «Песочница», «ИИС»</span>
+              <span class="vox-exec-fact__state is-on">РАЗРЕШЕНА</span>
+            </div>
+            <button class="vox-exec-halt" type="button"><span class="vox-dot"></span>Остановить торговлю немедленно (HALTED)</button>
+            <div class="ref__note">Одно нажатие, без ввода слова. Останавливаются новые заявки; отмена заявок и выход из позиций остаются доступными. Уже принятые брокером стоп-заявки продолжают жить у брокера — экран говорит об этом прямо.</div>
+            <div class="vox-risk vox-risk--blocked"><span class="vox-dot"></span><div><div>Состояние HALTED</div><div class="vox-risk__reason">новые заявки не принимаются ни вручную, ни стратегиями <span class="vox-reason-code">RUNTIME_HALTED</span></div></div></div>
+          </div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 7">
+          <div class="vox-widget__header"><span class="vox-widget__title">Аудит</span></div>
+          <div class="vox-widget__body">
+            <div class="vox-table">
+              <div class="vox-table__header" style="grid-template-columns:132px 132px 1fr"><span>Время</span><span>Оператор</span><span>Действие</span></div>
+              <div class="vox-table__row" style="grid-template-columns:132px 132px 1fr"><span class="vox-tape__time">25.08 09:14</span><span>А. Иванов</span><span class="vox-text--dense">Включено исполнение Vox · «Основной брокерский» · PRODUCTION</span></div>
+              <div class="vox-table__row" style="grid-template-columns:132px 132px 1fr"><span class="vox-tape__time">25.08 09:02</span><span>А. Иванов</span><span class="vox-text--dense">Заменён токен подключения «Т-Инвест · рабочее» · отпечаток sha256:1b7d…4a</span></div>
+              <div class="vox-table__row" style="grid-template-columns:132px 132px 1fr"><span class="vox-tape__time">24.08 18:40</span><span>система</span><span class="vox-text--dense">Изменена защита по умолчанию · фикс. −3,00 % → трейлинг 5,00 %</span></div>
+              <div class="vox-table__footer"><span>метаданные приходят с бэкенда · секрет в аудит не попадает</span><span class="vox-num">3 записи</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="vox-widget" style="grid-column:span 5">
+          <div class="vox-widget__header"><span class="vox-widget__title">Права роли</span><span class="vox-conn vox-conn--scope">PERMISSION_LIMITED</span></div>
+          <div class="vox-widget__body" style="padding:10px;display:flex;flex-direction:column;gap:6px">
+            <div class="ref__demo"><span class="vox-check is-checked"></span><span class="vox-text--dense">Просмотр счетов и портфеля</span></div>
+            <div class="ref__demo"><span class="vox-check is-checked"></span><span class="vox-text--dense">Ручная торговля в SANDBOX</span></div>
+            <div class="ref__demo"><span class="vox-check is-checked"></span><span class="vox-text--dense">Отмена заявок</span></div>
+            <div class="ref__demo"><span class="vox-check is-disabled"></span><span class="vox-text--disabled">Ручная торговля в PRODUCTION</span></div>
+            <div class="ref__demo"><span class="vox-check is-disabled"></span><span class="vox-text--disabled">Включение автоматического исполнения</span></div>
+            <div class="ref__demo"><span class="vox-check is-disabled"></span><span class="vox-text--disabled">Изменение политики защиты и риска</span></div>
+            <div class="ref__note">Отключённый элемент виден и объясняет себя. Скрытая кнопка не является защитой: решение принимает бэкенд, и ответ 403 не должен ломать экран.</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- 23 · DON'T -->
   <section class="ref__sec" id="dont">
-    <div class="ref__sec-head"><span class="ref__num">10</span><h2 class="vox-text--title">Запрещено</h2></div>
+    <div class="ref__sec-head"><span class="ref__num">23</span><h2 class="vox-text--title">Запрещено</h2></div>
     <div class="ref__grid">
       <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> крупных SaaS-карточек с одной цифрой и отступом 24px — плотная сетка метрик с границами.</div></div>
       <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> переключателя режима «Купить/Продать» — обе кнопки постоянны.</div></div>
       <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> сырых идентификаторов брокера, счёта и заявки в обычном UI — только в диагностике и копировании по требованию.</div></div>
       <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> UNKNOWN, окрашенного как ошибка: отсутствие ответа ≠ отказ.</div></div>
       <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> английского в основном UI: язык интерфейса — русский; латиницей остаются тикеры, коды причин и технические статусы (LIVE, READY).</div></div>
+      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> раскрытия сохранённого токена в обычном UI и <b>нет</b> знака равенства между токеном и портфелем.</div></div>
+      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> молчаливой перезаписи существующих стоп-заявок у брокера при смене значения по умолчанию, и <b>нет</b> клиентской эмуляции брокерской защиты.</div></div>
+      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> заявки без явного счёта исполнения: значение по умолчанию — не жёсткий риск-лимит, а счёт — не «последний использованный».</div></div>
       <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> плотности Comfortable по умолчанию, теней на виджетах, скруглений &gt; 8px и цвета как единственного носителя смысла.</div></div>
+      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> переноса уже отправленной команды на другой счёт: цель исполнения замораживается вместе с командой.</div></div>
+      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> повторной отправки заявки в состоянии <span class="ref__code">UNKNOWN_AFTER_DISPATCH</span> до результата сверки.</div></div>
+      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> массового изменения защиты без предпросмотра, списка позиций, последствий и подтверждения словом.</div></div>
+      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> автоматического исполнения только потому, что токен брокера разрешает торговлю: разрешение Vox — отдельный факт, по умолчанию выключенный.</div></div>
+      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> пересчёта уровня трейлинга на клиенте: показывается состояние, подтверждённое брокером, вместе с временем ответа.</div></div>
     </div>
   </section>
 
   <footer class="ref__note" style="margin-top:32px;padding-top:14px;border-top:1px solid var(--vox-border-default)">
-    Каноничный визуальный референс — <code class="ref__code">./vox-trader-design-system.reference.html</code> (самодостаточный экспорт из Claude Design).
-    Этот файл — слоевой референс на извлечённых CSS-слоях; расхождения решаются в пользу каноничного файла и <code class="ref__code">docs/design/VOX_TRADER_DESIGN_SYSTEM.md</code>.
+    Этот файл — поддерживаемый визуальный референс системы, собранный на слоях <code class="ref__code">tokens / primitives / components / patterns</code>.
+    <code class="ref__code">./vox-trader-design-system.reference.html</code> — только стабильная точка входа для просмотра: она открывает этот же референс и не является отдельным источником истины.
+    Расхождения решаются в пользу <code class="ref__code">docs/design/VOX_TRADER_DESIGN_SYSTEM.md</code> и <code class="ref__code">docs/design/COMPONENT_SPEC.md</code>.
   </footer>
 </div>
 </body>

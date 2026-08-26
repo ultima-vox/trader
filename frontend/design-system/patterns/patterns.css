@@ -130,10 +130,10 @@
 }
 .vox-ticket__action-label { font-size: var(--vox-text-12); font-weight: var(--vox-weight-semibold); }
 .vox-ticket__action-value { font-variant-numeric: tabular-nums; font-size: 10px; opacity: 0.75; }
-.vox-ticket__action--buy { background: var(--vox-positive-base); border: 1px solid var(--vox-positive-strong); color: #08120E; }
+.vox-ticket__action--buy { background: var(--vox-positive-base); border: 1px solid var(--vox-positive-strong); color: var(--vox-on-positive); }
 .vox-ticket__action--buy:hover { background: var(--vox-positive-hover); }
 .vox-ticket__action--buy:active { background: var(--vox-positive-strong); }
-.vox-ticket__action--sell { background: var(--vox-negative-base); border: 1px solid var(--vox-negative-strong); color: #1A0A0A; }
+.vox-ticket__action--sell { background: var(--vox-negative-base); border: 1px solid var(--vox-negative-strong); color: var(--vox-on-negative); }
 .vox-ticket__action--sell:hover { background: var(--vox-negative-hover); }
 .vox-ticket__action--sell:active { background: var(--vox-negative-strong); }
 /* Blocked side stays visible: the restriction affects execution, not the widget concept. */
@@ -156,3 +156,237 @@
 .vox-limit__fill--warning { background: var(--vox-warning-base); }
 .vox-limit__fill--blocked { background: var(--vox-negative-base); }
 .vox-limit__fill--neutral { background: var(--vox-accent-primary); }
+
+/* ---------- Order ticket — execution target ----------
+   The ticket always states which broker/account/environment will receive the
+   command. It is the first row of the ticket, above the instrument, and it is
+   never collapsed, never inferred from "the last used account". */
+.vox-ticket__target {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--vox-space-2);
+  height: var(--vox-row-height); padding: 0 8px;
+  background: var(--vox-bg-surface-hover);
+  border: 1px solid var(--vox-border-default); border-radius: var(--vox-radius-sm);
+  font-size: var(--vox-text-12);
+}
+.vox-ticket__target-account { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.vox-ticket__target-name { font-weight: var(--vox-weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vox-ticket__target-broker { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+/* LIVE target: inset marker on the target row, not a red screen. */
+.vox-ticket__target.is-live { box-shadow: inset 0 0 0 1px var(--vox-negative-outline); }
+/* Target differs from the workspace-level selection — the mismatch must be loud. */
+.vox-ticket__target.is-mismatch { border-color: var(--vox-warning-base); background: var(--vox-warning-surface); }
+/* Once the command is constructed/submitted its target is frozen: changing the active
+   account in the shell can never retarget it. The row stops being interactive and says so. */
+.vox-ticket__target.is-frozen { background: var(--vox-bg-elevated); border-color: var(--vox-border-strong); cursor: default; }
+.vox-ticket__target-lock {
+  font-family: var(--vox-font-mono); font-size: 10px; letter-spacing: 0.06em;
+  color: var(--vox-text-tertiary); white-space: nowrap;
+}
+
+/* ---------- Reconciliation / UNKNOWN_AFTER_DISPATCH ----------
+   The command left Vox but the broker has not confirmed the outcome. This is an
+   unfinished answer, never a rejection: the violet UNKNOWN semantic is mandatory and
+   the negative semantic is forbidden here. Resolution is owned by #11. */
+.vox-recon {
+  display: flex; flex-direction: column; gap: var(--vox-space-2); padding: 10px;
+  border-radius: var(--vox-radius-sm); background: var(--vox-unknown-surface-subtle);
+  border: 1px solid var(--vox-unknown-base);
+}
+.vox-recon__head { display: flex; align-items: center; gap: var(--vox-space-2); font-size: var(--vox-text-12); }
+.vox-recon__title { font-weight: var(--vox-weight-medium); color: var(--vox-unknown-base); }
+.vox-recon__body { font-size: var(--vox-text-11); color: var(--vox-text-secondary); line-height: 1.5; }
+/* What Vox knows for certain about the frozen command, so the operator does not guess. */
+.vox-recon__facts {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px var(--vox-space-2);
+  padding: 6px 8px; border-radius: var(--vox-radius-xs);
+  background: var(--vox-bg-surface); border: 1px solid var(--vox-border-subtle);
+}
+.vox-recon__fact-label { font-size: 10px; color: var(--vox-text-disabled); }
+.vox-recon__fact-value { font-variant-numeric: tabular-nums; font-size: var(--vox-text-12); color: var(--vox-text-primary); }
+.vox-recon__actions { display: flex; align-items: center; gap: var(--vox-space-1); }
+
+/* ---------- Bulk protection migration ----------
+   Re-applying an account default to positions that already carry broker-side stop
+   orders is a separate capital-affecting action: preview, affected count, before/after,
+   consequences, typed confirmation, then a per-position reconciliation result. */
+.vox-migrate { display: flex; flex-direction: column; gap: var(--vox-space-2); }
+.vox-migrate__policy {
+  display: grid; grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr); align-items: center; gap: var(--vox-space-2);
+}
+.vox-migrate__policy-cell {
+  display: flex; flex-direction: column; gap: 2px; padding: 8px;
+  border-radius: var(--vox-radius-sm); background: var(--vox-bg-input); border: 1px solid var(--vox-border-subtle);
+}
+.vox-migrate__policy-label { font-size: 10px; color: var(--vox-text-disabled); }
+.vox-migrate__policy-value { font-variant-numeric: tabular-nums; font-size: var(--vox-text-13); color: var(--vox-text-primary); }
+.vox-migrate__policy-cell--after { border-color: var(--vox-accent-primary); }
+.vox-migrate__arrow { text-align: center; color: var(--vox-text-tertiary); }
+.vox-migrate__count { display: flex; align-items: baseline; gap: var(--vox-space-2); font-size: var(--vox-text-12); color: var(--vox-text-secondary); }
+.vox-migrate__count-value { font-variant-numeric: tabular-nums; font-size: var(--vox-text-16); font-weight: var(--vox-weight-medium); color: var(--vox-text-primary); }
+
+/* ---------- Protection: Stop Loss / Take Profit ----------
+   Independent and optional. Enabling SL does not require TP and vice versa.
+   Each block maps to a real broker order (stop / take-profit / trailing stop)
+   owned by Broker Foundation (issue #10) — it is never decorative UI.
+   Where the broker does not support a mode, the control states that instead of
+   silently degrading to a client-side emulation. */
+.vox-protect { display: flex; flex-direction: column; gap: var(--vox-space-1); }
+.vox-protect__block {
+  border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-sm);
+  background: var(--vox-bg-input); overflow: hidden;
+}
+.vox-protect__head {
+  height: var(--vox-row-height); display: flex; align-items: center; gap: var(--vox-space-2);
+  padding: 0 8px; font-size: var(--vox-text-12);
+}
+.vox-protect__title { display: flex; align-items: center; gap: 6px; }
+.vox-protect__mark {
+  width: 18px; height: 16px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--vox-radius-xs); font-family: var(--vox-font-mono);
+  font-size: 10px; font-weight: var(--vox-weight-semibold);
+}
+.vox-protect__block--sl .vox-protect__mark { background: var(--vox-protect-sl-surface); color: var(--vox-protect-sl); border: 1px solid var(--vox-warning-strong); }
+.vox-protect__block--tp .vox-protect__mark { background: var(--vox-protect-tp-surface); color: var(--vox-protect-tp); border: 1px solid var(--vox-positive-strong); }
+.vox-protect__spacer { flex: 1 1 auto; }
+.vox-protect__body {
+  display: flex; flex-direction: column; gap: var(--vox-space-2);
+  padding: 8px; border-top: 1px solid var(--vox-border-subtle);
+}
+.vox-protect__block.is-off .vox-protect__body { display: none; }
+.vox-protect__block.is-off .vox-protect__head { color: var(--vox-text-tertiary); }
+.vox-protect__row { display: flex; align-items: center; gap: var(--vox-space-2); }
+.vox-protect__label { width: 56px; flex: 0 0 56px; font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+.vox-protect__hint { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); line-height: 1.45; }
+/* Resulting broker-side level, always shown as an absolute price + distance. */
+.vox-protect__result {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 8px; border-radius: var(--vox-radius-xs);
+  background: var(--vox-bg-surface); font-size: var(--vox-text-12);
+}
+.vox-protect__result-value { font-variant-numeric: tabular-nums; font-weight: var(--vox-weight-medium); }
+
+/* Trailing stop — broker-native. Relative % or provider-supported absolute. */
+.vox-trailing { display: flex; flex-direction: column; gap: var(--vox-space-2); }
+.vox-trailing__mode { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vox-space-1) var(--vox-space-2); }
+.vox-trailing__badge {
+  height: 18px; display: inline-flex; align-items: center; gap: 4px; padding: 0 6px;
+  border-radius: var(--vox-radius-xs); background: var(--vox-protect-trailing-surface);
+  border: 1px solid var(--vox-blue-600); font-family: var(--vox-font-mono);
+  font-size: 10px; color: var(--vox-protect-trailing);
+}
+/* Current / reference state of a live trailing stop, when the broker reports it. */
+.vox-trailing__state {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px var(--vox-space-2);
+  padding: 6px 8px; border-radius: var(--vox-radius-xs);
+  background: var(--vox-bg-surface); border: 1px solid var(--vox-border-subtle);
+}
+.vox-trailing__state-label { font-size: 10px; color: var(--vox-text-disabled); }
+.vox-trailing__state-value { font-variant-numeric: tabular-nums; font-size: var(--vox-text-12); color: var(--vox-text-primary); }
+/* Broker does not report the reference level: UNKNOWN, never an error. */
+.vox-trailing__state-value.is-unknown { color: var(--vox-unknown-base); }
+/* Mode not supported by this provider — stated, not hidden. */
+.vox-trailing__unsupported {
+  display: flex; align-items: flex-start; gap: 6px; padding: 6px 8px;
+  border-radius: var(--vox-radius-xs); background: var(--vox-unknown-surface);
+  border: 1px solid var(--vox-unknown-base);
+  font-size: var(--vox-text-11); color: var(--vox-text-secondary); line-height: 1.45;
+}
+
+/* ---------- Protection precedence ----------
+   Explicit and visible, always in this order:
+   order/position override  >  strategy policy  >  portfolio/account default.
+   The winning level is marked; the others stay readable, not hidden. */
+.vox-precedence { display: flex; flex-direction: column; }
+.vox-precedence__row {
+  display: grid; grid-template-columns: 20px 1fr 96px 92px; align-items: center; gap: var(--vox-space-2);
+  height: var(--vox-row-height); padding: 0 8px;
+  border-bottom: 1px solid var(--vox-border-subtle); font-size: var(--vox-text-12);
+}
+.vox-precedence__row:last-child { border-bottom: 0; }
+.vox-precedence__rank { font-family: var(--vox-font-mono); font-size: 10px; color: var(--vox-text-disabled); }
+.vox-precedence__scope { color: var(--vox-text-secondary); }
+.vox-precedence__value { font-variant-numeric: tabular-nums; text-align: right; color: var(--vox-text-tertiary); }
+.vox-precedence__row.is-effective { background: var(--vox-accent-selected-surface); border-left: 2px solid var(--vox-accent-primary); }
+.vox-precedence__row.is-effective .vox-precedence__scope,
+.vox-precedence__row.is-effective .vox-precedence__value { color: var(--vox-text-primary); }
+.vox-precedence__row.is-overridden .vox-precedence__value { text-decoration: line-through; color: var(--vox-text-disabled); }
+.vox-precedence__note { padding: 8px; font-size: var(--vox-text-11); color: var(--vox-text-tertiary); line-height: 1.45; }
+
+/* Default policy at portfolio/account scope. A default is NOT a hard risk limit;
+   guardrails are a separate policy object with its own screen. */
+.vox-policy { display: flex; flex-direction: column; gap: var(--vox-space-2); }
+.vox-policy__row {
+  display: grid; grid-template-columns: minmax(112px, 150px) minmax(min-content, 1fr) auto;
+  align-items: center; gap: var(--vox-space-2);
+  min-height: var(--vox-row-height);
+}
+.vox-policy__label { font-size: var(--vox-text-12); color: var(--vox-text-secondary); }
+.vox-policy__scope { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); text-wrap: pretty; }
+/* Changing a default never rewrites orders that already exist at the broker. */
+.vox-policy__migration {
+  display: flex; align-items: flex-start; gap: 6px; padding: 8px;
+  border-radius: var(--vox-radius-sm); background: var(--vox-warning-surface);
+  border: 1px solid var(--vox-warning-strong);
+  font-size: var(--vox-text-11); color: var(--vox-text-primary); line-height: 1.45;
+}
+
+/* ---------- Settings → Брокеры и счета ----------
+   Add connection · environment · human label · token · validate · discovered
+   accounts · health · rotation. A connection is not a portfolio, and the token
+   is never revealed after saving. */
+.vox-brokers { display: grid; grid-template-columns: 260px 1fr; align-items: stretch; min-height: 0; }
+.vox-brokers__list { border-right: 1px solid var(--vox-border-subtle); background: var(--vox-bg-workspace); }
+.vox-brokers__item {
+  display: flex; flex-direction: column; gap: 2px; padding: 8px 10px;
+  border-bottom: 1px solid var(--vox-border-subtle); border-left: 2px solid transparent; cursor: pointer;
+}
+.vox-brokers__item:hover { background: var(--vox-bg-surface-hover); }
+.vox-brokers__item.is-selected { background: var(--vox-accent-selected-surface); border-left-color: var(--vox-accent-primary); }
+.vox-brokers__item-top { display: flex; align-items: center; justify-content: space-between; gap: var(--vox-space-2); font-size: var(--vox-text-12); }
+.vox-brokers__item-meta { display: flex; align-items: center; gap: 6px; font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+.vox-brokers__detail { display: flex; flex-direction: column; gap: var(--vox-space-3); padding: 12px; min-width: 0; }
+.vox-brokers__section { display: flex; flex-direction: column; gap: var(--vox-space-2); }
+.vox-brokers__section-title {
+  font-family: var(--vox-font-mono); font-size: 10px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--vox-text-tertiary);
+}
+.vox-brokers__field { display: grid; grid-template-columns: 132px 1fr; align-items: center; gap: var(--vox-space-2); }
+.vox-brokers__field-label { font-size: var(--vox-text-12); color: var(--vox-text-secondary); }
+/* Discovered accounts are read from the connection, never typed by the user. */
+.vox-brokers__discovered { border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-sm); overflow: hidden; }
+.vox-brokers__discovered-head {
+  height: 24px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px;
+  background: var(--vox-bg-surface-hover); border-bottom: 1px solid var(--vox-border-default);
+  font-size: 10px; color: var(--vox-text-tertiary);
+}
+.vox-brokers__actions { display: flex; align-items: center; gap: var(--vox-space-1); }
+
+/* ---------- Live execution authorization ----------
+   A broker token that permits trading does NOT enable Vox live execution.
+   The two facts are separate objects on screen and separate policy states.
+   PRODUCTION execution is OFF by default; enabling is high-friction, halting is one step. */
+.vox-exec-auth { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: var(--vox-space-3); align-items: start; }
+.vox-exec-fact {
+  display: flex; flex-direction: column; gap: var(--vox-space-1); padding: 10px;
+  background: var(--vox-bg-surface); border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-md);
+}
+.vox-exec-fact__label { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+/* The Vox-side switch is the capital-affecting one and is marked as such. */
+.vox-exec-fact--vox { border-color: var(--vox-negative-strong); }
+.vox-exec-fact__state { font-family: var(--vox-font-mono); font-size: var(--vox-text-13); font-weight: var(--vox-weight-medium); }
+.vox-exec-fact__state.is-off { color: var(--vox-negative-base); }
+.vox-exec-fact__state.is-on { color: var(--vox-positive-base); }
+.vox-exec-consequences {
+  padding: 8px; border-radius: var(--vox-radius-sm);
+  background: var(--vox-negative-surface); border: 1px solid var(--vox-negative-strong);
+  font-size: var(--vox-text-11); line-height: 1.5; color: var(--vox-text-primary);
+}
+/* Typed confirmation word — keyboard shortcuts never bypass it. */
+.vox-exec-confirm { display: flex; align-items: center; gap: var(--vox-space-2); }
+/* Halt is always cheaper than enable: one action, no confirmation. */
+.vox-exec-halt {
+  width: 100%; height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  border-radius: var(--vox-radius-sm); background: var(--vox-negative-surface-hover);
+  border: 1px solid var(--vox-negative-strong); color: var(--vox-negative-base);
+  font-size: var(--vox-text-12); font-weight: var(--vox-weight-semibold); cursor: pointer;
+}

@@ -120,6 +120,13 @@ Variants `--safe`, `--warning`, `--blocked`, `--unknown`, `--resize`.
 14px badge, 9px semibold letter, radius 2. `--b` filled green, `--s` filled red,
 `--f` filled blue, `--sl` outlined amber, `--tp` outlined green, `--d` outlined violet,
 `--e` outlined info. Identical in chart, tape, orders and journal.
+Group: several events on one candle collapse into one badge with a count (`B×3`).
+Legend: the marker row is rendered next to the chart, never as free-floating shapes.
+Tooltip (`.vox-tooltip`): type · timestamp · price · quantity · value · source
+(`ручная заявка` / `стратегия` / `брокер`); raw provider ids stay in diagnostics.
+Persistent levels — average price, working order, `SL`, `TP`, last — are **price
+lines**, a different primitive rendered in its own legend row. A line is never drawn
+as an event marker and a marker is never used for a standing level.
 
 ### Skeleton / StateNote / StaleBar — `.vox-skeleton`, `.vox-state-note`, `.vox-stale-bar`
 Skeletons mirror final row geometry (no layout jump). StateNote covers empty, error and
@@ -156,7 +163,8 @@ the widget never shows data whose instrument is not named in its header.
 ## Patterns
 
 ### AppShell — `.vox-shell`, `.vox-topbar`, `.vox-nav`
-Top bar 44px, groups separated by 1px borders: brand · broker + account (human names)
+Top bar 44px, groups separated by 1px borders: brand · broker + AccountSelector
+(`.vox-account`, human names, always visible — the execution target of the workspace)
 · environment + runtime · portfolio P&L · MSK clock (mono, tabular). Nav rail 118px,
 26px items, 2px active left border, secondary items pinned to the bottom.
 
@@ -183,15 +191,137 @@ ticket — never to submit.
 letter. Own trades highlighted. New rows append without scroll jump.
 
 ### OrderTicket — `.vox-ticket`
-Width 300. Anatomy: instrument strip → type Select → quantity NumericInput (+ lot
-hint) → price Input → `__preview` (сумма / комиссия / маржа после) → RiskIndicator →
+Width 300. Anatomy: `__target` execution-target row (broker · account · environment,
+first row, never collapsed, `.is-live` inset marker, `.is-mismatch` when it differs
+from the workspace selection) → instrument strip → type Select → quantity
+NumericInput (+ lot hint) → price Input → `__preview` (сумма / комиссия / маржа
+после) → `.vox-protect` (independent Stop Loss / Take Profit) → RiskIndicator →
 `__actions` → mono shortcut hint.
+`__target` states: default · `.is-live` (inset LIVE hairline) · `.is-mismatch` (amber,
+names the workspace account it disagrees with, offers to move the ticket or keep it) ·
+`.is-frozen` (elevated surface, non-interactive, `__target-lock` = `ЗАФИКСИРОВАНО`). A
+frozen target belongs to a constructed or submitted command: switching the active
+account in the shell never retargets it, and the row states that in words.
+When width allows, each action carries quantity and value (`Купить 10 лотов · 31 840 ₽`).
+The ticket also renders the effective protection and its source
+(`Плавающий стоп 1,00 % · Источник: заявка`) via `.vox-inherited`, never the plan alone.
 `__actions`: two 34px buttons, `--buy` = `Купить`, `--sell` = `Продать`, each with its
 own executable price. Both always present; **no mode toggle exists**. Blocked side:
 `.is-blocked` + `__action-note` + reason. In `LIVE` both actions carry
 `.vox-live-action`. Submission requires a non-blocked risk verdict; `RECONCILING` and
 `DEGRADED` allow submission with the caveat displayed; `HALTED` blocks new orders and
 leaves cancel available.
+
+### Protection — `.vox-protect`, `.vox-trailing`
+Anatomy per block: `__head` (mark `SL`/`TP` + label + inherited chip + Switch) →
+`__body` (mode SegmentedControl → value row → `__result` naming the broker order).
+Blocks are **independent**: `.is-off` collapses the body and keeps the head readable.
+Stop Loss modes: `Фиксированный`, `Трейлинг` (broker-native). Trailing offset:
+`%` or provider-supported absolute; `.vox-trailing__state` shows current and
+reference level, `.is-unknown` for a level the broker does not report.
+`.vox-trailing__unsupported` states an unsupported provider mode with a reason code —
+never a silent client-side fallback. Every block names the resulting broker order
+(`STOP_LOSS`, `TAKE_PROFIT`, `TRAILING_STOP`) and the level as absolute price + distance.
+States: off, on, inherited, overridden, validating, rejected, `UNKNOWN`, unsupported.
+
+### TrailingReadback — `.vox-trailing__state`
+Broker-authoritative runtime state of a live trailing stop, rendered as label/value
+pairs: order state badge (`ACTIVE` positive · `PENDING` warning · `REPLACED` info),
+current level, reference level (high-water for long, low-water for short), activation
+condition, and the time the broker last answered. `REPLACED` shows `было` / `стало`.
+Any field the provider does not report renders `.is-unknown`, never `0` and never an
+error. The terminal displays this state; it never recomputes or smooths it.
+
+### RiskGuardrail — `.vox-migrate__policy` (default vs limit)
+Two bordered cells side by side: `ЗНАЧЕНИЕ ПО УМОЛЧАНИЮ` (account setting, applies to
+new orders) and `ОГРАНИЧЕНИЕ РИСКА` (risk policy, own screen, own reason codes). A
+request beyond the limit is rendered as the backend returned it — `.vox-risk--blocked`
+(`RISK_TRAIL_MAX`) or `.vox-risk--resize` showing `12,0 % → 8,0 %` (`RISK_TRAIL_RESIZE`).
+Silent clamping in the browser is prohibited.
+
+### ReconciliationNotice — `.vox-recon`
+Anatomy: `__head` (dot + title + reason code) → `__body` (one sentence saying the
+command may have been accepted) → `__facts` (sent at / silence age / command /
+price) → `__actions`. Used when a dispatch has no broker answer
+(`UNKNOWN_AFTER_DISPATCH`). Violet unknown semantic only. Re-submission is disabled
+until reconciliation answers; requesting state from the broker and diagnostics stay
+enabled. Outcomes render as RiskIndicator variants: `RECON_CONFIRMED` (safe),
+`RECON_NOT_FOUND` (warning, re-submission unlocked), `RECON_PENDING` (unknown).
+
+### BulkProtectionMigration — `.vox-migrate`
+A separate capital-affecting action, never a side effect of editing a default.
+Anatomy: `__policy` (`было` → `станет`, the target cell accent-bordered) → `__count`
+(affected positions plus a breakdown: replace / create / manually overridden and
+untouched) → preview Table with per-position `было у брокера` / `станет` in broker
+order terms → `.vox-exec-consequences` (including the unprotected window between
+cancel and place) → `.vox-exec-confirm` (typed word) → result Table with per-position
+`ПРИМЕНЕНО` / `ОТКЛОНЕНО` / `СВЕРКА`. No aggregate "done".
+
+### ExecutionAuthorizationControl — `.vox-exec-auth`
+Two-column pattern. Left: `.vox-exec-fact` cards stating separate facts — broker token
+capability, Vox execution state (`--vox` card, `.is-off` / `.is-on`) and the scope
+(account · environment). Right: consequences, typed confirmation naming the account,
+`.vox-exec-halt` (full-width, one press, no typed word), and backend-supplied audit
+metadata. `PRODUCTION` defaults to off. Strategy screens may link here and never grant
+authorization themselves. Permission-denied renders as a StateNote with disabled
+controls — a hidden button is not enforcement.
+
+### PrecedenceList — `.vox-precedence`
+Three fixed rows in order: order/position override → strategy policy →
+portfolio/account default. `.is-effective` marks the winning value (accent left
+border); `.is-overridden` strikes the losing value but keeps it readable. Never
+hide a losing value, never reorder the list.
+
+### ProtectionPolicy — `.vox-policy`
+Portfolio/account default protection, including the global trailing default. Anatomy:
+label · mode SegmentedControl · value Input per row, plus `__migration` — the amber
+notice that a changed default applies to new orders only and that existing broker
+stop orders are migrated only via an explicit listed action. A default is not a hard
+risk limit; guardrails are a separate policy with their own screen.
+
+### AccountSelector — `.vox-account`, `.vox-account-row`
+Always visible in the shell. Anatomy: broker · separator · human account label ·
+environment badge / connection health · disclosure. Modifiers `.is-live` (inset LIVE
+marker), `.is-degraded`, `.is-unknown`. The popover lists `.vox-account-row`
+(name + masked identifier meta · environment · health · value). A raw identifier
+appears only as masked meta; full identifiers live in diagnostics.
+
+### ConnectionHealth — `.vox-conn`
+Mono chip covering the whole vocabulary: `--ok` (`CONNECTED`), `--validating`,
+`--reconnecting`, `--degraded`, `--invalid` (`INVALID_CREDENTIAL`), `--revoked`,
+`--scope` (`PERMISSION_LIMITED`), `--expiring` (`ROTATE`), `--provider`
+(`PROVIDER_UNAVAILABLE`), `--disabled`, `--unknown`. Each state carries its own human
+sentence, action and reason code; they are never collapsed into a generic red
+`Ошибка`. `VALIDATING` and `RECONNECTING` are work in progress and never borrow the
+negative semantic; `UNKNOWN` uses the violet unknown semantic.
+Health describes a *connection*, never a portfolio.
+
+### SecretInput — `.vox-secret`
+Write-only token entry. Anatomy: masked `__input` + `__fingerprint` + `__note`.
+After saving, the UI shows fingerprint, expiry and "replace token" only — there is no
+reveal control in normal UI. States: empty, typing, `.is-validating` (spinner +
+"checking connection and execution scope"), saved, `.is-invalid` (reason code,
+e.g. `BRK_TOKEN_NO_TRADE_SCOPE`), expiring, rotated.
+
+### InheritedValue — `.vox-inherited`
+18px chip marking a value that belongs to a higher scope (dashed border, tertiary
+text). `--override` (solid accent) marks a locally overridden value. Used by
+protection blocks, precedence rows and policy screens.
+
+### BrokersSettings — `.vox-brokers`
+Настройки → Брокеры и счета. Two panes: connection list (label · environment ·
+health · account count · "add connection") and detail: connection (broker, environment,
+human label) → secret (SecretInput, validate, rotate, health) → discovered accounts
+(read from the connection, never typed; execution permission per account). A connection
+is not a portfolio: accounts are listed separately from the connection that found them.
+States per connection: new, validating, ok, degraded, invalid token, expiring,
+permission-denied, discovery empty, `UNKNOWN`.
+
+### InstrumentPicker — `.vox-input` + `.vox-popover .vox-menu`
+One picker for the whole product: search by ticker or name, rows showing ticker · name
+· venue/type, keyboard navigation, recents and favourites. Normal UI never shows
+UID/FIGI or other provider identifiers — they belong to diagnostics. Selection returns
+a stable internal instrument id. Feature screens may not build their own picker.
 
 ### PortfolioSummary — `.vox-metrics`, `.vox-limit`
 4-column bordered metric grid (10px label + 16px tabular value) — the explicit
@@ -203,7 +333,7 @@ alternative to oversized SaaS cards. Limit usage: 4px track with
 ## Review checklist
 
 - [ ] Compact geometry (28/26/32) and no hardcoded pixel heights.
-- [ ] Tokens only — no raw HEX outside `tokens.css`.
+- [ ] Tokens only — no raw HEX **and no raw `rgba()`** outside `tokens.css`.
 - [ ] Russian copy; Latin only for tickers, states, reason codes, marker letters.
 - [ ] `Купить` and `Продать` both present; no mode toggle.
 - [ ] Markers limited to B/S/F/SL/TP/D/E.
@@ -211,3 +341,28 @@ alternative to oversized SaaS cards. Limit usage: 4px track with
 - [ ] All numbers via `.vox-num`; streaming causes no reflow.
 - [ ] No raw broker identifiers; no oversized single-number cards; no widget shadow.
 - [ ] Focus ring present; keyboard path complete; wheel does not alter critical values.
+- [ ] Order Ticket states its execution target (broker · account · environment) as its
+      first row; a mismatch with the workspace selection is shown, not swallowed.
+- [ ] Stop Loss and Take Profit are independently switchable; trailing mode is named as
+      broker-native and every level maps to a broker order (issue #10).
+- [ ] Unsupported provider mode is stated with a reason code — no client-side emulation.
+- [ ] Precedence visible: order/position override > strategy policy > account default;
+      overridden values readable, not hidden.
+- [ ] Changing a default does not rewrite existing broker stop orders; guardrails kept
+      separate from defaults.
+- [ ] AccountSelector visible in the shell; token never revealed, never equated with an
+      account or portfolio (issue #17).
+- [ ] A submitted command keeps its frozen target: switching the active account never
+      retargets it, and the frozen row says so.
+- [ ] `UNKNOWN_AFTER_DISPATCH` renders as an unfinished answer with the silence age,
+      the known facts and re-submission disabled until reconciliation answers.
+- [ ] Trailing readback is broker-reported: state badge, current and reference level,
+      activation and answer time; unreported fields are `UNKNOWN`, not `0`.
+- [ ] Bulk protection migration has preview, affected count, per-position
+      `было → станет`, consequences, typed confirmation and per-position results.
+- [ ] Broker token capability and Vox execution authorization are separate facts;
+      `PRODUCTION` execution is off by default and halting is a single control.
+- [ ] Connection states are rendered individually, never as one generic red error.
+- [ ] Validated at 1280 / 1440 / 1920, in Compact / Standard / Comfortable, in happy,
+      loading, empty, stale, reconnecting, degraded, error, permission-denied,
+      `UNKNOWN` and `BLOCKED` states.
