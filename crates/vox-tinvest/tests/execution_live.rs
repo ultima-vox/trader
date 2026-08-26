@@ -14,12 +14,12 @@ use vox_domain::{
 };
 use vox_tinvest::account::ProviderTimestamp;
 use vox_tinvest::execution::{
-    CanonicalMaxLots, CanonicalOrderPrice, CanonicalOrderState, ExecutionPriceOperation,
-    OrderStateRequestContext, ProtectionRequestContext, ProtectionRequestIds,
-    TInvestExecutionEnvironment, TInvestInstrumentKind, async_regular_order_request,
-    cancel_order_request, cancel_stop_order_request, canonical_orders, canonical_stop_orders,
-    execution_price_convention, order_state_request, protection_requests, regular_order_request,
-    replace_order_request, stop_order_request_shape,
+    CanonicalExecutionStreamEvent, CanonicalMaxLots, CanonicalOrderPrice, CanonicalOrderState,
+    ExecutionPriceOperation, OrderStateRequestContext, ProtectionRequestContext,
+    ProtectionRequestIds, TInvestExecutionEnvironment, TInvestInstrumentKind,
+    async_regular_order_request, cancel_order_request, cancel_stop_order_request, canonical_orders,
+    canonical_stop_orders, decode_trades_stream, execution_price_convention, order_state_request,
+    protection_requests, regular_order_request, replace_order_request, stop_order_request_shape,
 };
 use vox_tinvest::execution_dispatch::{
     ExecutionDispatchError, ExecutionMutationDispatcher, ExecutionRoute,
@@ -97,6 +97,58 @@ struct QualificationState {
     limit_request_id: Option<String>,
     net_open_lots: i64,
     provider_mutation_blocker: Option<String>,
+}
+
+#[derive(Debug)]
+struct TargetedMarketEvidence {
+    broker_order_ids: BTreeSet<String>,
+    buy_executed_lots: i64,
+    sell_executed_lots: i64,
+}
+
+#[derive(Debug, Default)]
+struct TargetedTradesObservation {
+    ack: bool,
+    trade_order_ids: BTreeSet<String>,
+    ping_count: u32,
+    stream_errors: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TargetedTradesClassification {
+    Qualified,
+    QualifiedWithProviderDeviation,
+    ProviderBlocked,
+    ImplementationFailure,
+}
+
+impl fmt::Display for TargetedTradesClassification {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Qualified => "QUALIFIED",
+            Self::QualifiedWithProviderDeviation => "QUALIFIED_WITH_PROVIDER_DEVIATION",
+            Self::ProviderBlocked => "PROVIDER_BLOCKED",
+            Self::ImplementationFailure => "IMPLEMENTATION_FAILURE",
+        })
+    }
+}
+
+const fn classify_targeted_trades_stream(
+    ack: bool,
+    trade_event: bool,
+    valid_liveness: bool,
+    broker_fill_readback: bool,
+    cleanup_qualified: bool,
+) -> TargetedTradesClassification {
+    if !valid_liveness || !broker_fill_readback || !cleanup_qualified {
+        TargetedTradesClassification::ImplementationFailure
+    } else if ack && trade_event {
+        TargetedTradesClassification::Qualified
+    } else if !ack && trade_event {
+        TargetedTradesClassification::QualifiedWithProviderDeviation
+    } else {
+        TargetedTradesClassification::ProviderBlocked
+    }
 }
 
 struct SandboxRunner {
@@ -670,6 +722,53 @@ impl SandboxRunner {
             "market order acknowledged; executed lots={} and exposure flattened",
             buy.lots_executed
         ))
+    }
+
+    async fn targeted_market_round_trip(&mut self) -> Result<TargetedMarketEvidence, BoxError> {
+        let buy = self
+            .post_regular(OrderSide::Buy, RegularOrderType::Market, 1, None)
+            .await?;
+        let buy_id = buy
+            .broker_order_id
+            .clone()
+            .ok_or_else(|| failure("targeted market buy omitted broker identity"))?;
+        if !terminal(buy.execution_status) {
+            self.cancel_broker_order(&buy_id).await?;
+        }
+        self.state.net_open_lots += buy.lots_executed;
+
+        let mut broker_order_ids = BTreeSet::from([buy_id]);
+        let mut sell_executed_lots = 0;
+        if buy.lots_executed > 0 {
+            let sell = self
+                .post_regular(
+                    OrderSide::Sell,
+                    RegularOrderType::Market,
+                    buy.lots_executed,
+                    None,
+                )
+                .await?;
+            let sell_id = sell
+                .broker_order_id
+                .clone()
+                .ok_or_else(|| failure("targeted market sell omitted broker identity"))?;
+            if !terminal(sell.execution_status) {
+                self.cancel_broker_order(&sell_id).await?;
+            }
+            sell_executed_lots = sell.lots_executed;
+            self.state.net_open_lots -= sell_executed_lots;
+            broker_order_ids.insert(sell_id);
+        }
+        if buy.lots_executed <= 0 || self.state.net_open_lots != 0 {
+            return Err(failure(
+                "targeted market unary readback did not prove fill and flat round trip",
+            ));
+        }
+        Ok(TargetedMarketEvidence {
+            broker_order_ids,
+            buy_executed_lots: buy.lots_executed,
+            sell_executed_lots,
+        })
     }
 
     async fn limit_order_lifecycle(&mut self) -> Result<String, BoxError> {
@@ -1629,6 +1728,63 @@ fn evidence(result: Result<String, BoxError>) -> QualificationEvidence {
     }
 }
 
+async fn observe_targeted_trades_stream(
+    mut stream: vox_tinvest::GrpcServerStream<v1::TradesStreamResponse>,
+    expected_account: String,
+    expected_instrument: String,
+) -> TargetedTradesObservation {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut observation = TargetedTradesObservation::default();
+    loop {
+        let message = match tokio::time::timeout_at(deadline, stream.message()).await {
+            Err(_) => break,
+            Ok(Ok(Some(message))) => message,
+            Ok(Ok(None)) => {
+                observation
+                    .stream_errors
+                    .push("stream closed before 30-second observation completed".into());
+                break;
+            }
+            Ok(Err(error)) => {
+                observation.stream_errors.push(error.to_string());
+                break;
+            }
+        };
+        match decode_trades_stream(message) {
+            Ok(CanonicalExecutionStreamEvent::Subscription {
+                accounts,
+                provider_error_code,
+                ..
+            }) if accounts.iter().any(|account| account == &expected_account)
+                && provider_error_code.is_none() =>
+            {
+                observation.ack = true;
+            }
+            Ok(CanonicalExecutionStreamEvent::Subscription { .. }) => observation
+                .stream_errors
+                .push("subscription response did not acknowledge exact account".into()),
+            Ok(CanonicalExecutionStreamEvent::Ping(_)) => {
+                observation.ping_count = observation.ping_count.saturating_add(1);
+            }
+            Ok(CanonicalExecutionStreamEvent::Trades(batch))
+                if batch.account_id.as_deref() == Some(expected_account.as_str())
+                    && batch.instrument_uid.as_deref() == Some(expected_instrument.as_str())
+                    && !batch.trades.is_empty() =>
+            {
+                if let Some(order_id) = batch.broker_order_id {
+                    observation.trade_order_ids.insert(order_id);
+                }
+            }
+            Ok(CanonicalExecutionStreamEvent::Trades(_)) => {}
+            Ok(_) => observation
+                .stream_errors
+                .push("TradesStream emitted impossible generated payload branch".into()),
+            Err(error) => observation.stream_errors.push(error.to_string()),
+        }
+    }
+    observation
+}
+
 #[test]
 fn sandbox_pacing_uses_provider_bucket_and_documented_fallback() {
     assert_eq!(
@@ -1650,6 +1806,123 @@ fn sandbox_pacing_uses_provider_bucket_and_documented_fallback() {
         provider_quota_delay(GrpcRateLimitMetadata::default(), false),
         Duration::from_millis(300)
     );
+}
+
+#[test]
+fn targeted_trades_stream_matrix_preserves_provider_deviation() {
+    use TargetedTradesClassification::{
+        ImplementationFailure, ProviderBlocked, Qualified, QualifiedWithProviderDeviation,
+    };
+    assert_eq!(
+        classify_targeted_trades_stream(true, true, true, true, true),
+        Qualified
+    );
+    assert_eq!(
+        classify_targeted_trades_stream(false, true, true, true, true),
+        QualifiedWithProviderDeviation
+    );
+    assert_eq!(
+        classify_targeted_trades_stream(false, false, true, true, true),
+        ProviderBlocked
+    );
+    assert_eq!(
+        classify_targeted_trades_stream(false, false, false, true, true),
+        ImplementationFailure
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires TINVEST_SANDBOX_TOKEN; one targeted TradesStream sandbox mutation"]
+async fn targeted_trades_stream_acceptance_in_sandbox() -> Result<(), BoxError> {
+    let token = std::env::var("TINVEST_SANDBOX_TOKEN")
+        .map_err(|_| failure("TINVEST_SANDBOX_TOKEN is required"))?;
+    let client = TInvestGrpcClient::sandbox(GrpcCredential::Sandbox(SecretToken::new(token)?))?;
+    let mut runner = SandboxRunner::new(client.clone())?;
+    let readiness = runner.account_readiness().await?;
+    let (account, instrument) = runner.owned_context()?;
+    let ping_delay_ms = 5_000;
+    let request = v1::TradesStreamRequest {
+        accounts: vec![account.clone()],
+        ping_delay_ms: Some(ping_delay_ms),
+    };
+    let request_shape = format!(
+        "accounts=[{account}]; ping_delay_ms={:?}; encoded_len={}",
+        request.ping_delay_ms,
+        prost::Message::encoded_len(&request),
+    );
+    let stream = client.open_trades_stream(request).await?;
+    let request_id = stream.metadata.request_id;
+    let tracking_id = stream
+        .metadata
+        .tracking_id
+        .clone()
+        .unwrap_or_else(|| "missing".into());
+
+    let observation =
+        observe_targeted_trades_stream(stream, account.clone(), instrument.uid.clone());
+    let (observation, market_result) =
+        tokio::join!(observation, runner.targeted_market_round_trip());
+    let cleanup_result = runner.cleanup().await;
+
+    let (broker_fill_readback, broker_order_ids, market_detail) = match &market_result {
+        Ok(evidence) => (
+            evidence.buy_executed_lots > 0
+                && evidence.sell_executed_lots == evidence.buy_executed_lots,
+            evidence.broker_order_ids.clone(),
+            format!(
+                "buy_executed_lots={}; sell_executed_lots={}; broker_order_ids={:?}",
+                evidence.buy_executed_lots, evidence.sell_executed_lots, evidence.broker_order_ids,
+            ),
+        ),
+        Err(error) => (false, BTreeSet::new(), format!("error={error}")),
+    };
+    let matching_trade_event = !broker_order_ids.is_disjoint(&observation.trade_order_ids);
+    let valid_liveness = observation.ping_count > 0 && observation.stream_errors.is_empty();
+    let cleanup_qualified = cleanup_result.is_ok();
+    let classification = classify_targeted_trades_stream(
+        observation.ack,
+        matching_trade_event,
+        valid_liveness,
+        broker_fill_readback,
+        cleanup_qualified,
+    );
+
+    println!("TARGETED_TRADES_STREAM qualification_matrix={classification}");
+    println!("TARGETED_TRADES_STREAM account={account}");
+    println!("TARGETED_TRADES_STREAM request_id={request_id}");
+    println!("TARGETED_TRADES_STREAM tracking_id={tracking_id}");
+    println!("TARGETED_TRADES_STREAM ping_delay_ms={ping_delay_ms}");
+    println!("TARGETED_TRADES_STREAM wire=[{request_shape}]");
+    println!("TARGETED_TRADES_STREAM readiness=[{readiness}]");
+    println!(
+        "TARGETED_TRADES_STREAM subscription_ack={}",
+        observation.ack
+    );
+    println!(
+        "TARGETED_TRADES_STREAM matching_trade_event={matching_trade_event}; observed_trade_order_ids={:?}",
+        observation.trade_order_ids,
+    );
+    println!(
+        "TARGETED_TRADES_STREAM ping_count={}; stream_errors={:?}",
+        observation.ping_count, observation.stream_errors,
+    );
+    println!("TARGETED_TRADES_STREAM broker_fill_readback={broker_fill_readback}; {market_detail}");
+    println!(
+        "TARGETED_TRADES_STREAM cleanup={}",
+        cleanup_result.as_ref().map_or_else(
+            |error| format!("FAILED: {error}"),
+            |detail| format!("QUALIFIED: {detail}")
+        ),
+    );
+
+    if classification == TargetedTradesClassification::ImplementationFailure {
+        return Err(failure(format!(
+            "targeted TradesStream implementation failure; market={market_detail}; stream_errors={:?}; cleanup={:?}",
+            observation.stream_errors,
+            cleanup_result.err().map(|error| error.to_string()),
+        )));
+    }
+    Ok(())
 }
 
 #[tokio::test]
