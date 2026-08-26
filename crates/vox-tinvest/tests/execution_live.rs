@@ -1,15 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
+use std::future::Future;
 use std::io;
 use std::time::Duration;
 
 use vox_domain::{
-    CancelOrderCommand, CancelStopOrderCommand, ClientRequestId, Environment, FixedPoint,
-    MutationAuthorization, MutationEvidence, MutationEvidenceStore, MutationGuard, OrderSide,
-    PositionSide, ProtectionPlan, ProviderOrderIdentityKind, RegularOrderCommand, RegularOrderType,
-    ReplaceOrderCommand, StopLossProtection, StoreError, TakeProfitProtection, TimeInForce,
-    TrailingDistance, TrailingDistanceMode,
+    BrokerOrderId, CancelOrderCommand, CancelStopOrderCommand, ClientRequestId, Environment,
+    FixedPoint, MutationAuthorization, MutationEvidence, MutationEvidenceStore, MutationGuard,
+    OrderSide, PositionSide, ProtectionPlan, ProviderOrderIdentityKind, RegularOrderCommand,
+    RegularOrderType, ReplaceOrderCommand, StopLossProtection, StoreError, TakeProfitProtection,
+    TimeInForce, TrailingDistance, TrailingDistanceMode,
 };
 use vox_tinvest::account::ProviderTimestamp;
 use vox_tinvest::execution::{
@@ -28,11 +29,13 @@ use vox_tinvest::execution_stream::{
     ExecutionStreamConfig, ExecutionStreamEvent, ExecutionStreamKind, ExecutionStreamSupervisor,
 };
 use vox_tinvest::generated::v1;
-use vox_tinvest::{GrpcCredential, GrpcError, GrpcErrorKind, SecretToken, TInvestGrpcClient};
+use vox_tinvest::{
+    GrpcCredential, GrpcError, GrpcErrorKind, GrpcRateLimitMetadata, GrpcResponse,
+    GrpcResponseMetadata, SecretToken, TInvestGrpcClient,
+};
 
-const SANDBOX_MUTATION_INTERVAL: Duration = Duration::from_millis(350);
-const PROVIDER_ERROR_COOLDOWN: Duration = Duration::from_secs(2);
-const RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
+const DOCUMENTED_SANDBOX_REQUESTS_PER_MINUTE: u32 = 200;
+const DOCUMENTED_SANDBOX_WINDOW: Duration = Duration::from_secs(60);
 
 type BoxError = Box<dyn Error + Send + Sync>;
 
@@ -97,7 +100,42 @@ struct SandboxRunner {
     client: TInvestGrpcClient,
     dispatcher: ExecutionMutationDispatcher<MemoryEvidenceStore>,
     state: QualificationState,
-    next_mutation_at: tokio::time::Instant,
+    quota: SandboxQuotaPacer,
+}
+
+struct SandboxQuotaPacer {
+    next_request_at: tokio::time::Instant,
+    last_metadata: GrpcRateLimitMetadata,
+}
+
+impl Default for SandboxQuotaPacer {
+    fn default() -> Self {
+        Self {
+            next_request_at: tokio::time::Instant::now(),
+            last_metadata: GrpcRateLimitMetadata::default(),
+        }
+    }
+}
+
+impl SandboxQuotaPacer {
+    async fn wait(&self) {
+        tokio::time::sleep_until(self.next_request_at).await;
+    }
+
+    fn observe(&mut self, metadata: GrpcRateLimitMetadata, exhausted: bool) {
+        self.last_metadata = metadata;
+        let delay = provider_quota_delay(metadata, exhausted);
+        self.next_request_at = tokio::time::Instant::now() + delay;
+    }
+
+    fn evidence(&self) -> String {
+        format!(
+            "limit={:?}; remaining={:?}; reset_seconds={:?}",
+            self.last_metadata.limit,
+            self.last_metadata.remaining,
+            self.last_metadata.reset_seconds,
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -122,7 +160,7 @@ impl SandboxRunner {
             client,
             dispatcher: ExecutionMutationDispatcher::new(MemoryEvidenceStore::default()),
             state: QualificationState::default(),
-            next_mutation_at: tokio::time::Instant::now(),
+            quota: SandboxQuotaPacer::default(),
         })
     }
 
@@ -135,23 +173,38 @@ impl SandboxRunner {
         }
     }
 
-    async fn wait_for_mutation_slot(&mut self) {
-        tokio::time::sleep_until(self.next_mutation_at).await;
-        self.next_mutation_at = tokio::time::Instant::now() + SANDBOX_MUTATION_INTERVAL;
+    async fn wait_for_sandbox_slot(&self) {
+        self.quota.wait().await;
     }
 
-    async fn cooldown_after_provider_error(&mut self, error: &GrpcError) {
-        let cooldown = match &error.kind {
-            GrpcErrorKind::Provider(provider)
-                if provider.code == tonic::Code::ResourceExhausted =>
-            {
-                RATE_LIMIT_COOLDOWN
-            }
-            GrpcErrorKind::Provider(_) => PROVIDER_ERROR_COOLDOWN,
-            _ => return,
-        };
-        self.next_mutation_at = tokio::time::Instant::now() + cooldown;
-        tokio::time::sleep_until(self.next_mutation_at).await;
+    fn observe_success(&mut self, metadata: &GrpcResponseMetadata) {
+        self.quota.observe(metadata.rate_limit, false);
+    }
+
+    fn observe_error(&mut self, error: &GrpcError) {
+        if let GrpcErrorKind::Provider(provider) = &error.kind {
+            self.quota.observe(
+                *provider.rate_limit,
+                provider.code == tonic::Code::ResourceExhausted,
+            );
+        }
+    }
+
+    async fn sandbox_request<T, Dispatch, DispatchFuture>(
+        &mut self,
+        dispatch: Dispatch,
+    ) -> Result<GrpcResponse<T>, GrpcError>
+    where
+        Dispatch: FnOnce(TInvestGrpcClient) -> DispatchFuture,
+        DispatchFuture: Future<Output = Result<GrpcResponse<T>, GrpcError>>,
+    {
+        self.wait_for_sandbox_slot().await;
+        let result = dispatch(self.client.clone()).await;
+        match &result {
+            Ok(response) => self.observe_success(&response.metadata),
+            Err(error) => self.observe_error(error),
+        }
+        result
     }
 
     async fn handle_dispatch_error(
@@ -170,15 +223,16 @@ impl SandboxRunner {
                     && provider.has_provider_code("70001") =>
             {
                 Some(format!(
-                    "method={method}; grpc_status={:?}; provider_code=70001; attempt={}; tracking_id={}; request_shape={request_shape}; mutation_retry=not_attempted",
+                    "method={method}; grpc_status={:?}; provider_code=70001; attempt={}; tracking_id={}; rate_limit=[{}]; request_shape={request_shape}; mutation_retry=not_attempted",
                     provider.code,
                     source.metadata.attempt,
                     provider.tracking_id.as_deref().unwrap_or("missing"),
+                    provider.rate_limit,
                 ))
             }
             _ => None,
         };
-        self.cooldown_after_provider_error(source).await;
+        self.observe_error(source);
         if let Some(evidence) = blocker {
             self.state.provider_mutation_blocker = Some(evidence.clone());
             Box::new(ProviderBlocked(evidence))
@@ -202,15 +256,16 @@ impl SandboxRunner {
                     && provider.has_provider_code("70001") =>
             {
                 Some(format!(
-                    "method={method}; grpc_status={:?}; provider_code=70001; attempt={}; tracking_id={}; request_shape={request_shape}; mutation_retry=not_attempted",
+                    "method={method}; grpc_status={:?}; provider_code=70001; attempt={}; tracking_id={}; rate_limit=[{}]; request_shape={request_shape}; mutation_retry=not_attempted",
                     provider.code,
                     error.metadata.attempt,
                     provider.tracking_id.as_deref().unwrap_or("missing"),
+                    provider.rate_limit,
                 ))
             }
             _ => None,
         };
-        self.cooldown_after_provider_error(&error).await;
+        self.observe_error(&error);
         if let Some(evidence) = blocker {
             self.state.provider_mutation_blocker = Some(evidence.clone());
             Box::new(ProviderBlocked(evidence))
@@ -223,8 +278,11 @@ impl SandboxRunner {
 
     async fn account_readiness(&mut self) -> Result<String, BoxError> {
         let accounts = self
-            .client
-            .get_sandbox_accounts(v1::GetAccountsRequest::default())
+            .sandbox_request(|client| async move {
+                client
+                    .get_sandbox_accounts(v1::GetAccountsRequest::default())
+                    .await
+            })
             .await?
             .body
             .accounts;
@@ -236,12 +294,14 @@ impl SandboxRunner {
             .map(|account| account.id)
             .ok_or_else(|| failure("sandbox has no open account"))?;
 
+        let orders_request = v1::GetOrdersRequest {
+            account_id: account_id.clone(),
+            advanced_filters: None,
+        };
         let orders = self
-            .client
-            .get_sandbox_orders(v1::GetOrdersRequest {
-                account_id: account_id.clone(),
-                advanced_filters: None,
-            })
+            .sandbox_request(
+                |client| async move { client.get_sandbox_orders(orders_request).await },
+            )
             .await?
             .body;
         self.state.baseline_order_ids = orders
@@ -249,9 +309,11 @@ impl SandboxRunner {
             .into_iter()
             .filter_map(|order| nonempty(order.order_id))
             .collect();
+        let stops_request = active_stops_request(&account_id);
         let stops = self
-            .client
-            .get_sandbox_stop_orders(active_stops_request(&account_id))
+            .sandbox_request(
+                |client| async move { client.get_sandbox_stop_orders(stops_request).await },
+            )
             .await?
             .body;
         self.state.baseline_stop_ids = stops
@@ -341,15 +403,15 @@ impl SandboxRunner {
         ))
     }
 
-    async fn max_lots(&self) -> Result<String, BoxError> {
-        let (account, instrument) = self.context()?;
+    async fn max_lots(&mut self) -> Result<String, BoxError> {
+        let (account, instrument) = self.owned_context()?;
+        let request = v1::GetMaxLotsRequest {
+            account_id: account,
+            instrument_id: instrument.uid,
+            price: Some(quotation(instrument.current_price)?),
+        };
         let response = self
-            .client
-            .get_sandbox_max_lots(v1::GetMaxLotsRequest {
-                account_id: account.to_owned(),
-                instrument_id: instrument.uid.clone(),
-                price: Some(quotation(instrument.current_price)?),
-            })
+            .sandbox_request(|client| async move { client.get_sandbox_max_lots(request).await })
             .await?
             .body;
         let canonical = CanonicalMaxLots::try_from(response)?;
@@ -359,17 +421,17 @@ impl SandboxRunner {
         ))
     }
 
-    async fn pre_trade_estimate(&self) -> Result<String, BoxError> {
-        let (account, instrument) = self.context()?;
+    async fn pre_trade_estimate(&mut self) -> Result<String, BoxError> {
+        let (account, instrument) = self.owned_context()?;
+        let request = v1::GetOrderPriceRequest {
+            account_id: account,
+            instrument_id: instrument.uid,
+            price: Some(quotation(instrument.current_price)?),
+            direction: v1::OrderDirection::Buy as i32,
+            quantity: 1,
+        };
         let response = self
-            .client
-            .get_sandbox_order_price(v1::GetOrderPriceRequest {
-                account_id: account.to_owned(),
-                instrument_id: instrument.uid.clone(),
-                price: Some(quotation(instrument.current_price)?),
-                direction: v1::OrderDirection::Buy as i32,
-                quantity: 1,
-            })
+            .sandbox_request(|client| async move { client.get_sandbox_order_price(request).await })
             .await?
             .body;
         let canonical = CanonicalOrderPrice::try_from(response)?;
@@ -399,15 +461,15 @@ impl SandboxRunner {
     }
 
     async fn instrument_balance(
-        &self,
+        &mut self,
         account: &str,
         instrument_uid: &str,
     ) -> Result<i64, BoxError> {
+        let request = v1::PositionsRequest {
+            account_id: account.to_owned(),
+        };
         Ok(self
-            .client
-            .get_sandbox_positions(v1::PositionsRequest {
-                account_id: account.to_owned(),
-            })
+            .sandbox_request(|client| async move { client.get_sandbox_positions(request).await })
             .await?
             .body
             .securities
@@ -438,7 +500,7 @@ impl SandboxRunner {
             confirm_margin_trade: false,
         })?;
         let request_shape = regular_request_shape(&request);
-        self.wait_for_mutation_slot().await;
+        self.wait_for_sandbox_slot().await;
         let acknowledged = match self
             .dispatcher
             .post_order(
@@ -449,7 +511,10 @@ impl SandboxRunner {
             )
             .await
         {
-            Ok(value) => value,
+            Ok(value) => {
+                self.observe_success(&value.response.metadata);
+                value
+            }
             Err(error) => {
                 return Err(self
                     .handle_dispatch_error("PostSandboxOrder", request_shape, error)
@@ -473,24 +538,26 @@ impl SandboxRunner {
     }
 
     async fn wait_for_order(
-        &self,
+        &mut self,
         account: &str,
         order_id: &str,
         identity: ProviderOrderIdentityKind,
     ) -> Result<CanonicalOrderState, BoxError> {
         let mut last_error = None;
         for _ in 0..8 {
+            let request = v1::GetOrderStateRequest {
+                account_id: account.to_owned(),
+                order_id: order_id.to_owned(),
+                price_type: v1::PriceType::Unspecified as i32,
+                order_id_type: Some(match identity {
+                    ProviderOrderIdentityKind::BrokerOrder => v1::OrderIdType::Exchange as i32,
+                    ProviderOrderIdentityKind::ClientRequest => v1::OrderIdType::Request as i32,
+                }),
+            };
             match self
-                .client
-                .get_sandbox_order_state(v1::GetOrderStateRequest {
-                    account_id: account.to_owned(),
-                    order_id: order_id.to_owned(),
-                    price_type: v1::PriceType::Unspecified as i32,
-                    order_id_type: Some(match identity {
-                        ProviderOrderIdentityKind::BrokerOrder => v1::OrderIdType::Exchange as i32,
-                        ProviderOrderIdentityKind::ClientRequest => v1::OrderIdType::Request as i32,
-                    }),
-                })
+                .sandbox_request(
+                    |client| async move { client.get_sandbox_order_state(request).await },
+                )
                 .await
             {
                 Ok(response) => return Ok(response.body.try_into()?),
@@ -505,7 +572,7 @@ impl SandboxRunner {
     }
 
     async fn wait_for_terminal_order(
-        &self,
+        &mut self,
         account: &str,
         broker_id: &str,
     ) -> Result<CanonicalOrderState, BoxError> {
@@ -531,7 +598,7 @@ impl SandboxRunner {
             order_id: broker_id.to_owned(),
             order_id_kind: Some(ProviderOrderIdentityKind::BrokerOrder),
         })?;
-        self.wait_for_mutation_slot().await;
+        self.wait_for_sandbox_slot().await;
         match self
             .dispatcher
             .cancel_order(
@@ -543,7 +610,10 @@ impl SandboxRunner {
             )
             .await
         {
-            Ok(_) => Ok(()),
+            Ok(value) => {
+                self.observe_success(&value.response.metadata);
+                Ok(())
+            }
             Err(error) => Err(self
                 .handle_dispatch_error(
                     "CancelSandboxOrder",
@@ -613,30 +683,30 @@ impl SandboxRunner {
         ))
     }
 
-    async fn order_state_and_list(&self) -> Result<String, BoxError> {
+    async fn order_state_and_list(&mut self) -> Result<String, BoxError> {
         self.require_mutation_service()?;
-        let (account, _) = self.context()?;
+        let (account, _) = self.owned_context()?;
         let broker_id = self
             .state
             .limit_order_id
-            .as_deref()
+            .clone()
             .ok_or_else(|| failure("limit order unavailable"))?;
         let point = self
-            .wait_for_order(account, broker_id, ProviderOrderIdentityKind::BrokerOrder)
+            .wait_for_order(&account, &broker_id, ProviderOrderIdentityKind::BrokerOrder)
             .await?;
+        let request = v1::GetOrdersRequest {
+            account_id: account,
+            advanced_filters: None,
+        };
         let listed = canonical_orders(
-            self.client
-                .get_sandbox_orders(v1::GetOrdersRequest {
-                    account_id: account.to_owned(),
-                    advanced_filters: None,
-                })
+            self.sandbox_request(|client| async move { client.get_sandbox_orders(request).await })
                 .await?
                 .body,
         )?;
-        if point.broker_order_id.as_deref() != Some(broker_id)
+        if point.broker_order_id.as_deref() != Some(&broker_id)
             || !listed
                 .iter()
-                .any(|order| order.broker_order_id.as_deref() == Some(broker_id))
+                .any(|order| order.broker_order_id.as_deref() == Some(&broker_id))
         {
             return Err(failure("point/list order identity mismatch"));
         }
@@ -661,7 +731,7 @@ impl SandboxRunner {
             price: one_tick_higher(far_below(&instrument)?, instrument.tick)?,
             confirm_margin_trade: false,
         })?;
-        self.wait_for_mutation_slot().await;
+        self.wait_for_sandbox_slot().await;
         let response = match self
             .dispatcher
             .replace_order(
@@ -672,7 +742,10 @@ impl SandboxRunner {
             )
             .await
         {
-            Ok(value) => value,
+            Ok(value) => {
+                self.observe_success(&value.response.metadata);
+                value
+            }
             Err(error) => {
                 return Err(self
                     .handle_dispatch_error(
@@ -701,13 +774,13 @@ impl SandboxRunner {
             .clone()
             .ok_or_else(|| failure("replaced limit order unavailable"))?;
         self.cancel_broker_order(&broker_id).await?;
-        let (account, _) = self.context()?;
+        let (account, _) = self.owned_context()?;
+        let request = v1::GetOrdersRequest {
+            account_id: account,
+            advanced_filters: None,
+        };
         let active = canonical_orders(
-            self.client
-                .get_sandbox_orders(v1::GetOrdersRequest {
-                    account_id: account.to_owned(),
-                    advanced_filters: None,
-                })
+            self.sandbox_request(|client| async move { client.get_sandbox_orders(request).await })
                 .await?
                 .body,
         )?;
@@ -736,8 +809,9 @@ impl SandboxRunner {
             time_in_force: Some(TimeInForce::Day),
             confirm_margin_trade: false,
         })?;
-        self.wait_for_mutation_slot().await;
-        match self
+        self.state.logical_order_ids.insert(request_id.clone());
+        self.wait_for_sandbox_slot().await;
+        let dispatch_error = match self
             .dispatcher
             .post_order_async(
                 &self.client,
@@ -747,28 +821,65 @@ impl SandboxRunner {
             )
             .await
         {
-            Ok(_) => {}
-            Err(error) => {
-                return Err(self
-                    .handle_dispatch_error(
-                        "PostSandboxOrderAsync",
-                        "quantity=1; order_type=LIMIT; price=present; time_in_force=DAY".into(),
-                        error,
-                    )
-                    .await);
+            Ok(response) => {
+                self.observe_success(&response.response.metadata);
+                None
             }
+            Err(error) => {
+                if let Some(source) = dispatch_source(&error) {
+                    self.observe_error(source);
+                }
+                Some(error)
+            }
+        };
+        let reconciled_unknown = dispatch_error.is_some();
+        let state = self.reconcile_async_order(&account, &request_id).await;
+        let state = match (state, dispatch_error) {
+            (Ok(state), _) => state,
+            (Err(reconciliation), Some(dispatch)) => {
+                return Err(failure(format!(
+                    "{dispatch}; UNKNOWN_AFTER_DISPATCH preserved; request_id={request_id}; bounded request-identity/list reconciliation failed: {reconciliation}; mutation_retry=not_attempted; quota={}",
+                    self.quota.evidence(),
+                )));
+            }
+            (Err(reconciliation), None) => return Err(reconciliation),
+        };
+        let broker_id = state
+            .broker_order_id
+            .ok_or_else(|| failure("async order readback omitted broker identity"))?;
+        if reconciled_unknown {
+            self.dispatcher.reconcile_order_accepted(
+                &ClientRequestId::new(request_id.clone())?,
+                BrokerOrderId::new(broker_id.clone())?,
+            )?;
         }
-        self.state.logical_order_ids.insert(request_id.clone());
+        if state.lots_executed != 0 {
+            self.state.net_open_lots += state.lots_executed;
+            return Err(failure("far async limit unexpectedly executed"));
+        }
+        self.cancel_broker_order(&broker_id).await?;
+        Ok(format!(
+            "async intent reconciled request={request_id} broker={broker_id}; unknown_after_dispatch={reconciled_unknown}; mutation_retry=not_attempted"
+        ))
+    }
+
+    async fn reconcile_async_order(
+        &mut self,
+        account: &str,
+        request_id: &str,
+    ) -> Result<CanonicalOrderState, BoxError> {
         let mut state = None;
         let mut last_point_error = None;
         for _ in 0..20 {
+            let point_request = v1::GetOrderStateRequest {
+                account_id: account.to_owned(),
+                order_id: request_id.to_owned(),
+                price_type: v1::PriceType::Unspecified as i32,
+                order_id_type: Some(v1::OrderIdType::Request as i32),
+            };
             match self
-                .client
-                .get_sandbox_order_state(v1::GetOrderStateRequest {
-                    account_id: account.clone(),
-                    order_id: request_id.clone(),
-                    price_type: v1::PriceType::Unspecified as i32,
-                    order_id_type: Some(v1::OrderIdType::Request as i32),
+                .sandbox_request(|client| async move {
+                    client.get_sandbox_order_state(point_request).await
                 })
                 .await
             {
@@ -778,40 +889,31 @@ impl SandboxRunner {
                 }
                 Err(error) => last_point_error = Some(error.to_string()),
             }
+            let list_request = v1::GetOrdersRequest {
+                account_id: account.to_owned(),
+                advanced_filters: None,
+            };
             let listed = canonical_orders(
-                self.client
-                    .get_sandbox_orders(v1::GetOrdersRequest {
-                        account_id: account.clone(),
-                        advanced_filters: None,
-                    })
-                    .await?
-                    .body,
+                self.sandbox_request(|client| async move {
+                    client.get_sandbox_orders(list_request).await
+                })
+                .await?
+                .body,
             )?;
             state = listed
                 .into_iter()
-                .find(|order| order.client_request_id.as_deref() == Some(&request_id));
+                .find(|order| order.client_request_id.as_deref() == Some(request_id));
             if state.is_some() {
                 break;
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        let state = state.ok_or_else(|| {
+        state.ok_or_else(|| {
             failure(format!(
                 "async acknowledgement did not materialize by request identity: {}",
                 last_point_error.unwrap_or_else(|| "no provider response".to_owned())
             ))
-        })?;
-        let broker_id = state
-            .broker_order_id
-            .ok_or_else(|| failure("async order readback omitted broker identity"))?;
-        if state.lots_executed != 0 {
-            self.state.net_open_lots += state.lots_executed;
-            return Err(failure("far async limit unexpectedly executed"));
-        }
-        self.cancel_broker_order(&broker_id).await?;
-        Ok(format!(
-            "async intent reconciled request={request_id} broker={broker_id}"
-        ))
+        })
     }
 
     async fn broker_idempotency_evidence(&mut self) -> Result<String, BoxError> {
@@ -830,13 +932,16 @@ impl SandboxRunner {
             confirm_margin_trade: false,
         })?;
         let request_shape = regular_request_shape(&request);
-        self.wait_for_mutation_slot().await;
+        self.wait_for_sandbox_slot().await;
         let first = match self
             .client
             .post_sandbox_order(authorization()?, request.clone())
             .await
         {
-            Ok(value) => value.body,
+            Ok(value) => {
+                self.observe_success(&value.metadata);
+                value.body
+            }
             Err(error) => {
                 return Err(self
                     .handle_direct_mutation_error("PostSandboxOrder", request_shape.clone(), error)
@@ -845,7 +950,7 @@ impl SandboxRunner {
         };
         let broker_id = nonempty(first.order_id)
             .ok_or_else(|| failure("idempotency response omitted broker identity"))?;
-        self.wait_for_mutation_slot().await;
+        self.wait_for_sandbox_slot().await;
         match self
             .client
             .post_sandbox_order(authorization()?, request)
@@ -857,28 +962,31 @@ impl SandboxRunner {
                     GrpcErrorKind::Provider(provider) if provider.has_provider_code("30057")
                 ) =>
             {
-                self.cooldown_after_provider_error(&error).await;
+                self.observe_error(&error);
             }
             Err(error) => {
                 return Err(self
                     .handle_direct_mutation_error("PostSandboxOrder", request_shape, error)
                     .await);
             }
-            Ok(_) => {
+            Ok(response) => {
+                self.observe_success(&response.metadata);
                 return Err(failure(
                     "duplicate replay unexpectedly returned success instead of provider 30057",
                 ));
             }
         }
         self.state.logical_order_ids.insert(request_id);
+        let list_request = v1::GetOrdersRequest {
+            account_id: account.clone(),
+            advanced_filters: None,
+        };
         let listed = canonical_orders(
-            self.client
-                .get_sandbox_orders(v1::GetOrdersRequest {
-                    account_id: account.clone(),
-                    advanced_filters: None,
-                })
-                .await?
-                .body,
+            self.sandbox_request(
+                |client| async move { client.get_sandbox_orders(list_request).await },
+            )
+            .await?
+            .body,
         )?;
         if listed
             .iter()
@@ -926,7 +1034,7 @@ impl SandboxRunner {
         let mut broker_ids = Vec::with_capacity(expected);
         for request in requests {
             let request_shape = stop_order_request_shape(&request);
-            self.wait_for_mutation_slot().await;
+            self.wait_for_sandbox_slot().await;
             let response = match self
                 .dispatcher
                 .post_stop_order(
@@ -937,7 +1045,10 @@ impl SandboxRunner {
                 )
                 .await
             {
-                Ok(value) => value,
+                Ok(value) => {
+                    self.observe_success(&value.response.metadata);
+                    value
+                }
                 Err(error) => {
                     return Err(self
                         .handle_dispatch_error("PostSandboxStopOrder", request_shape, error)
@@ -949,11 +1060,13 @@ impl SandboxRunner {
                     .ok_or_else(|| failure("PostSandboxStopOrder omitted broker identity"))?,
             );
         }
+        let active_request = active_stops_request(&account);
         let active = canonical_stop_orders(
-            self.client
-                .get_sandbox_stop_orders(active_stops_request(&account))
-                .await?
-                .body,
+            self.sandbox_request(|client| async move {
+                client.get_sandbox_stop_orders(active_request).await
+            })
+            .await?
+            .body,
         )?;
         if broker_ids.iter().any(|id| {
             !active
@@ -969,7 +1082,7 @@ impl SandboxRunner {
                 account_id: account.clone(),
                 broker_stop_order_id: broker_id.clone(),
             })?;
-            self.wait_for_mutation_slot().await;
+            self.wait_for_sandbox_slot().await;
             match self
                 .dispatcher
                 .cancel_stop_order(
@@ -981,7 +1094,7 @@ impl SandboxRunner {
                 )
                 .await
             {
-                Ok(_) => {}
+                Ok(value) => self.observe_success(&value.response.metadata),
                 Err(error) => {
                     return Err(self
                         .handle_dispatch_error(
@@ -993,11 +1106,13 @@ impl SandboxRunner {
                 }
             }
         }
+        let remaining_request = active_stops_request(&account);
         let remaining = canonical_stop_orders(
-            self.client
-                .get_sandbox_stop_orders(active_stops_request(&account))
-                .await?
-                .body,
+            self.sandbox_request(|client| async move {
+                client.get_sandbox_stop_orders(remaining_request).await
+            })
+            .await?
+            .body,
         )?;
         if broker_ids.iter().any(|id| {
             remaining
@@ -1031,8 +1146,14 @@ impl SandboxRunner {
         )?;
         let mut handle = supervisor.start(kind, vec![account.to_owned()])?;
         let result = tokio::time::timeout(Duration::from_secs(25), async {
+            let mut connection = None;
+            let mut pre_ack_pings = 0_u32;
+            let mut pre_ack_events = 0_u32;
             loop {
                 match handle.recv().await {
+                    Some(ExecutionStreamEvent::Connected(evidence)) => {
+                        connection = Some(evidence);
+                    }
                     Some(ExecutionStreamEvent::Evidence(
                         vox_tinvest::execution::CanonicalExecutionStreamEvent::Subscription {
                             accounts,
@@ -1042,9 +1163,38 @@ impl SandboxRunner {
                     )) if accounts.iter().any(|value| value == account)
                         && provider_error_code.is_none() =>
                     {
-                        return Ok::<_, BoxError>(());
+                        return Ok::<_, BoxError>((connection, pre_ack_pings, pre_ack_events));
                     }
-                    Some(ExecutionStreamEvent::Fault(error)) => return Err(Box::new(error).into()),
+                    Some(ExecutionStreamEvent::Evidence(
+                        vox_tinvest::execution::CanonicalExecutionStreamEvent::Ping(_),
+                    )) => pre_ack_pings = pre_ack_pings.saturating_add(1),
+                    Some(ExecutionStreamEvent::Evidence(_)) => {
+                        pre_ack_events = pre_ack_events.saturating_add(1);
+                    }
+                    Some(ExecutionStreamEvent::Fault(
+                        vox_tinvest::execution_stream::ExecutionStreamError::SubscriptionAckTimeout,
+                    )) if kind == ExecutionStreamKind::Trades => {
+                        let wire = connection
+                            .as_ref()
+                            .map_or_else(|| "connection_evidence=missing".to_owned(), |value| {
+                                format!(
+                                    "kind={:?}; accounts_count={}; ping_delay_ms={}; request_id={}; tracking_id={}",
+                                    value.kind,
+                                    value.account_count,
+                                    value.ping_delay_ms,
+                                    value.request_id.map_or_else(|| "missing".into(), |id| id.to_string()),
+                                    value.tracking_id.as_deref().unwrap_or("missing"),
+                                )
+                            });
+                        return Err(Box::new(ProviderBlocked(format!(
+                            "TradesStream RPC connected but generated subscription ACK was absent within 15s; official sandbox contract advertises TradesStream; wire=[{wire}]; pre_ack_pings={pre_ack_pings}; pre_ack_events={pre_ack_events}"
+                        ))) as BoxError);
+                    }
+                    Some(ExecutionStreamEvent::Fault(error)) => {
+                        return Err(failure(format!(
+                            "{kind:?} stream fault: {error}; wire={connection:?}; pre_ack_pings={pre_ack_pings}; pre_ack_events={pre_ack_events}"
+                        )));
+                    }
                     Some(ExecutionStreamEvent::Stopped) | None => {
                         return Err(failure("execution stream stopped before subscription ACK"));
                     }
@@ -1055,8 +1205,8 @@ impl SandboxRunner {
         .await;
         handle.stop();
         match result {
-            Ok(Ok(())) => Ok(format!(
-                "{kind:?} subscription ACK received for sandbox account"
+            Ok(Ok((connection, pre_ack_pings, pre_ack_events))) => Ok(format!(
+                "{kind:?} subscription ACK received; wire={connection:?}; pre_ack_pings={pre_ack_pings}; pre_ack_events={pre_ack_events}"
             )),
             Ok(Err(error)) => Err(error),
             Err(_) => Err(failure("execution stream subscription ACK timed out")),
@@ -1065,11 +1215,13 @@ impl SandboxRunner {
 
     async fn cleanup(&mut self) -> Result<String, BoxError> {
         let (account, _) = self.owned_context()?;
+        let active_orders_request = v1::GetOrdersRequest {
+            account_id: account.clone(),
+            advanced_filters: None,
+        };
         let active_orders = self
-            .client
-            .get_sandbox_orders(v1::GetOrdersRequest {
-                account_id: account.clone(),
-                advanced_filters: None,
+            .sandbox_request(|client| async move {
+                client.get_sandbox_orders(active_orders_request).await
             })
             .await?
             .body
@@ -1082,20 +1234,25 @@ impl SandboxRunner {
                     order_id: order.order_id.clone(),
                     order_id_type: Some(v1::OrderIdType::Exchange as i32),
                 };
-                self.wait_for_mutation_slot().await;
-                if let Err(error) = self
+                self.wait_for_sandbox_slot().await;
+                match self
                     .client
                     .cancel_sandbox_order(authorization()?, request)
                     .await
                 {
-                    self.cooldown_after_provider_error(&error).await;
-                    cleanup_errors.push(format!("order {} cancel: {error}", order.order_id));
+                    Ok(response) => self.observe_success(&response.metadata),
+                    Err(error) => {
+                        self.observe_error(&error);
+                        cleanup_errors.push(format!("order {} cancel: {error}", order.order_id));
+                    }
                 }
             }
         }
+        let active_stops_query = active_stops_request(&account);
         let active_stops = self
-            .client
-            .get_sandbox_stop_orders(active_stops_request(&account))
+            .sandbox_request(|client| async move {
+                client.get_sandbox_stop_orders(active_stops_query).await
+            })
             .await?
             .body
             .stop_orders;
@@ -1105,14 +1262,17 @@ impl SandboxRunner {
                     account_id: account.clone(),
                     stop_order_id: stop.stop_order_id.clone(),
                 };
-                self.wait_for_mutation_slot().await;
-                if let Err(error) = self
+                self.wait_for_sandbox_slot().await;
+                match self
                     .client
                     .cancel_sandbox_stop_order(authorization()?, request)
                     .await
                 {
-                    self.cooldown_after_provider_error(&error).await;
-                    cleanup_errors.push(format!("stop {} cancel: {error}", stop.stop_order_id));
+                    Ok(response) => self.observe_success(&response.metadata),
+                    Err(error) => {
+                        self.observe_error(&error);
+                        cleanup_errors.push(format!("stop {} cancel: {error}", stop.stop_order_id));
+                    }
                 }
             }
         }
@@ -1157,11 +1317,13 @@ impl SandboxRunner {
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
+        let remaining_orders_request = v1::GetOrdersRequest {
+            account_id: account.clone(),
+            advanced_filters: None,
+        };
         let remaining_orders = self
-            .client
-            .get_sandbox_orders(v1::GetOrdersRequest {
-                account_id: account.clone(),
-                advanced_filters: None,
+            .sandbox_request(|client| async move {
+                client.get_sandbox_orders(remaining_orders_request).await
             })
             .await?
             .body
@@ -1170,9 +1332,13 @@ impl SandboxRunner {
             .filter(|order| !self.state.baseline_order_ids.contains(&order.order_id))
             .map(|order| order.order_id)
             .collect::<Vec<_>>();
+        let remaining_stops_request = active_stops_request(&account);
         let remaining_stops = self
-            .client
-            .get_sandbox_stop_orders(active_stops_request(&account))
+            .sandbox_request(|client| async move {
+                client
+                    .get_sandbox_stop_orders(remaining_stops_request)
+                    .await
+            })
             .await?
             .body
             .stop_orders
@@ -1203,6 +1369,28 @@ fn dispatch_source(error: &ExecutionDispatchError) -> Option<&GrpcError> {
         ExecutionDispatchError::Rejected { source, .. }
         | ExecutionDispatchError::UnknownAfterDispatch { source, .. } => Some(source),
         _ => None,
+    }
+}
+
+fn provider_quota_delay(metadata: GrpcRateLimitMetadata, exhausted: bool) -> Duration {
+    let documented_interval = DOCUMENTED_SANDBOX_WINDOW / DOCUMENTED_SANDBOX_REQUESTS_PER_MINUTE;
+    let reset = metadata.reset_seconds.map(Duration::from_secs);
+    if exhausted {
+        return reset
+            .filter(|value| !value.is_zero())
+            .unwrap_or(DOCUMENTED_SANDBOX_WINDOW);
+    }
+    match (metadata.remaining, reset, metadata.limit) {
+        (Some(0), Some(reset), _) => reset.max(documented_interval),
+        (Some(remaining), Some(reset), _) => {
+            let divisor = u32::try_from(remaining).unwrap_or(u32::MAX).max(1);
+            (reset / divisor).max(documented_interval)
+        }
+        (None, Some(reset), Some(limit)) => {
+            let divisor = u32::try_from(limit).unwrap_or(u32::MAX).max(1);
+            (reset / divisor).max(documented_interval)
+        }
+        _ => documented_interval,
     }
 }
 
@@ -1402,6 +1590,29 @@ fn evidence(result: Result<String, BoxError>) -> QualificationEvidence {
             None => QualificationEvidence::Failed(error.to_string()),
         },
     }
+}
+
+#[test]
+fn sandbox_pacing_uses_provider_bucket_and_documented_fallback() {
+    assert_eq!(
+        provider_quota_delay(
+            GrpcRateLimitMetadata {
+                limit: Some(1),
+                remaining: Some(0),
+                reset_seconds: Some(2),
+            },
+            false,
+        ),
+        Duration::from_secs(2)
+    );
+    assert_eq!(
+        provider_quota_delay(GrpcRateLimitMetadata::default(), true),
+        DOCUMENTED_SANDBOX_WINDOW
+    );
+    assert_eq!(
+        provider_quota_delay(GrpcRateLimitMetadata::default(), false),
+        Duration::from_millis(300)
+    );
 }
 
 #[tokio::test]

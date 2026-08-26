@@ -60,12 +60,27 @@ Production credentials and production mutation qualification are prohibited. Run
 result for every inventory capability, clean every active test order/stop it created, then confirm
 cleanup by broker readback. `GATED/UNAVAILABLE` is valid only for documented sandbox capability,
 account, permission or deterministic-trigger limitations; arbitrary provider errors fail run.
-Sandbox mutations are paced below documented 200 unary requests/minute. Provider errors add a
-cooldown; rate-limit errors wait a complete reset window, preventing follow-on
-`RESOURCE_EXHAUSTED` noise. A correctly formed `PostSandboxOrder` returning documented generic
+All SandboxService qualification calls, including reads and reconciliation, share one quota pacer.
+The gRPC adapter preserves provider `x-ratelimit-limit`, `x-ratelimit-remaining` and
+`x-ratelimit-reset` metadata from successful responses and errors. Pacing uses that advertised
+bucket state; absent metadata falls back to the documented 200 requests/minute SandboxService
+limit, while `RESOURCE_EXHAUSTED` without reset metadata waits the documented minute window. A
+correctly formed `PostSandboxOrder` returning documented generic
 `INTERNAL/70001` is recorded as `BLOCKED/PROVIDER` with status, provider code, attempt, tracking ID
 and redacted request shape. Mutation service is then latched off for qualification: no blind replay
 or unrelated mutation cascade occurs. Cleanup readback still runs.
+
+`PostSandboxOrderAsync` transport failure remains `UNKNOWN_AFTER_DISPATCH`. Runner never replays it;
+it performs bounded `GetSandboxOrderState` reconciliation by request ID plus active-order list
+readback. Authoritative discovery resolves persisted UNKNOWN to accepted broker identity and may
+qualify the row; exhausted reconciliation reports unresolved UNKNOWN with quota evidence.
+
+TradesStream sends generated `TradesStreamRequest { accounts, ping_delay_ms: Some(5000) }` to the
+sandbox endpoint. Connection evidence records redacted account count, ping value, client request ID,
+provider tracking ID and pre-ACK event counts. Valid events/pings do not replace mandatory ACK. If
+the RPC connects but sandbox omits ACK within the existing 15-second qualification bound, runner
+reports `BLOCKED/PROVIDER`: current provider contract advertises TradesStream in sandbox, request
+round-trip is contract-tested, and timeout is not increased to mask missing ACK.
 
 PowerShell command:
 

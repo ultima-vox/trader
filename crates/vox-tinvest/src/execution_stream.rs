@@ -15,7 +15,7 @@ use crate::execution::{
     decode_trades_stream,
 };
 use crate::generated::v1;
-use crate::{GrpcError, GrpcStreamError, RetryPolicy, TInvestGrpcClient};
+use crate::{GrpcError, GrpcResponseMetadata, GrpcStreamError, RetryPolicy, TInvestGrpcClient};
 
 pub const DEFAULT_EXECUTION_PING_DELAY_MS: i32 = 120_000;
 pub const MIN_EXECUTION_PING_DELAY_MS: i32 = 5_000;
@@ -70,11 +70,20 @@ impl ExecutionStreamConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExecutionStreamEvent {
-    Connected,
+    Connected(ExecutionStreamConnectionEvidence),
     Reconnecting { attempt: u32, delay: Duration },
     Evidence(CanonicalExecutionStreamEvent),
     Fault(ExecutionStreamError),
     Stopped,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExecutionStreamConnectionEvidence {
+    pub kind: ExecutionStreamKind,
+    pub account_count: usize,
+    pub ping_delay_ms: i32,
+    pub request_id: Option<Uuid>,
+    pub tracking_id: Option<String>,
 }
 
 pub struct ExecutionStreamHandle {
@@ -106,6 +115,10 @@ pub enum ExecutionWireResponse {
 #[async_trait]
 pub trait ExecutionStreamConnection: Send {
     async fn message(&mut self) -> Result<Option<ExecutionWireResponse>, ExecutionStreamError>;
+
+    fn metadata(&self) -> Option<&GrpcResponseMetadata> {
+        None
+    }
 }
 
 #[async_trait]
@@ -132,6 +145,10 @@ impl ExecutionStreamConnection for TradesConnection {
             .map(|value| value.map(|response| ExecutionWireResponse::Trades(Box::new(response))))
             .map_err(ExecutionStreamError::Stream)
     }
+
+    fn metadata(&self) -> Option<&GrpcResponseMetadata> {
+        Some(&self.0.metadata)
+    }
 }
 
 #[async_trait]
@@ -144,6 +161,10 @@ impl ExecutionStreamConnection for OrderStateConnection {
                 value.map(|response| ExecutionWireResponse::OrderState(Box::new(response)))
             })
             .map_err(ExecutionStreamError::Stream)
+    }
+
+    fn metadata(&self) -> Option<&GrpcResponseMetadata> {
+        Some(&self.0.metadata)
     }
 }
 
@@ -158,10 +179,7 @@ impl ExecutionStreamConnector for TonicExecutionStreamConnector {
         match kind {
             ExecutionStreamKind::Trades => self
                 .0
-                .open_trades_stream(v1::TradesStreamRequest {
-                    accounts,
-                    ping_delay_ms: Some(ping_delay_ms),
-                })
+                .open_trades_stream(trades_stream_request(accounts, ping_delay_ms))
                 .await
                 .map(|stream| {
                     Box::new(TradesConnection(stream)) as Box<dyn ExecutionStreamConnection>
@@ -178,6 +196,13 @@ impl ExecutionStreamConnector for TonicExecutionStreamConnector {
                 }),
         }
         .map_err(ExecutionStreamError::Connect)
+    }
+}
+
+fn trades_stream_request(accounts: Vec<String>, ping_delay_ms: i32) -> v1::TradesStreamRequest {
+    v1::TradesStreamRequest {
+        accounts,
+        ping_delay_ms: Some(ping_delay_ms),
     }
 }
 
@@ -296,7 +321,19 @@ impl ExecutionStreamSupervisor {
                     continue;
                 }
             };
-            if events.send(ExecutionStreamEvent::Connected).await.is_err() {
+            let metadata = stream.metadata();
+            let connected = ExecutionStreamConnectionEvidence {
+                kind,
+                account_count: accounts.len(),
+                ping_delay_ms: self.config.ping_delay_ms,
+                request_id: metadata.map(|value| value.request_id),
+                tracking_id: metadata.and_then(|value| value.tracking_id.clone()),
+            };
+            if events
+                .send(ExecutionStreamEvent::Connected(connected))
+                .await
+                .is_err()
+            {
                 return;
             }
             let mut subscribed = false;
@@ -473,8 +510,13 @@ impl ExecutionStreamError {
             Self::Connect(GrpcError {
                 kind: crate::GrpcErrorKind::Provider(provider),
                 ..
-            })
-            | Self::Stream(GrpcStreamError::Provider(provider)) => matches!(
+            }) => matches!(
+                provider.code,
+                tonic::Code::Unavailable
+                    | tonic::Code::ResourceExhausted
+                    | tonic::Code::DeadlineExceeded
+            ),
+            Self::Stream(GrpcStreamError::Provider(provider)) => matches!(
                 provider.code,
                 tonic::Code::Unavailable
                     | tonic::Code::ResourceExhausted
@@ -492,6 +534,7 @@ impl ExecutionStreamError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use prost::Message;
 
     struct PendingConnector;
     struct PendingConnection;
@@ -553,6 +596,15 @@ mod tests {
         );
     }
 
+    #[test]
+    fn trades_stream_wire_uses_generated_account_and_ping_fields_exactly() {
+        let request = trades_stream_request(vec!["sandbox-account".into()], 5_000);
+        let bytes = request.encode_to_vec();
+        let decoded = v1::TradesStreamRequest::decode(bytes.as_slice()).expect("generated decode");
+        assert_eq!(decoded.accounts, vec!["sandbox-account"]);
+        assert_eq!(decoded.ping_delay_ms, Some(5_000));
+    }
+
     #[tokio::test]
     async fn missing_ack_faults_within_its_own_bound() {
         let supervisor = ExecutionStreamSupervisor::with_connector(
@@ -574,7 +626,18 @@ mod tests {
         let mut handle = supervisor
             .start(ExecutionStreamKind::Trades, vec!["a".into()])
             .expect("stream");
-        assert_eq!(handle.recv().await, Some(ExecutionStreamEvent::Connected));
+        assert!(matches!(
+            handle.recv().await,
+            Some(ExecutionStreamEvent::Connected(
+                ExecutionStreamConnectionEvidence {
+                    kind: ExecutionStreamKind::Trades,
+                    account_count: 1,
+                    ping_delay_ms: DEFAULT_EXECUTION_PING_DELAY_MS,
+                    request_id: None,
+                    tracking_id: None,
+                }
+            ))
+        ));
         let event = timeout(Duration::from_millis(100), handle.recv())
             .await
             .expect("bounded ACK timeout");

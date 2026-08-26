@@ -233,6 +233,26 @@ impl<S: MutationEvidenceStore> MutationRecovery<S> {
         }
     }
 
+    /// Resolves persisted UNKNOWN from authoritative broker-order readback without resubmission.
+    pub fn resolve_order_accepted(
+        &mut self,
+        client_request_id: &ClientRequestId,
+        broker_order_id: BrokerOrderId,
+    ) -> Result<MutationEvidence, StoreError> {
+        let stored = self
+            .store
+            .load(client_request_id)?
+            .ok_or_else(|| StoreError("mutation dispatch evidence is not persisted".into()))?;
+        if stored.outcome != MutationOutcome::Unknown {
+            return Err(StoreError(format!(
+                "authoritative order readback cannot resolve {:?} evidence",
+                stored.outcome
+            )));
+        }
+        let evidence = stored.with_broker_order_id(broker_order_id);
+        self.persist_authoritative_outcome(evidence, AuthoritativeMutationOutcome::Accepted)
+    }
+
     #[must_use]
     pub fn into_store(self) -> S {
         self.store

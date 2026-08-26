@@ -50,6 +50,21 @@ impl<S: MutationEvidenceStore> ExecutionMutationDispatcher<S> {
         self.recovery.decision(id)
     }
 
+    /// Resolves a persisted UNKNOWN only after authoritative order readback identifies broker order.
+    pub fn reconcile_order_accepted(
+        &mut self,
+        client_request_id: &ClientRequestId,
+        broker_order_id: BrokerOrderId,
+    ) -> Result<MutationEvidence, StoreError> {
+        if self.recovery.decision(client_request_id)? != MutationDecision::Reconcile {
+            return Err(StoreError(
+                "mutation evidence does not require reconciliation".into(),
+            ));
+        }
+        self.recovery
+            .resolve_order_accepted(client_request_id, broker_order_id)
+    }
+
     #[must_use]
     pub fn into_store(self) -> S {
         self.recovery.into_store()
@@ -415,12 +430,13 @@ mod tests {
                 attempt: 1,
                 mutation: true,
             },
-            kind: GrpcErrorKind::Provider(crate::GrpcProviderError {
+            kind: GrpcErrorKind::Provider(Box::new(crate::GrpcProviderError {
                 code,
                 message: String::new(),
                 details: vec![],
                 tracking_id: None,
-            }),
+                rate_limit: Box::default(),
+            })),
         };
         assert!(!authoritative_rejection(&error(Code::DeadlineExceeded)));
         assert!(!authoritative_rejection(&error(Code::Unavailable)));
@@ -439,6 +455,28 @@ mod tests {
         assert_eq!(
             dispatcher.decision(&id).expect("decision"),
             MutationDecision::Reconcile
+        );
+    }
+
+    #[test]
+    fn authoritative_order_readback_resolves_unknown_without_resubmit() {
+        let mut dispatcher = ExecutionMutationDispatcher::new(MemoryStore::default());
+        let id = ClientRequestId::new("request-id").expect("id");
+        dispatcher
+            .recovery
+            .persist_before_dispatch(id.clone(), None)
+            .expect("persist unknown");
+        let evidence = dispatcher
+            .reconcile_order_accepted(&id, BrokerOrderId::new("broker-id").expect("broker id"))
+            .expect("authoritative reconciliation");
+        assert_eq!(evidence.outcome(), vox_domain::MutationOutcome::Accepted);
+        assert_eq!(
+            evidence.broker_order_id().map(|value| value.as_str()),
+            Some("broker-id")
+        );
+        assert_eq!(
+            dispatcher.decision(&id).expect("decision"),
+            MutationDecision::DoNotSubmit
         );
     }
 }
