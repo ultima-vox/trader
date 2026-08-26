@@ -218,11 +218,25 @@ Protection is part of the canonical Order Ticket, not a separate advanced screen
 - Protection state follows the same runtime language as any order: `READY`,
   `RECONCILING`, `DEGRADED`, `HALTED`, plus `UNKNOWN` when the broker has not
   answered yet.
-- **The broker is the authority on a live trailing stop.** The readback shown in the
-  ticket and on the position is whatever the provider last confirmed: order state
-  (`ACTIVE`, `PENDING`, `REPLACED`), current level, reference level, activation
-  condition and the time of the broker's answer. The terminal never recomputes a
-  level, never smooths a discrepancy and never fills a gap with a plausible number.
+- **The broker is the authority on a live protection order.** The readback shown in the
+  ticket and on the position is whatever the provider last confirmed: current level,
+  reference level, activation condition and the time of the broker's answer. The
+  terminal never recomputes a level, never smooths a discrepancy and never fills a gap
+  with a plausible number.
+- The runtime state of a protection order is one of five, and all five come from the
+  broker:
+
+  | State | Meaning | Rendering |
+  | --- | --- | --- |
+  | `ACTIVE` | order lives at the broker, confirmed by a fresh answer | positive |
+  | `STALE` | last confirmation is older than the freshness budget; last known level shown with its age (`BRK_PROTECT_STALE`) | warning + stale bar |
+  | `RECONCILING` | placement or replacement dispatched, outcome not confirmed (`UNKNOWN_AFTER_DISPATCH`); the position counts as unprotected and re-dispatch is blocked | violet unknown |
+  | `TRIGGERED` | the stop fired; trigger price, fill price and slippage are stated separately | info, with `SL`/`TP` and `F` journal events |
+  | `CANCELLED` | removed by the operator, by the broker, or by closing the position; the reason is always named | neutral, plus an explicit "position is unprotected" verdict |
+
+  `STALE` is an age, not a refusal. `RECONCILING` is an unfinished answer, not a
+  rejection. `TRIGGERED` is ordinary execution, not an error. `CANCELLED` never
+  restores itself and never silently implies protection is still in place.
 - Direction semantics are displayed, not enforced, by the UI: for a long position the
   level follows the favourable high-water mark and never widens downward when price
   falls; for a short it mirrors against the favourable low-water mark. A field the

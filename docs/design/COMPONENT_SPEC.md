@@ -224,11 +224,16 @@ never a silent client-side fallback. Every block names the resulting broker orde
 (`STOP_LOSS`, `TAKE_PROFIT`, `TRAILING_STOP`) and the level as absolute price + distance.
 States: off, on, inherited, overridden, validating, rejected, `UNKNOWN`, unsupported.
 
-### TrailingReadback — `.vox-trailing__state`
-Broker-authoritative runtime state of a live trailing stop, rendered as label/value
-pairs: order state badge (`ACTIVE` positive · `PENDING` warning · `REPLACED` info),
-current level, reference level (high-water for long, low-water for short), activation
-condition, and the time the broker last answered. `REPLACED` shows `было` / `стало`.
+### ProtectionReadback — `.vox-trailing__state`
+Broker-authoritative runtime state of a live protection order, rendered as label/value
+pairs: state badge, current level, reference level (high-water for long, low-water for
+short), activation condition, and the time the broker last answered.
+State badges: `ACTIVE` (`--positive`) · `STALE` (`--warning`, plus `.vox-stale-bar`
+naming the age and `BRK_PROTECT_STALE`) · `RECONCILING` (`--unknown`, plus
+`.vox-recon` with `UNKNOWN_AFTER_DISPATCH`, re-dispatch disabled, position counted as
+unprotected) · `TRIGGERED` (`--info`, trigger price / fill price / slippage as separate
+values and `SL`+`F` journal events) · `CANCELLED` (neutral, `.is-off` head, reason and
+actor named, followed by a `--warning` verdict that the position is now unprotected).
 Any field the provider does not report renders `.is-unknown`, never `0` and never an
 error. The terminal displays this state; it never recomputes or smooths it.
 

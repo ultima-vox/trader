@@ -874,6 +874,8 @@
       <div class="vox-widget vox-ticket" style="width:auto">
         <div class="vox-widget__header"><span class="vox-widget__title">Трейлинг · состояние у брокера</span><span class="vox-trailing__badge">брокерский</span></div>
         <div class="vox-ticket__body">
+          <div class="ref__note">Пять состояний защитной заявки, и все пять приходят от брокера. Терминал не вычисляет уровень, не сдвигает его сам и не переводит заявку из одного состояния в другое по собственной инициативе.</div>
+
           <div class="vox-protect__block vox-protect__block--sl">
             <div class="vox-protect__head">
               <span class="vox-protect__title"><span class="vox-protect__mark">SL</span>Длинная позиция · 1,50 %</span>
@@ -885,40 +887,81 @@
                 <div><div class="vox-trailing__state-label">Текущий уровень</div><div class="vox-trailing__state-value">313,66 ₽</div></div>
                 <div><div class="vox-trailing__state-label">Референс (максимум)</div><div class="vox-trailing__state-value">318,44 ₽</div></div>
                 <div><div class="vox-trailing__state-label">Активация</div><div class="vox-trailing__state-value">сразу</div></div>
-                <div><div class="vox-trailing__state-label">Обновлён брокером</div><div class="vox-trailing__state-value">11:42:04</div></div>
+                <div><div class="vox-trailing__state-label">Ответ брокера</div><div class="vox-trailing__state-value">11:42:04 · 2 c назад</div></div>
               </div>
               <div class="vox-protect__result"><span class="vox-text--caption">Заявка у брокера</span><span class="vox-protect__result-value">TRAILING_STOP · −4,78 ₽</span></div>
-              <div class="vox-protect__hint">Для длинной позиции уровень идёт за благоприятным максимумом и при падении цены вниз не расширяется. Показывается то, что вернул брокер: терминал не пересчитывает уровень сам и не ведёт собственный трейлинг.</div>
+              <div class="vox-protect__hint">Заявка живёт у брокера и подтверждена свежим ответом. Для длинной позиции уровень идёт за благоприятным максимумом и при падении цены вниз не расширяется; для короткой семантика зеркальна относительно благоприятного минимума.</div>
             </div>
           </div>
+
           <div class="vox-protect__block vox-protect__block--sl">
             <div class="vox-protect__head">
               <span class="vox-protect__title"><span class="vox-protect__mark">SL</span>Короткая позиция · 2,00 %</span>
               <span class="vox-protect__spacer"></span>
-              <span class="vox-badge vox-badge--warning"><span class="vox-dot"></span>PENDING</span>
+              <span class="vox-badge vox-badge--warning"><span class="vox-dot"></span>STALE</span>
             </div>
             <div class="vox-protect__body">
               <div class="vox-trailing__state">
-                <div><div class="vox-trailing__state-label">Текущий уровень</div><div class="vox-trailing__state-value is-unknown">ожидает подтверждения</div></div>
+                <div><div class="vox-trailing__state-label">Последний уровень</div><div class="vox-trailing__state-value">150,94 ₽</div></div>
                 <div><div class="vox-trailing__state-label">Референс (минимум)</div><div class="vox-trailing__state-value">147,98 ₽</div></div>
                 <div><div class="vox-trailing__state-label">Активация</div><div class="vox-trailing__state-value">при 146,50 ₽</div></div>
-                <div><div class="vox-trailing__state-label">Обновлён брокером</div><div class="vox-trailing__state-value is-unknown">—</div></div>
+                <div><div class="vox-trailing__state-label">Ответ брокера</div><div class="vox-trailing__state-value">11:38:12 · 3 мин 54 c назад</div></div>
               </div>
-              <div class="vox-protect__hint">Для короткой позиции семантика зеркальна: уровень следует за благоприятным минимумом и вверх не расширяется. Пока брокер не подтвердил заявку, состояние — PENDING, а не «ошибка».</div>
+              <div class="vox-stale-bar"><span class="vox-dot"></span>Показан последний известный уровень возрастом 3 мин 54 c. Заявка, вероятно, жива, но текущее значение не подтверждено <span class="vox-reason-code">BRK_PROTECT_STALE</span></div>
+              <div class="vox-protect__hint">STALE — это возраст ответа, а не отказ. Уровень не экстраполируется вперёд и не пересчитывается по текущей цене.</div>
             </div>
           </div>
+
           <div class="vox-protect__block vox-protect__block--sl">
             <div class="vox-protect__head">
-              <span class="vox-protect__title"><span class="vox-protect__mark">SL</span>Уровень заменён брокером</span>
+              <span class="vox-protect__title"><span class="vox-protect__mark">SL</span>Изменение отступа · 1,50 % → 1,00 %</span>
               <span class="vox-protect__spacer"></span>
-              <span class="vox-badge vox-badge--info"><span class="vox-dot"></span>REPLACED</span>
+              <span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>RECONCILING</span>
             </div>
             <div class="vox-protect__body">
-              <div class="vox-protect__result"><span class="vox-text--caption">Было</span><span class="vox-protect__result-value">313,66 ₽</span></div>
-              <div class="vox-protect__result"><span class="vox-text--caption">Стало</span><span class="vox-protect__result-value">314,20 ₽</span></div>
-              <div class="vox-protect__hint">Брокер заменил стоп-заявку после сдвига референса. Показывается его последнее подтверждённое значение с временем ответа — расхождение не прячется и не выравнивается на клиенте.</div>
+              <div class="vox-trailing__state">
+                <div><div class="vox-trailing__state-label">Уровень до изменения</div><div class="vox-trailing__state-value">313,66 ₽</div></div>
+                <div><div class="vox-trailing__state-label">Запрошено</div><div class="vox-trailing__state-value">315,26 ₽</div></div>
+                <div><div class="vox-trailing__state-label">Подтверждено брокером</div><div class="vox-trailing__state-value is-unknown">UNKNOWN</div></div>
+                <div><div class="vox-trailing__state-label">Без ответа</div><div class="vox-trailing__state-value">00:09</div></div>
+              </div>
+              <div class="vox-recon">
+                <div class="vox-recon__head"><span class="vox-dot"></span><span class="vox-recon__title">Замена стоп-заявки не подтверждена</span><span class="vox-reason-code">UNKNOWN_AFTER_DISPATCH</span></div>
+                <div class="vox-recon__body">Старая заявка могла быть снята, новая — ещё не подтверждена. Пока идёт сверка, позиция считается незащищённой, и повторная отправка изменения запрещена.</div>
+                <div class="vox-recon__actions"><button class="vox-btn vox-btn--primary" type="button">Запросить состояние у брокера</button><button class="vox-btn vox-btn--secondary" type="button" aria-disabled="true">Повторить изменение</button></div>
+              </div>
+              <div class="vox-protect__hint">RECONCILING — то же состояние, что и у любой отправленной команды: незавершённый ответ, а не отказ. Разрешение принадлежит рантайму сверки (задача #11).</div>
             </div>
           </div>
+
+          <div class="vox-protect__block vox-protect__block--sl">
+            <div class="vox-protect__head">
+              <span class="vox-protect__title"><span class="vox-protect__mark">SL</span>Стоп сработал</span>
+              <span class="vox-protect__spacer"></span>
+              <span class="vox-badge vox-badge--info"><span class="vox-dot"></span>TRIGGERED</span>
+            </div>
+            <div class="vox-protect__body">
+              <div class="vox-trailing__state">
+                <div><div class="vox-trailing__state-label">Уровень срабатывания</div><div class="vox-trailing__state-value">313,66 ₽</div></div>
+                <div><div class="vox-trailing__state-label">Исполнено</div><div class="vox-trailing__state-value">313,60 ₽ · 1 200 шт</div></div>
+                <div><div class="vox-trailing__state-label">Проскальзывание</div><div class="vox-trailing__state-value">−0,06 ₽</div></div>
+                <div><div class="vox-trailing__state-label">Время</div><div class="vox-trailing__state-value">12:04:31</div></div>
+              </div>
+              <div class="ref__demo"><span class="vox-marker vox-marker--sl">SL</span><span class="vox-text--dense">событие журнала: стоп сработал</span><span class="vox-marker vox-marker--f">F</span><span class="vox-text--dense">исполнение по 313,60 ₽</span></div>
+              <div class="vox-protect__hint">Срабатывание — обычное исполнение, а не ошибка: цена срабатывания и цена исполнения показываются отдельно, проскальзывание называется. Позиция после этого закрыта, защита больше не активна.</div>
+            </div>
+          </div>
+
+          <div class="vox-protect__block vox-protect__block--sl is-off">
+            <div class="vox-protect__head">
+              <span class="vox-protect__title"><span class="vox-protect__mark">SL</span>Заявка снята</span>
+              <span class="vox-protect__spacer"></span>
+              <span class="vox-badge"><span class="vox-dot"></span>CANCELLED</span>
+            </div>
+          </div>
+          <div class="vox-protect__result"><span class="vox-text--caption">Причина снятия</span><span class="vox-protect__result-value">оператор · 11:58:02</span></div>
+          <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Позиция осталась без защиты</div><div class="vox-risk__reason">Снятие стоп-заявки не закрывает позицию и не восстанавливается само <span class="vox-reason-code">PROTECT_CANCELLED_UNPROTECTED</span></div></div></div>
+          <div class="ref__note">CANCELLED охватывает снятие оператором, снятие брокером и снятие при закрытии позиции — причина называется всегда. Отсутствие защиты после снятия — факт, который экран обязан показать, а не молчаливое состояние.</div>
         </div>
       </div>
 

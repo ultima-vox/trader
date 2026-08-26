@@ -110,9 +110,11 @@ Change it in the same commit as `tokens.css`.
 - A dispatch without a broker answer is `UNKNOWN_AFTER_DISPATCH`: violet unknown
   semantic, silence age stated, re-submission blocked until reconciliation answers
   (`RECON_CONFIRMED` / `RECON_NOT_FOUND` / `RECON_PENDING`, issue #11). Never red.
-- Trailing readback is broker-authoritative: order state (`ACTIVE` / `PENDING` /
-  `REPLACED`), current and reference level, activation and the broker's answer time.
-  Unreported fields stay `UNKNOWN`; the terminal never recomputes a level.
+- Protection readback is broker-authoritative. Runtime states are exactly `ACTIVE` /
+  `STALE` / `RECONCILING` / `TRIGGERED` / `CANCELLED`, alongside current and reference
+  level, activation and the broker's answer time. Unreported fields stay `UNKNOWN`; the
+  terminal never recomputes a level. `CANCELLED` always states the reason and that the
+  position is now unprotected.
 - Re-applying a default to existing positions is a separate capital-affecting flow:
   preview, affected count, per-position `было → станет`, consequences, typed
   confirmation, per-position result including `ОТКЛОНЕНО` and reconciliation.
