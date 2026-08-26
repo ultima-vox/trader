@@ -27,11 +27,23 @@ Native T-Invest trailing fields are always used. No market-data polling or synth
 exists. Fixed stop-loss and take-profit are independent legs, each with distinct broker request ID.
 Provider trailing state, favorable extreme, execution price, stop identity and raw status remain
 available in canonical readback. Generated proto and current provider schema encode trailing stops
-as `STOP_ORDER_TYPE_TAKE_PROFIT` plus `TAKE_PROFIT_TYPE_TRAILING`, typed indent/spread fields and
-currency price input. Omitted activation/spread remain absent. Vox policy requires
-`instant_execution=true` when activation price is omitted. Complete wire invariants are audited
-before dispatch, and redacted actual request shape is included in live failure evidence. Unsupported
-protection fails with explicit capability error.
+as `STOP_ORDER_TYPE_TAKE_PROFIT` plus `TAKE_PROFIT_TYPE_TRAILING` and typed indent/spread fields.
+Delayed activation requires an explicit `stop_price` that has not already been reached for the
+position direction; immediate activation omits `stop_price` and sets `instant_execution=true`.
+Combining explicit and immediate activation fails before dispatch. Provider `30035` is treated as
+documented invalid `stop_price`, never an unknown outage. Complete wire invariants are audited before
+dispatch, and redacted actual request shape is included in live failure evidence. Unsupported
+protection fails with explicit capability error. Sources: [StopOrders contract](https://developer.tbank.ru/invest/services/stop-orders/stoporders/),
+[error 30035](https://developer.tbank.ru/invest/intro/developer/error-codes/errors).
+
+Execution price convention is explicit and broker-neutral in commands. Adapter derives it from
+authoritative instrument kind, operation and environment. Production `PostOrder`, `PostOrderAsync`,
+`ReplaceOrder` and `GetOrderState` use settlement currency for shares/ETF/currency/bonds and points
+for futures sourced in points. Production `PostStopOrder` inputs and every Sandbox mutation input
+use settlement currency. Unknown convention fails closed; generated requests never use
+`PRICE_TYPE_UNSPECIFIED`. These rules follow T-Bank's current
+[price-unit guide](https://developer.tbank.ru/invest/intro/useful-info/points) and generated
+`PriceType` contract.
 
 ## Nautilus boundary
 

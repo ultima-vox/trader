@@ -1,9 +1,12 @@
 use prost::Message;
 use std::collections::BTreeSet;
+use vox_domain::{FixedPoint, OrderSide, RegularOrderCommand, RegularOrderType, TimeInForce};
 use vox_tinvest::TInvestGrpcClient;
 use vox_tinvest::execution::{
-    EXECUTION_STREAM_PAYLOADS, ORDERS_SERVICE_METHODS, ORDERS_STREAM_METHODS,
-    STOP_ORDERS_SERVICE_METHODS,
+    EXECUTION_STREAM_PAYLOADS, ExecutionPriceOperation, ORDERS_SERVICE_METHODS,
+    ORDERS_STREAM_METHODS, STOP_ORDERS_SERVICE_METHODS, TInvestExecutionEnvironment,
+    TInvestInstrumentKind, async_regular_order_request, execution_price_convention,
+    regular_order_request,
 };
 use vox_tinvest::generated::v1;
 use vox_tinvest::market_data::{MARKET_DATA_SERVICE_METHODS, MARKET_DATA_STREAM_METHODS};
@@ -217,6 +220,57 @@ fn account_read_side_matrix_matches_every_official_service_rpc() {
     );
 }
 
+#[test]
+fn generated_regular_order_wire_requires_explicit_operation_price_type() {
+    let command = |price_convention| RegularOrderCommand {
+        account_id: "account".into(),
+        instrument_id: "instrument".into(),
+        client_request_id: "550e8400-e29b-41d4-a716-446655440030".into(),
+        quantity_lots: 1,
+        price: Some(FixedPoint::from_units_nano(100, 0).expect("price")),
+        price_convention,
+        side: OrderSide::Buy,
+        order_type: RegularOrderType::Limit,
+        time_in_force: Some(TimeInForce::Day),
+        confirm_margin_trade: false,
+    };
+    let share = command(execution_price_convention(
+        TInvestInstrumentKind::Share,
+        ExecutionPriceOperation::RegularOrder,
+        TInvestExecutionEnvironment::Production,
+    ));
+    assert_eq!(
+        regular_order_request(&share).expect("share").price_type,
+        v1::PriceType::Currency as i32
+    );
+    assert_eq!(
+        async_regular_order_request(&share)
+            .expect("share async")
+            .price_type,
+        Some(v1::PriceType::Currency as i32)
+    );
+    let future = command(execution_price_convention(
+        TInvestInstrumentKind::Future,
+        ExecutionPriceOperation::RegularOrder,
+        TInvestExecutionEnvironment::Production,
+    ));
+    assert_eq!(
+        regular_order_request(&future).expect("future").price_type,
+        v1::PriceType::Point as i32
+    );
+    let sandbox_future = command(execution_price_convention(
+        TInvestInstrumentKind::Future,
+        ExecutionPriceOperation::RegularOrder,
+        TInvestExecutionEnvironment::Sandbox,
+    ));
+    assert_eq!(
+        regular_order_request(&sandbox_future)
+            .expect("sandbox future")
+            .price_type,
+        v1::PriceType::Currency as i32
+    );
+}
+
 fn rpc_inventory(proto: &str) -> Vec<(String, String)> {
     let mut service = None;
     let mut methods = Vec::new();
@@ -245,6 +299,11 @@ fn execution_matrix_matches_every_pinned_rpc_and_stream_branch() {
     assert_eq!(
         matrix["revision"],
         "762e720e27164213f41cac0b226c5698c2ae8199"
+    );
+    assert!(
+        matrix["common"]["price_conventions"]
+            .as_str()
+            .is_some_and(|value| value.contains("UNSPECIFIED is forbidden"))
     );
     let official = rpc_inventory(ORDERS_PROTO)
         .into_iter()

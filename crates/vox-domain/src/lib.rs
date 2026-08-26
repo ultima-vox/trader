@@ -10,11 +10,12 @@ pub mod readiness;
 
 pub use environment::{Environment, LiveMutationError, MutationAuthorization, MutationGuard};
 pub use execution::{
-    CancelOrderCommand, CancelStopOrderCommand, ExecutionMutationState, OrderSide, PositionSide,
-    ProtectionCapability, ProtectionCapabilityError, ProtectionEstablishmentState,
-    ProtectionLifecycle, ProtectionPlan, ProviderOrderIdentityKind, RegularOrderCommand,
-    RegularOrderType, ReplaceOrderCommand, StopLossProtection, TakeProfitProtection, TimeInForce,
-    TrailingDistance, TrailingDistanceMode, TrailingSemanticReference,
+    CancelOrderCommand, CancelStopOrderCommand, ExecutionMutationState, ExecutionPriceConvention,
+    OrderSide, PositionSide, ProtectionCapability, ProtectionCapabilityError,
+    ProtectionEstablishmentState, ProtectionLifecycle, ProtectionPlan, ProviderOrderIdentityKind,
+    RegularOrderCommand, RegularOrderType, ReplaceOrderCommand, StopLossProtection,
+    TakeProfitProtection, TimeInForce, TrailingDistance, TrailingDistanceMode,
+    TrailingSemanticReference,
 };
 pub use identity::{
     BrokerFillId, BrokerOrderId, BrokerStopOrderId, ClientOrderId, ClientRequestId,

@@ -66,7 +66,7 @@ pub fn to_nautilus_regular_order(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vox_domain::FixedPoint;
+    use vox_domain::{ExecutionPriceConvention, FixedPoint};
 
     fn command(order_type: RegularOrderType) -> RegularOrderCommand {
         RegularOrderCommand {
@@ -76,6 +76,7 @@ mod tests {
             quantity_lots: 2,
             price: (order_type == RegularOrderType::Limit)
                 .then(|| FixedPoint::from_units_nano(10, 500_000_000).expect("price")),
+            price_convention: ExecutionPriceConvention::SettlementCurrency,
             side: VoxOrderSide::Buy,
             order_type,
             time_in_force: (order_type == RegularOrderType::Limit)

@@ -19,7 +19,7 @@ use crate::{GrpcError, GrpcResponseMetadata, GrpcStreamError, RetryPolicy, TInve
 
 pub const DEFAULT_EXECUTION_PING_DELAY_MS: i32 = 120_000;
 pub const MIN_EXECUTION_PING_DELAY_MS: i32 = 5_000;
-pub const MAX_EXECUTION_PING_DELAY_MS: i32 = 120_000;
+pub const MAX_EXECUTION_PING_DELAY_MS: i32 = 180_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExecutionStreamKind {
@@ -476,7 +476,7 @@ pub enum ExecutionStreamError {
     ZeroStaleTimeout,
     #[error("execution stream subscription ACK timeout must be positive")]
     ZeroSubscriptionAckTimeout,
-    #[error("execution stream ping delay must be within 5000..=120000 ms")]
+    #[error("execution stream ping delay must be within 5000..=180000 ms")]
     InvalidPingDelay,
     #[error("execution stream requires at least one account")]
     NoAccounts,
@@ -573,6 +573,19 @@ mod tests {
 
     #[test]
     fn validates_bounded_configuration_and_accounts() {
+        let config = ExecutionStreamConfig {
+            ping_delay_ms: 180_000,
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+        let config = ExecutionStreamConfig {
+            ping_delay_ms: 180_001,
+            ..Default::default()
+        };
+        assert_eq!(
+            config.validate(),
+            Err(ExecutionStreamError::InvalidPingDelay)
+        );
         let config = ExecutionStreamConfig {
             event_capacity: 0,
             ..Default::default()

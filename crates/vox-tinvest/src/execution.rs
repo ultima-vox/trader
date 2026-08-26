@@ -4,10 +4,11 @@ use prost_types::Timestamp;
 use thiserror::Error;
 use uuid::Uuid;
 use vox_domain::{
-    CancelOrderCommand, CancelStopOrderCommand, FixedPoint, OrderSide, PositionSide,
-    ProtectionCapability, ProtectionCapabilityError, ProtectionPlan, ProviderOrderIdentityKind,
-    RegularOrderCommand, RegularOrderType, ReplaceOrderCommand, StopLossProtection,
-    TakeProfitProtection, TimeInForce, TrailingDistance, TrailingDistanceMode, UnitsNano,
+    CancelOrderCommand, CancelStopOrderCommand, ExecutionPriceConvention, FixedPoint, OrderSide,
+    PositionSide, ProtectionCapability, ProtectionCapabilityError, ProtectionPlan,
+    ProviderOrderIdentityKind, RegularOrderCommand, RegularOrderType, ReplaceOrderCommand,
+    StopLossProtection, TakeProfitProtection, TimeInForce, TrailingDistance, TrailingDistanceMode,
+    UnitsNano,
 };
 
 use crate::account::ProviderTimestamp;
@@ -280,9 +281,58 @@ pub struct ProtectionRequestContext {
     pub instrument_id: String,
     pub quantity_lots: i64,
     pub position_side: PositionSide,
+    pub price_convention: ExecutionPriceConvention,
+    pub reference_price: FixedPoint,
     pub expire_at: Option<ProviderTimestamp>,
     pub confirm_margin_trade: bool,
     pub request_ids: ProtectionRequestIds,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TInvestInstrumentKind {
+    Share,
+    Etf,
+    Currency,
+    Bond,
+    Future,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExecutionPriceOperation {
+    RegularOrder,
+    StopOrder,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TInvestExecutionEnvironment {
+    Production,
+    Sandbox,
+}
+
+/// Maps authoritative provider instrument kind, operation and environment to documented price
+/// convention. Sandbox accepts settlement-currency inputs for every instrument class.
+#[must_use]
+pub const fn execution_price_convention(
+    instrument: TInvestInstrumentKind,
+    operation: ExecutionPriceOperation,
+    environment: TInvestExecutionEnvironment,
+) -> ExecutionPriceConvention {
+    match (environment, operation, instrument) {
+        (
+            TInvestExecutionEnvironment::Production,
+            ExecutionPriceOperation::RegularOrder,
+            TInvestInstrumentKind::Future,
+        ) => ExecutionPriceConvention::Points,
+        _ => ExecutionPriceConvention::SettlementCurrency,
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OrderStateRequestContext {
+    pub account_id: String,
+    pub order_id: String,
+    pub order_id_kind: Option<ProviderOrderIdentityKind>,
+    pub price_convention: ExecutionPriceConvention,
 }
 
 pub fn regular_order_request(
@@ -305,7 +355,7 @@ pub fn regular_order_request(
         order_id: command.client_request_id.clone(),
         instrument_id: command.instrument_id.clone(),
         time_in_force: command.time_in_force.map_or(0, time_in_force),
-        price_type: v1::PriceType::Unspecified as i32,
+        price_type: price_type(command.price_convention),
         confirm_margin_trade: command.confirm_margin_trade,
         ..Default::default()
     })
@@ -324,7 +374,7 @@ pub fn async_regular_order_request(
         order_type: validated.order_type,
         order_id: validated.order_id,
         time_in_force: command.time_in_force.map(time_in_force),
-        price_type: Some(v1::PriceType::Unspecified as i32),
+        price_type: Some(price_type(command.price_convention)),
         confirm_margin_trade: validated.confirm_margin_trade,
     })
 }
@@ -349,8 +399,27 @@ pub fn replace_order_request(
         idempotency_key: command.replacement_request_id.clone(),
         quantity: command.quantity_lots,
         price: Some(quotation(command.price)?),
-        price_type: Some(v1::PriceType::Unspecified as i32),
+        price_type: Some(price_type(command.price_convention)),
         confirm_margin_trade: command.confirm_margin_trade,
+    })
+}
+
+pub fn order_state_request(
+    context: &OrderStateRequestContext,
+) -> Result<v1::GetOrderStateRequest, ExecutionValidationError> {
+    validate_text("account_id", &context.account_id)?;
+    validate_text("order_id", &context.order_id)?;
+    if matches!(
+        context.order_id_kind,
+        Some(ProviderOrderIdentityKind::ClientRequest)
+    ) {
+        validate_request_id(&context.order_id)?;
+    }
+    Ok(v1::GetOrderStateRequest {
+        account_id: context.account_id.clone(),
+        order_id: context.order_id.clone(),
+        price_type: price_type(context.price_convention),
+        order_id_type: context.order_id_kind.map(order_id_type),
     })
 }
 
@@ -450,6 +519,16 @@ pub fn protection_requests(
                 if activation_price.is_none() && *instant_execution != Some(true) {
                     return Err(ExecutionValidationError::TrailingActivationRequired);
                 }
+                if activation_price.is_some() && *instant_execution == Some(true) {
+                    return Err(ExecutionValidationError::ConflictingTrailingActivation);
+                }
+                if let Some(activation_price) = activation_price {
+                    validate_pending_trailing_activation(
+                        context.position_side,
+                        context.reference_price,
+                        *activation_price,
+                    )?;
+                }
                 (
                     None,
                     activation_price.map(quotation).transpose()?,
@@ -474,7 +553,7 @@ pub fn protection_requests(
             exchange_order_type,
             take_profit_type,
             trailing_data,
-            price_type: v1::PriceType::Currency as i32,
+            price_type: price_type(context.price_convention),
             order_id: request_id.to_owned(),
             confirm_margin_trade: context.confirm_margin_trade,
             instant_execution,
@@ -511,6 +590,16 @@ fn take_profit_request(
     if protection.trailing.is_none() && protection.trigger_price.is_none() {
         return Err(ExecutionValidationError::MissingTakeProfitTrigger);
     }
+    if protection.trailing.is_some() {
+        let activation_price = protection
+            .trigger_price
+            .ok_or(ExecutionValidationError::TrailingActivationRequired)?;
+        validate_pending_trailing_activation(
+            context.position_side,
+            context.reference_price,
+            activation_price,
+        )?;
+    }
     let trailing_data = protection
         .trailing
         .map(|distance| trailing_request(distance, None))
@@ -536,7 +625,7 @@ fn take_profit_request(
             v1::TakeProfitType::Regular as i32
         },
         trailing_data,
-        price_type: v1::PriceType::Currency as i32,
+        price_type: price_type(context.price_convention),
         order_id: request_id.to_owned(),
         confirm_margin_trade: context.confirm_margin_trade,
         instant_execution: None,
@@ -581,7 +670,10 @@ pub fn audit_stop_order_request(
         positive_wire_quotation("stop_price", stop_price)?;
     }
     let trailing = request.take_profit_type == v1::TakeProfitType::Trailing as i32;
-    if request.price_type != v1::PriceType::Currency as i32 {
+    if !matches!(
+        v1::PriceType::try_from(request.price_type),
+        Ok(v1::PriceType::Currency | v1::PriceType::Point)
+    ) {
         return Err(ExecutionValidationError::InvalidStopWire("price_type"));
     }
     if request.instant_execution.is_some() && !trailing {
@@ -611,6 +703,9 @@ pub fn audit_stop_order_request(
     }
     if request.stop_price.is_none() && request.instant_execution != Some(true) {
         return Err(ExecutionValidationError::TrailingActivationRequired);
+    }
+    if request.stop_price.is_some() && request.instant_execution == Some(true) {
+        return Err(ExecutionValidationError::ConflictingTrailingActivation);
     }
     let data = request
         .trailing_data
@@ -649,7 +744,7 @@ pub fn audit_stop_order_request(
 pub fn stop_order_request_shape(request: &v1::PostStopOrderRequest) -> String {
     let trailing = request.trailing_data.as_ref();
     format!(
-        "quantity={}; price={:?}; stop_price={:?}; direction={}; expiration_type={}; stop_order_type={}; exchange_order_type={}; take_profit_type={}; trailing_indent={:?}; trailing_indent_type={:?}; trailing_spread={:?}; trailing_spread_type={:?}; price_type={}; instant_execution={:?}",
+        "quantity={}; price={:?}; stop_price={:?}; direction={}; expiration_type={}; stop_order_type={}; exchange_order_type={}; take_profit_type={}; trailing_indent={:?}; trailing_indent_type={:?}; trailing_spread={:?}; trailing_spread_type={:?}; price_type={:?}; instant_execution={:?}",
         request.quantity,
         request.price,
         request.stop_price,
@@ -662,7 +757,7 @@ pub fn stop_order_request_shape(request: &v1::PostStopOrderRequest) -> String {
         trailing.map(|value| value.indent_type),
         trailing.and_then(|value| value.spread.as_ref()),
         trailing.map(|value| value.spread_type),
-        request.price_type,
+        v1::PriceType::try_from(request.price_type),
         request.instant_execution,
     )
 }
@@ -1033,6 +1128,24 @@ fn validate_regular_price(
         _ => Ok(()),
     }
 }
+
+fn validate_pending_trailing_activation(
+    position_side: PositionSide,
+    reference_price: FixedPoint,
+    activation_price: FixedPoint,
+) -> Result<(), ExecutionValidationError> {
+    positive_fixed("reference_price", reference_price)?;
+    positive_fixed("activation_price", activation_price)?;
+    let pending = match position_side {
+        PositionSide::Long => activation_price > reference_price,
+        PositionSide::Short => activation_price < reference_price,
+    };
+    if pending {
+        Ok(())
+    } else {
+        Err(ExecutionValidationError::TrailingActivationAlreadyReached)
+    }
+}
 fn validate_text(field: &'static str, value: &str) -> Result<(), ExecutionValidationError> {
     if value.trim().is_empty() {
         Err(ExecutionValidationError::Missing(field))
@@ -1118,6 +1231,12 @@ const fn time_in_force(value: TimeInForce) -> i32 {
         TimeInForce::FillOrKill => v1::TimeInForceType::TimeInForceFillOrKill as i32,
     }
 }
+const fn price_type(value: ExecutionPriceConvention) -> i32 {
+    match value {
+        ExecutionPriceConvention::SettlementCurrency => v1::PriceType::Currency as i32,
+        ExecutionPriceConvention::Points => v1::PriceType::Point as i32,
+    }
+}
 const fn trailing_mode(value: TrailingDistanceMode) -> i32 {
     match value {
         TrailingDistanceMode::AbsolutePrice => v1::TrailingValueType::TrailingValueAbsolute as i32,
@@ -1156,6 +1275,10 @@ pub enum ExecutionValidationError {
     MissingTakeProfitTrigger,
     #[error("trailing stop requires activation price or instant execution")]
     TrailingActivationRequired,
+    #[error("trailing stop cannot combine explicit activation with instant execution")]
+    ConflictingTrailingActivation,
+    #[error("trailing activation price is already reached for position direction")]
+    TrailingActivationAlreadyReached,
     #[error("invalid generated stop-order wire invariant: {0}")]
     InvalidStopWire(&'static str),
     #[error("provider timestamp is invalid")]
@@ -1190,6 +1313,7 @@ mod tests {
             client_request_id: "550e8400-e29b-41d4-a716-446655440000".into(),
             quantity_lots: 1,
             price,
+            price_convention: ExecutionPriceConvention::SettlementCurrency,
             side: OrderSide::Buy,
             order_type: kind,
             time_in_force: (kind == RegularOrderType::Limit).then_some(TimeInForce::Day),
@@ -1211,6 +1335,123 @@ mod tests {
             .expect("valid limit");
         assert_eq!(request.quantity, 1);
         assert_eq!(request.instrument_id, "instrument");
+        assert_eq!(request.price_type, v1::PriceType::Currency as i32);
+    }
+
+    #[test]
+    fn operation_aware_price_conventions_encode_exact_wire_values() {
+        assert_eq!(
+            execution_price_convention(
+                TInvestInstrumentKind::Share,
+                ExecutionPriceOperation::RegularOrder,
+                TInvestExecutionEnvironment::Production,
+            ),
+            ExecutionPriceConvention::SettlementCurrency
+        );
+        assert_eq!(
+            execution_price_convention(
+                TInvestInstrumentKind::Bond,
+                ExecutionPriceOperation::RegularOrder,
+                TInvestExecutionEnvironment::Production,
+            ),
+            ExecutionPriceConvention::SettlementCurrency
+        );
+        assert_eq!(
+            execution_price_convention(
+                TInvestInstrumentKind::Future,
+                ExecutionPriceOperation::RegularOrder,
+                TInvestExecutionEnvironment::Production,
+            ),
+            ExecutionPriceConvention::Points
+        );
+        assert_eq!(
+            execution_price_convention(
+                TInvestInstrumentKind::Bond,
+                ExecutionPriceOperation::StopOrder,
+                TInvestExecutionEnvironment::Production,
+            ),
+            ExecutionPriceConvention::SettlementCurrency
+        );
+        assert_eq!(
+            execution_price_convention(
+                TInvestInstrumentKind::Future,
+                ExecutionPriceOperation::RegularOrder,
+                TInvestExecutionEnvironment::Sandbox,
+            ),
+            ExecutionPriceConvention::SettlementCurrency
+        );
+
+        let share = command(RegularOrderType::Limit, Some(fp(10)));
+        assert_eq!(
+            regular_order_request(&share)
+                .expect("share limit")
+                .price_type,
+            v1::PriceType::Currency as i32
+        );
+        assert_eq!(
+            async_regular_order_request(&share)
+                .expect("share async")
+                .price_type,
+            Some(v1::PriceType::Currency as i32)
+        );
+        let mut future = share.clone();
+        future.price_convention = ExecutionPriceConvention::Points;
+        assert_eq!(
+            regular_order_request(&future)
+                .expect("future limit")
+                .price_type,
+            v1::PriceType::Point as i32
+        );
+        let replacement = replace_order_request(&ReplaceOrderCommand {
+            account_id: "account".into(),
+            existing_order_id: "broker-order".into(),
+            existing_order_id_kind: Some(ProviderOrderIdentityKind::BrokerOrder),
+            replacement_request_id: "550e8400-e29b-41d4-a716-446655440020".into(),
+            quantity_lots: 1,
+            price: fp(10),
+            price_convention: ExecutionPriceConvention::SettlementCurrency,
+            confirm_margin_trade: false,
+        })
+        .expect("share replacement");
+        assert_eq!(replacement.price_type, Some(v1::PriceType::Currency as i32));
+        let state = order_state_request(&OrderStateRequestContext {
+            account_id: "account".into(),
+            order_id: "broker-order".into(),
+            order_id_kind: Some(ProviderOrderIdentityKind::BrokerOrder),
+            price_convention: ExecutionPriceConvention::Points,
+        })
+        .expect("future state");
+        assert_eq!(state.price_type, v1::PriceType::Point as i32);
+
+        let bond_stop = protection_requests(
+            &ProtectionPlan {
+                stop_loss: Some(StopLossProtection::Fixed {
+                    trigger_price: fp(95),
+                    limit_price: None,
+                }),
+                take_profit: None,
+            },
+            &ProtectionRequestContext {
+                account_id: "account".into(),
+                instrument_id: "bond".into(),
+                quantity_lots: 1,
+                position_side: PositionSide::Long,
+                price_convention: execution_price_convention(
+                    TInvestInstrumentKind::Bond,
+                    ExecutionPriceOperation::StopOrder,
+                    TInvestExecutionEnvironment::Production,
+                ),
+                reference_price: fp(100),
+                expire_at: None,
+                confirm_margin_trade: false,
+                request_ids: ProtectionRequestIds {
+                    stop_loss: Some("550e8400-e29b-41d4-a716-446655440021".into()),
+                    take_profit: None,
+                },
+            },
+        )
+        .expect("bond stop");
+        assert_eq!(bond_stop[0].price_type, v1::PriceType::Currency as i32);
     }
 
     #[test]
@@ -1238,6 +1479,8 @@ mod tests {
                 instrument_id: "instrument".into(),
                 quantity_lots: 2,
                 position_side: PositionSide::Long,
+                price_convention: ExecutionPriceConvention::SettlementCurrency,
+                reference_price: fp(100),
                 expire_at: None,
                 confirm_margin_trade: false,
                 request_ids: ProtectionRequestIds {
@@ -1248,6 +1491,7 @@ mod tests {
         )
         .expect("native protection");
         assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].direction, v1::StopOrderDirection::Sell as i32);
         assert_eq!(
             requests[0].take_profit_type,
             v1::TakeProfitType::Trailing as i32
@@ -1285,6 +1529,8 @@ mod tests {
             instrument_id: "instrument".into(),
             quantity_lots: 1,
             position_side: PositionSide::Short,
+            price_convention: ExecutionPriceConvention::SettlementCurrency,
+            reference_price: fp(100),
             expire_at: None,
             confirm_margin_trade: false,
             request_ids: ProtectionRequestIds {
@@ -1378,6 +1624,8 @@ mod tests {
                 instrument_id: "instrument".into(),
                 quantity_lots: 1,
                 position_side: PositionSide::Long,
+                price_convention: ExecutionPriceConvention::SettlementCurrency,
+                reference_price: fp(80),
                 expire_at: None,
                 confirm_margin_trade: false,
                 request_ids: ProtectionRequestIds {
@@ -1408,6 +1656,77 @@ mod tests {
             audit_stop_order_request(&malformed),
             Err(ExecutionValidationError::InvalidStopWire("trailing_spread"))
         );
+
+        let short = protection_requests(
+            &ProtectionPlan {
+                stop_loss: Some(StopLossProtection::Trailing {
+                    distance: TrailingDistance {
+                        value: fp(2),
+                        mode: TrailingDistanceMode::RelativePercent,
+                    },
+                    activation_price: Some(fp(90)),
+                    protective_spread: None,
+                    instant_execution: Some(false),
+                }),
+                take_profit: None,
+            },
+            &ProtectionRequestContext {
+                account_id: "account".into(),
+                instrument_id: "instrument".into(),
+                quantity_lots: 1,
+                position_side: PositionSide::Short,
+                price_convention: ExecutionPriceConvention::SettlementCurrency,
+                reference_price: fp(100),
+                expire_at: None,
+                confirm_margin_trade: false,
+                request_ids: ProtectionRequestIds {
+                    stop_loss: Some("550e8400-e29b-41d4-a716-446655440011".into()),
+                    take_profit: None,
+                },
+            },
+        )
+        .expect("short pending trailing");
+        assert_eq!(short[0].direction, v1::StopOrderDirection::Buy as i32);
+
+        let invalid = protection_requests(
+            &ProtectionPlan {
+                stop_loss: Some(StopLossProtection::Trailing {
+                    distance: TrailingDistance {
+                        value: fp(2),
+                        mode: TrailingDistanceMode::RelativePercent,
+                    },
+                    activation_price: Some(fp(90)),
+                    protective_spread: None,
+                    instant_execution: Some(false),
+                }),
+                take_profit: None,
+            },
+            &ProtectionRequestContext {
+                account_id: "account".into(),
+                instrument_id: "instrument".into(),
+                quantity_lots: 1,
+                position_side: PositionSide::Long,
+                price_convention: ExecutionPriceConvention::SettlementCurrency,
+                reference_price: fp(100),
+                expire_at: None,
+                confirm_margin_trade: false,
+                request_ids: ProtectionRequestIds {
+                    stop_loss: Some("550e8400-e29b-41d4-a716-446655440012".into()),
+                    take_profit: None,
+                },
+            },
+        );
+        assert_eq!(
+            invalid,
+            Err(ExecutionValidationError::TrailingActivationAlreadyReached)
+        );
+
+        let mut conflicting = short[0].clone();
+        conflicting.instant_execution = Some(true);
+        assert_eq!(
+            audit_stop_order_request(&conflicting),
+            Err(ExecutionValidationError::ConflictingTrailingActivation)
+        );
         let mut malformed = request;
         malformed.stop_order_type = v1::StopOrderType::StopLoss as i32;
         assert_eq!(
@@ -1434,6 +1753,7 @@ mod tests {
             replacement_request_id: "550e8400-e29b-41d4-a716-446655440004".into(),
             quantity_lots: 2,
             price: fp(11),
+            price_convention: ExecutionPriceConvention::SettlementCurrency,
             confirm_margin_trade: false,
         };
         let request = replace_order_request(&replacement).expect("replace");

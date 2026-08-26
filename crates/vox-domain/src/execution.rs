@@ -55,6 +55,14 @@ pub enum TimeInForce {
     FillOrKill,
 }
 
+/// Broker-neutral convention for interpreting an exact execution price.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ExecutionPriceConvention {
+    SettlementCurrency,
+    Points,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RegularOrderCommand {
     pub account_id: String,
@@ -62,6 +70,7 @@ pub struct RegularOrderCommand {
     pub client_request_id: String,
     pub quantity_lots: i64,
     pub price: Option<FixedPoint>,
+    pub price_convention: ExecutionPriceConvention,
     pub side: OrderSide,
     pub order_type: RegularOrderType,
     pub time_in_force: Option<TimeInForce>,
@@ -83,6 +92,7 @@ pub struct ReplaceOrderCommand {
     pub replacement_request_id: String,
     pub quantity_lots: i64,
     pub price: FixedPoint,
+    pub price_convention: ExecutionPriceConvention,
     pub confirm_margin_trade: bool,
 }
 

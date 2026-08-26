@@ -14,10 +14,12 @@ use vox_domain::{
 };
 use vox_tinvest::account::ProviderTimestamp;
 use vox_tinvest::execution::{
-    CanonicalMaxLots, CanonicalOrderPrice, CanonicalOrderState, ProtectionRequestContext,
-    ProtectionRequestIds, async_regular_order_request, cancel_order_request,
-    cancel_stop_order_request, canonical_orders, canonical_stop_orders, protection_requests,
-    regular_order_request, replace_order_request, stop_order_request_shape,
+    CanonicalMaxLots, CanonicalOrderPrice, CanonicalOrderState, ExecutionPriceOperation,
+    OrderStateRequestContext, ProtectionRequestContext, ProtectionRequestIds,
+    TInvestExecutionEnvironment, TInvestInstrumentKind, async_regular_order_request,
+    cancel_order_request, cancel_stop_order_request, canonical_orders, canonical_stop_orders,
+    execution_price_convention, order_state_request, protection_requests, regular_order_request,
+    replace_order_request, stop_order_request_shape,
 };
 use vox_tinvest::execution_dispatch::{
     ExecutionDispatchError, ExecutionMutationDispatcher, ExecutionRoute,
@@ -77,6 +79,7 @@ impl MutationEvidenceStore for MemoryEvidenceStore {
 #[derive(Clone)]
 struct InstrumentFixture {
     uid: String,
+    kind: TInvestInstrumentKind,
     current_price: FixedPoint,
     tick: FixedPoint,
     lot_size: i64,
@@ -391,6 +394,7 @@ impl SandboxRunner {
         self.state.account_id = Some(account_id.clone());
         self.state.instrument = Some(InstrumentFixture {
             uid: share.uid.clone(),
+            kind: TInvestInstrumentKind::Share,
             current_price,
             tick,
             lot_size: i64::from(share.lot),
@@ -494,6 +498,11 @@ impl SandboxRunner {
             client_request_id: request_id.clone(),
             quantity_lots: quantity,
             price,
+            price_convention: execution_price_convention(
+                instrument.kind,
+                ExecutionPriceOperation::RegularOrder,
+                TInvestExecutionEnvironment::Sandbox,
+            ),
             side,
             order_type,
             time_in_force: (order_type == RegularOrderType::Limit).then_some(TimeInForce::Day),
@@ -543,17 +552,19 @@ impl SandboxRunner {
         order_id: &str,
         identity: ProviderOrderIdentityKind,
     ) -> Result<CanonicalOrderState, BoxError> {
+        let price_convention = execution_price_convention(
+            self.context()?.1.kind,
+            ExecutionPriceOperation::RegularOrder,
+            TInvestExecutionEnvironment::Sandbox,
+        );
         let mut last_error = None;
         for _ in 0..8 {
-            let request = v1::GetOrderStateRequest {
+            let request = order_state_request(&OrderStateRequestContext {
                 account_id: account.to_owned(),
                 order_id: order_id.to_owned(),
-                price_type: v1::PriceType::Unspecified as i32,
-                order_id_type: Some(match identity {
-                    ProviderOrderIdentityKind::BrokerOrder => v1::OrderIdType::Exchange as i32,
-                    ProviderOrderIdentityKind::ClientRequest => v1::OrderIdType::Request as i32,
-                }),
-            };
+                price_convention,
+                order_id_kind: Some(identity),
+            })?;
             match self
                 .sandbox_request(
                     |client| async move { client.get_sandbox_order_state(request).await },
@@ -729,6 +740,11 @@ impl SandboxRunner {
             replacement_request_id: replacement_id.clone(),
             quantity_lots: 1,
             price: one_tick_higher(far_below(&instrument)?, instrument.tick)?,
+            price_convention: execution_price_convention(
+                instrument.kind,
+                ExecutionPriceOperation::RegularOrder,
+                TInvestExecutionEnvironment::Sandbox,
+            ),
             confirm_margin_trade: false,
         })?;
         self.wait_for_sandbox_slot().await;
@@ -804,6 +820,11 @@ impl SandboxRunner {
             client_request_id: request_id.clone(),
             quantity_lots: 1,
             price: Some(far_below(&instrument)?),
+            price_convention: execution_price_convention(
+                instrument.kind,
+                ExecutionPriceOperation::RegularOrder,
+                TInvestExecutionEnvironment::Sandbox,
+            ),
             side: OrderSide::Buy,
             order_type: RegularOrderType::Limit,
             time_in_force: Some(TimeInForce::Day),
@@ -868,15 +889,20 @@ impl SandboxRunner {
         account: &str,
         request_id: &str,
     ) -> Result<CanonicalOrderState, BoxError> {
+        let price_convention = execution_price_convention(
+            self.context()?.1.kind,
+            ExecutionPriceOperation::RegularOrder,
+            TInvestExecutionEnvironment::Sandbox,
+        );
         let mut state = None;
         let mut last_point_error = None;
         for _ in 0..20 {
-            let point_request = v1::GetOrderStateRequest {
+            let point_request = order_state_request(&OrderStateRequestContext {
                 account_id: account.to_owned(),
                 order_id: request_id.to_owned(),
-                price_type: v1::PriceType::Unspecified as i32,
-                order_id_type: Some(v1::OrderIdType::Request as i32),
-            };
+                price_convention,
+                order_id_kind: Some(ProviderOrderIdentityKind::ClientRequest),
+            })?;
             match self
                 .sandbox_request(|client| async move {
                     client.get_sandbox_order_state(point_request).await
@@ -926,6 +952,11 @@ impl SandboxRunner {
             client_request_id: request_id.clone(),
             quantity_lots: 1,
             price: Some(far_below(&instrument)?),
+            price_convention: execution_price_convention(
+                instrument.kind,
+                ExecutionPriceOperation::RegularOrder,
+                TInvestExecutionEnvironment::Sandbox,
+            ),
             side: OrderSide::Buy,
             order_type: RegularOrderType::Limit,
             time_in_force: Some(TimeInForce::Day),
@@ -1019,6 +1050,12 @@ impl SandboxRunner {
                 instrument_id: instrument.uid,
                 quantity_lots: 1,
                 position_side: PositionSide::Long,
+                price_convention: execution_price_convention(
+                    instrument.kind,
+                    ExecutionPriceOperation::StopOrder,
+                    TInvestExecutionEnvironment::Sandbox,
+                ),
+                reference_price: instrument.current_price,
                 expire_at: Some(ProviderTimestamp {
                     seconds: time::OffsetDateTime::now_utc().unix_timestamp() + 3_600,
                     nanos: 0,
@@ -1396,13 +1433,13 @@ fn provider_quota_delay(metadata: GrpcRateLimitMetadata, exhausted: bool) -> Dur
 
 fn regular_request_shape(request: &v1::PostOrderRequest) -> String {
     format!(
-        "quantity={}; price_present={}; direction={}; order_type={}; time_in_force={:?}; price_type={}; instrument_id=present; account_id=present; order_id=uuid; confirm_margin_trade={}",
+        "quantity={}; price_present={}; direction={}; order_type={}; time_in_force={:?}; price_type={:?}; instrument_id=present; account_id=present; order_id=uuid; confirm_margin_trade={}",
         request.quantity,
         request.price.is_some(),
         request.direction,
         request.order_type,
         request.time_in_force,
-        request.price_type,
+        v1::PriceType::try_from(request.price_type),
         request.confirm_margin_trade,
     )
 }
@@ -1532,9 +1569,9 @@ fn protection_plan(
             value: FixedPoint::from_units_nano(1, 0)?,
             mode: TrailingDistanceMode::RelativePercent,
         },
-        activation_price: None,
+        activation_price: Some(above),
         protective_spread: None,
-        instant_execution: Some(true),
+        instant_execution: Some(false),
     };
     let trailing_absolute = StopLossProtection::Trailing {
         distance: TrailingDistance {
