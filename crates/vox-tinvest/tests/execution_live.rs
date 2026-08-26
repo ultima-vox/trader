@@ -1578,9 +1578,9 @@ fn protection_plan(
             value: percentage_price(instrument, 5)?,
             mode: TrailingDistanceMode::AbsolutePrice,
         },
-        activation_price: None,
+        activation_price: Some(above),
         protective_spread: None,
-        instant_execution: Some(true),
+        instant_execution: Some(false),
     };
     let take_profit = TakeProfitProtection {
         trigger_price: Some(above),

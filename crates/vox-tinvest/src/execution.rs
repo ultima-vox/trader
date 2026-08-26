@@ -1738,6 +1738,73 @@ mod tests {
     }
 
     #[test]
+    fn absolute_trailing_qualification_wire_uses_pending_explicit_activation() {
+        let request = protection_requests(
+            &ProtectionPlan {
+                stop_loss: Some(StopLossProtection::Trailing {
+                    distance: TrailingDistance {
+                        value: fp(5),
+                        mode: TrailingDistanceMode::AbsolutePrice,
+                    },
+                    activation_price: Some(fp(105)),
+                    protective_spread: None,
+                    instant_execution: Some(false),
+                }),
+                take_profit: None,
+            },
+            &ProtectionRequestContext {
+                account_id: "account".into(),
+                instrument_id: "instrument".into(),
+                quantity_lots: 1,
+                position_side: PositionSide::Long,
+                price_convention: ExecutionPriceConvention::SettlementCurrency,
+                reference_price: fp(100),
+                expire_at: None,
+                confirm_margin_trade: false,
+                request_ids: ProtectionRequestIds {
+                    stop_loss: Some("550e8400-e29b-41d4-a716-446655440013".into()),
+                    take_profit: None,
+                },
+            },
+        )
+        .expect("pending absolute trailing")
+        .remove(0);
+
+        assert_eq!(request.price, None);
+        assert_eq!(request.stop_price, Some(quotation(fp(105)).expect("quote")));
+        assert_eq!(request.direction, v1::StopOrderDirection::Sell as i32);
+        assert_eq!(
+            request.expiration_type,
+            v1::StopOrderExpirationType::GoodTillCancel as i32
+        );
+        assert_eq!(
+            request.stop_order_type,
+            v1::StopOrderType::TakeProfit as i32
+        );
+        assert_eq!(
+            request.exchange_order_type,
+            v1::ExchangeOrderType::Market as i32
+        );
+        assert_eq!(
+            request.take_profit_type,
+            v1::TakeProfitType::Trailing as i32
+        );
+        assert_eq!(request.price_type, v1::PriceType::Currency as i32);
+        assert_eq!(request.instant_execution, Some(false));
+        let trailing = request.trailing_data.expect("trailing data");
+        assert_eq!(trailing.indent, Some(quotation(fp(5)).expect("quote")));
+        assert_eq!(
+            trailing.indent_type,
+            v1::TrailingValueType::TrailingValueAbsolute as i32
+        );
+        assert_eq!(trailing.spread, None);
+        assert_eq!(
+            trailing.spread_type,
+            v1::TrailingValueType::TrailingValueUnspecified as i32
+        );
+    }
+
+    #[test]
     fn replace_cancel_and_async_constraints_validate_before_dispatch() {
         let async_request =
             async_regular_order_request(&command(RegularOrderType::Limit, Some(fp(10))))
