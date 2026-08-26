@@ -50,7 +50,7 @@ Sections of the rendered reference:
 | `Все счета` aggregate | read-only aggregate view | — | Deferred (issue marks it optional/future) |
 | Widget context model | linked vs pinned, context named in header | §8, §9 (chart linked, tape pinned) | Represented |
 | Workspace model | 12 columns, drag by header, resize step, presets, persistence | §9 (+ widget size catalogue) | Represented |
-| Responsive validation 1280/1440/1920 | | §9 declares it; rendering must be checked by a human | Outside artefact (verification) |
+| Responsive validation 1280/1440/1920 | | Verified by rendering — see section 5 | Represented |
 | Canonical Order Ticket | instrument, target, type, quantity, price, estimates, protection, risk, dual actions | §9, §10 | Represented |
 | Dual actions with size/value; blocked side visible | | §9, §10 | Represented |
 | Keyboard-first, no bypass of confirmations | | §9 hint, §13/§14 typed confirmations | Represented |
@@ -116,7 +116,7 @@ refused or unknown, and use tabular numerals for money.
 | 9 | runtime / risk / connection vocabularies, no generic red error | Represented (§5, §15) |
 | 10 | chart/event language, price lines as a separate primitive | Represented (§6, §9); on-candle geometry deferred with the chart engine |
 | 11 | linked vs pinned widget context | Represented (§8, §9) |
-| 12 | workspace model, presets, responsive targets | Represented (§9); rendering check outstanding |
+| 12 | workspace model, presets, responsive targets | Represented (§9), verified by rendering |
 | 13 | tables, numeric controls, streaming safety | Represented (§4, §7) |
 | 14 | one instrument picker | Represented (§10, §16) |
 | 15 | hierarchy and governance | Represented (design system §8, §23) |
@@ -127,20 +127,47 @@ refused or unknown, and use tabular numerals for money.
 
 ## 4. Outstanding
 
-1. **Responsive rendering check** at 1280 / 1440 / 1920 in Compact / Standard /
-   Comfortable. The reference declares the targets and is built to them, but a human has
-   to open the file and confirm.
-2. **On-candle marker geometry** (`B`/`TP` below, `S`/`SL` above, `F` adjacent, `D`/`E`
+1. **On-candle marker geometry** (`B`/`TP` below, `S`/`SL` above, `F` adjacent, `D`/`E`
    offset) cannot be demonstrated while the chart region is a placeholder. The letter
    vocabulary, grouping, tooltip contents and the marker-versus-price-line distinction
    are specified.
-3. **`Все счета`** read-only aggregate — deferred by the issue until a backend aggregate
+2. **`Все счета`** read-only aggregate — deferred by the issue until a backend aggregate
    execution contract exists.
-4. **Implementation half of #18** — typed Vox API clients, atomic account-context
+3. **Implementation half of #18** — typed Vox API clients, atomic account-context
    switching, stale-response guards and the test matrix. The design contract for each is
    written; the code is not part of this artefact.
 
-Items 2 and 3 are scoped out by issue #18 itself. Item 1 is a verification step. Item 4
-is application code.
+Items 1 and 2 are scoped out by issue #18 itself. Item 3 is application code.
+
+## 5. Verification matrix
+
+Rendered in Chromium at each viewport width with `data-density` switched on the app root,
+measuring page overflow, elements past the viewport, clipped content, control geometry and
+the ticket minimum.
+
+| | 1280 | 1440 | 1920 |
+| --- | --- | --- | --- |
+| **Compact** — control 28 / row 26 / widget header 32 | pass | pass | pass |
+| **Standard** — control 32 / row 30 / widget header 36 | pass | pass | pass |
+| **Comfortable** — control 36 / row 36 / widget header 36 | pass | pass | pass |
+
+Pass means: no horizontal page scroll, no element past the viewport, no clipped content
+outside a declared scroll container, measured control/row/widget-header heights equal to
+the density table, order ticket at or above its 300px minimum (360px at 1280 where the
+ticket takes the wider column, 309px above the breakpoint), and all 23 sections present.
+
+Defects the matrix found and that were fixed rather than waived:
+
+- the account name in the Order Ticket execution target truncated to an ellipsis
+  (133px of text in 51px) — it now wraps, because the account is never dropped;
+- the ticket fell to 269px at 1280, under its own declared 300px minimum — the ticket
+  column now widens below 1366px and the chart yields the column;
+- the positions table was clipped by its widget edge — tables now scroll inside the widget;
+- the account name column could collapse to zero width in the discovered-accounts list —
+  it now has a 112px floor;
+- policy rows, protection rows, reconciliation heads and reconciliation actions clipped
+  their content in a narrow widget — they wrap;
+- long form labels in Research overflowed the ticket-sized label column — that screen now
+  uses the settings form row, which sizes its own label.
 
 On the design side, no directive of issue #18 or of the PR #20 review is unrepresented.

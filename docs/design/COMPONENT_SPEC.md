@@ -138,6 +138,9 @@ the data age and says last known values are shown.
 ## Data components
 
 ### Table — `.vox-table`
+A table wider than its widget scrolls horizontally inside it (`overflow-x: auto`,
+children at `min-width: max-content`) — columns are never silently clipped by the widget
+edge, and header and body stay aligned while scrolling.
 Anatomy: sticky `__header` (28px) → `__row` (26px) → optional `__footer` (24px totals).
 12px body, 11px header. Numeric columns right-aligned via `.vox-num`; text left.
 Row states: hover, `.is-selected` (accent left border 2px + tinted bg), `.is-unknown`
@@ -168,8 +171,12 @@ Top bar 44px, groups separated by 1px borders: brand · broker + AccountSelector
 · environment + runtime · portfolio P&L · MSK clock (mono, tabular). Nav rail 118px,
 26px items, 2px active left border, secondary items pinned to the bottom.
 
-### Workspace — `.vox-workspace`, `.vox-drop-target`
-12-column grid, 6px gap, `minmax(48px, auto)` rows. Drag by widget header; drop target
+### Workspace — `.vox-workspace`, `.vox-workspace__col-*`, `.vox-drop-target`
+12-column grid, 6px gap, `minmax(48px, auto)` rows. Widget width is declared with
+`.vox-workspace__col-{2,3,4,5,6,7,8,12}` — never with an inline `grid-column`. Below
+1366px the ticket column widens (3 → 4) and the chart yields (7 → 6): a chart may lose
+width, a capital-affecting form may not. The ticket carries `min-width: 300px`, so no
+layout can shrink it below its declared minimum. Drag by widget header; drop target
 = dashed accent outline; `.is-dragging` sets `cursor: grabbing`. 8px resize step.
 Layout persisted per workspace; workspaces are switchable and duplicable.
 
@@ -285,6 +292,10 @@ stop orders are migrated only via an explicit listed action. A default is not a 
 risk limit; guardrails are a separate policy with their own screen.
 
 ### AccountSelector — `.vox-account`, `.vox-account-row`
+The row grid is `minmax(112px, 1fr) auto auto auto`: status columns size to their
+content and the row may scroll, but the human account name never collapses. In the
+Order Ticket target row the account name wraps instead of truncating — ellipsis is
+allowed on decoration, never on the execution target.
 Always visible in the shell. Anatomy: broker · separator · human account label ·
 environment badge / connection health · disclosure. Modifiers `.is-live` (inset LIVE
 marker), `.is-degraded`, `.is-unknown`. The popover lists `.vox-account-row`

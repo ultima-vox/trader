@@ -156,7 +156,7 @@
 
 .vox-segmented {
   height: var(--vox-control-height); display: inline-flex; gap: 2px; padding: 2px;
-  flex: 0 0 auto; min-width: min-content; white-space: nowrap;
+  flex: 0 1 auto; min-width: min-content; max-width: 100%; white-space: nowrap;
   background: var(--vox-bg-input); border: 1px solid var(--vox-border-default); border-radius: var(--vox-radius-sm);
 }
 .vox-segmented__item {
@@ -303,6 +303,11 @@
 .vox-flash-up { animation: voxFlashUp var(--vox-motion-flash) ease-out; }
 .vox-flash-down { animation: voxFlashDown var(--vox-motion-flash) ease-out; }
 
+/* A table wider than its widget scrolls inside the widget instead of being clipped:
+   columns are never silently cut off, and header and body stay aligned while scrolling. */
+.vox-table { overflow-x: auto; }
+.vox-table > * { min-width: max-content; }
+
 /* =========================================================
    Widget — canonical anatomy: 32px header + content. No shadow on widgets.
    States: loading, live, stale, reconnecting, degraded, empty, error, permission-denied
@@ -376,15 +381,17 @@
 .vox-account.is-degraded { border-color: var(--vox-warning-strong); }
 .vox-account.is-unknown { border-color: var(--vox-unknown-base); }
 
-/* Row inside the account popover / settings list. */
+/* Row inside the account popover / settings list. The human name keeps a floor of
+   112px and the status columns size to their content: an account row may scroll, but
+   the name of the account may never collapse to nothing. */
 .vox-account-row {
-  display: grid; grid-template-columns: 1fr 92px 82px 92px; align-items: center; gap: var(--vox-space-2);
-  height: var(--vox-row-height); padding: 0 10px; cursor: pointer;
+  display: grid; grid-template-columns: minmax(112px, 1fr) auto auto auto; align-items: center; gap: var(--vox-space-2);
+  min-height: var(--vox-row-height); padding: 0 10px; cursor: pointer;
   border-left: 2px solid transparent; font-size: var(--vox-text-12);
 }
 .vox-account-row:hover { background: var(--vox-bg-surface-hover); }
 .vox-account-row.is-selected { background: var(--vox-accent-selected-surface); border-left-color: var(--vox-accent-primary); }
-.vox-account-row__name { display: flex; flex-direction: column; min-width: 0; }
+.vox-account-row__name { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
 .vox-account-row__meta { font-size: 10px; color: var(--vox-text-tertiary); }
 
 /* Connection health — a connection, not a portfolio. */
