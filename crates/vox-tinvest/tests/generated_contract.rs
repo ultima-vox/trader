@@ -1,6 +1,13 @@
 use prost::Message;
 use std::collections::BTreeSet;
+use vox_domain::{FixedPoint, OrderSide, RegularOrderCommand, RegularOrderType, TimeInForce};
 use vox_tinvest::TInvestGrpcClient;
+use vox_tinvest::execution::{
+    EXECUTION_STREAM_PAYLOADS, ExecutionPriceOperation, ORDERS_SERVICE_METHODS,
+    ORDERS_STREAM_METHODS, STOP_ORDERS_SERVICE_METHODS, TInvestExecutionEnvironment,
+    TInvestInstrumentKind, async_regular_order_request, execution_price_convention,
+    regular_order_request,
+};
 use vox_tinvest::generated::v1;
 use vox_tinvest::market_data::{MARKET_DATA_SERVICE_METHODS, MARKET_DATA_STREAM_METHODS};
 use vox_tinvest::reference::INSTRUMENTS_SERVICE_METHODS;
@@ -10,6 +17,8 @@ const MARKET_DATA_PROTO: &str = include_str!("../proto/tinkoff/marketdata.proto"
 const USERS_PROTO: &str = include_str!("../proto/tinkoff/users.proto");
 const OPERATIONS_PROTO: &str = include_str!("../proto/tinkoff/operations.proto");
 const SANDBOX_PROTO: &str = include_str!("../proto/tinkoff/sandbox.proto");
+const ORDERS_PROTO: &str = include_str!("../proto/tinkoff/orders.proto");
+const STOP_ORDERS_PROTO: &str = include_str!("../proto/tinkoff/stoporders.proto");
 
 #[test]
 fn generated_contract_inventory_matches_all_43_capability_rows() {
@@ -211,6 +220,57 @@ fn account_read_side_matrix_matches_every_official_service_rpc() {
     );
 }
 
+#[test]
+fn generated_regular_order_wire_requires_explicit_operation_price_type() {
+    let command = |price_convention| RegularOrderCommand {
+        account_id: "account".into(),
+        instrument_id: "instrument".into(),
+        client_request_id: "550e8400-e29b-41d4-a716-446655440030".into(),
+        quantity_lots: 1,
+        price: Some(FixedPoint::from_units_nano(100, 0).expect("price")),
+        price_convention,
+        side: OrderSide::Buy,
+        order_type: RegularOrderType::Limit,
+        time_in_force: Some(TimeInForce::Day),
+        confirm_margin_trade: false,
+    };
+    let share = command(execution_price_convention(
+        TInvestInstrumentKind::Share,
+        ExecutionPriceOperation::RegularOrder,
+        TInvestExecutionEnvironment::Production,
+    ));
+    assert_eq!(
+        regular_order_request(&share).expect("share").price_type,
+        v1::PriceType::Currency as i32
+    );
+    assert_eq!(
+        async_regular_order_request(&share)
+            .expect("share async")
+            .price_type,
+        Some(v1::PriceType::Currency as i32)
+    );
+    let future = command(execution_price_convention(
+        TInvestInstrumentKind::Future,
+        ExecutionPriceOperation::RegularOrder,
+        TInvestExecutionEnvironment::Production,
+    ));
+    assert_eq!(
+        regular_order_request(&future).expect("future").price_type,
+        v1::PriceType::Point as i32
+    );
+    let sandbox_future = command(execution_price_convention(
+        TInvestInstrumentKind::Future,
+        ExecutionPriceOperation::RegularOrder,
+        TInvestExecutionEnvironment::Sandbox,
+    ));
+    assert_eq!(
+        regular_order_request(&sandbox_future)
+            .expect("sandbox future")
+            .price_type,
+        v1::PriceType::Currency as i32
+    );
+}
+
 fn rpc_inventory(proto: &str) -> Vec<(String, String)> {
     let mut service = None;
     let mut methods = Vec::new();
@@ -228,6 +288,128 @@ fn rpc_inventory(proto: &str) -> Vec<(String, String)> {
         }
     }
     methods
+}
+
+#[test]
+fn execution_matrix_matches_every_pinned_rpc_and_stream_branch() {
+    let matrix: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../qualification/tinvest_execution_contracts.json"
+    ))
+    .expect("execution contract matrix must be valid JSON");
+    assert_eq!(
+        matrix["revision"],
+        "762e720e27164213f41cac0b226c5698c2ae8199"
+    );
+    assert!(
+        matrix["common"]["price_conventions"]
+            .as_str()
+            .is_some_and(|value| value.contains("UNSPECIFIED is forbidden"))
+    );
+    let official = rpc_inventory(ORDERS_PROTO)
+        .into_iter()
+        .chain(rpc_inventory(STOP_ORDERS_PROTO))
+        .chain(rpc_inventory(SANDBOX_PROTO))
+        .collect::<BTreeSet<_>>();
+    let rows = matrix["methods"].as_array().expect("method rows");
+    let inventoried = rows
+        .iter()
+        .map(|row| {
+            for field in [
+                "service",
+                "method",
+                "request",
+                "response",
+                "class",
+                "environment",
+                "requirements",
+                "identifiers",
+                "idempotency",
+                "variants",
+                "constraints",
+                "semantics",
+                "adapter",
+                "state",
+                "routing",
+                "canonical",
+                "evidence",
+                "qualification",
+                "limitations",
+            ] {
+                assert!(
+                    row[field].as_str().is_some_and(|value| !value.is_empty()),
+                    "execution inventory row missing {field}: {row}"
+                );
+            }
+            (
+                row["service"].as_str().expect("service").to_owned(),
+                row["method"].as_str().expect("method").to_owned(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        rows.len(),
+        inventoried.len(),
+        "duplicate execution inventory row"
+    );
+    assert_eq!(
+        official, inventoried,
+        "official execution RPC inventory drift"
+    );
+
+    let branches = matrix["stream_branches"]
+        .as_array()
+        .expect("stream branches");
+    assert_eq!(branches.len(), EXECUTION_STREAM_PAYLOADS.len());
+    for branch in EXECUTION_STREAM_PAYLOADS {
+        let (stream, payload) = branch.split_once('.').expect("stream branch");
+        assert!(
+            branches
+                .iter()
+                .any(|row| { row["method"] == stream && row["branch"] == payload }),
+            "official execution stream branch missing: {branch}"
+        );
+    }
+    assert_eq!(ORDERS_SERVICE_METHODS.len(), 8);
+    assert_eq!(ORDERS_STREAM_METHODS.len(), 2);
+    assert_eq!(STOP_ORDERS_SERVICE_METHODS.len(), 3);
+}
+
+#[test]
+fn every_execution_rpc_request_and_response_is_generated_and_round_trips() {
+    macro_rules! round_trip {
+        ($($type:ty),+ $(,)?) => {$({
+            let value = <$type>::default();
+            <$type>::decode(value.encode_to_vec().as_slice())
+                .expect(concat!("generated round trip: ", stringify!($type)));
+        })+};
+    }
+    round_trip!(
+        v1::PostOrderRequest,
+        v1::PostOrderResponse,
+        v1::PostOrderAsyncRequest,
+        v1::PostOrderAsyncResponse,
+        v1::CancelOrderRequest,
+        v1::CancelOrderResponse,
+        v1::GetOrderStateRequest,
+        v1::OrderState,
+        v1::GetOrdersRequest,
+        v1::GetOrdersResponse,
+        v1::ReplaceOrderRequest,
+        v1::GetMaxLotsRequest,
+        v1::GetMaxLotsResponse,
+        v1::GetOrderPriceRequest,
+        v1::GetOrderPriceResponse,
+        v1::TradesStreamRequest,
+        v1::TradesStreamResponse,
+        v1::OrderStateStreamRequest,
+        v1::OrderStateStreamResponse,
+        v1::PostStopOrderRequest,
+        v1::PostStopOrderResponse,
+        v1::GetStopOrdersRequest,
+        v1::GetStopOrdersResponse,
+        v1::CancelStopOrderRequest,
+        v1::CancelStopOrderResponse,
+    );
 }
 
 #[test]
