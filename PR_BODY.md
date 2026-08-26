@@ -1,152 +1,122 @@
-# feat(frontend): add Vox Trader design system foundation
+# feat(frontend): Vox Trader design system — canonical terminal, protection and execution safety
 
-> Status: **draft** until Head-of-Development review items are signed off. This revision
-> implements all six blocking items from the PR #20 review.
+Presentation/design-system only. No broker adapter, execution, risk runtime, persistence
+or strategy code is touched, and nothing in this branch is imported by the application at
+runtime.
 
-Refs design system foundation
+This revision closes the Head-of-Development directive on this PR and the design half of
+issue #18.
 
-Adds the Vox Trader design system to the repository as reviewable, versioned source —
-documentation plus a renderable reference implementation. Presentation only.
+## Live preview
 
-## What was exported from Claude Design
+- Reference: <https://ultima-vox.github.io/trader/reference/index.html> (published by the Design Preview workflow)
+- Compliance audit: [`docs/design/COMPLIANCE_AUDIT.md`](docs/design/COMPLIANCE_AUDIT.md)
 
-The Vox Trader design system reference sheet (dark terminal, `ru-RU`, 1440px, Compact
-density) that until now existed only inside Claude Design. It is preserved in two forms:
+The reference renders identically from `file://` — no build step, no CDN, no account.
 
-- **Canonical visual reference** — `frontend/design-system/reference/vox-trader-design-system.reference.html`,
-  a single self-contained file (styles, markup and inline SVG glyphs bundled). Opens
-  from `file://` with no network, no Claude account and no runtime.
-- **Provenance** — `frontend/design-system/reference/source/vox-trader-design-system.dc.html`
-  (+ its `support.js` runtime), kept so the origin of the canonical export is traceable.
-  Not a build input.
-
-Everything reusable was then extracted out of that monolith into hand-maintainable
-layers, so the project no longer depends on one generated HTML file:
-
-- design tokens → `tokens/tokens.css` + machine-readable `tokens/tokens.json`
-- primitives, controls/data components and trading patterns → three CSS layers
-- rules and per-component anatomy/variants/states → two Markdown specs
-- a hand-maintained layered reference sheet → `reference/index.html`
-
-## Repository structure
+## What is in the branch
 
 ```text
-docs/
-  design/
-    VOX_TRADER_DESIGN_SYSTEM.md      normative rules: language, tokens, density,
-                                     layout, trading semantics, a11y, prohibitions
-    COMPONENT_SPEC.md                anatomy, variants and states per component
-frontend/
-  design-system/
-    README.md                        local viewing, layer map, canonical file, how to extend
-    reference/
-      index.html                     layered reference sheet (hand-maintained)
-      vox-trader-design-system.reference.html   canonical visual reference (generated)
-      assets/                        vox-mark.svg + asset policy README
-      source/                        Claude Design source kept for provenance
-    tokens/       tokens.css, tokens.json
-    primitives/   primitives.css
-    components/   components.css
-    patterns/     patterns.css
-PR_BODY.md
+docs/design/
+  VOX_TRADER_DESIGN_SYSTEM.md   normative rules
+  COMPONENT_SPEC.md             anatomy, variants, states per component
+  COMPLIANCE_AUDIT.md           directive-by-directive audit against #18 and this review
+frontend/design-system/
+  tokens/       tokens.css + tokens.json
+  primitives/   primitives.css
+  components/   components.css
+  patterns/     patterns.css
+  reference/    index.html — the rendered reference (23 sections)
 ```
 
-## How to render/view it locally
+Conflict order: normative docs > CSS layers > `reference/index.html` > viewing wrapper.
+`vox-trader-design-system.reference.html` is only a stable entry point for viewing the
+reference; it is not a separate authority, and the Claude Design document under
+`reference/source/` is provenance, not a build input.
 
-```bash
-open frontend/design-system/reference/index.html            # macOS (xdg-open / start elsewhere)
-open frontend/design-system/reference/vox-trader-design-system.reference.html
+## Canonical production screens
 
-# or serve statically
-python3 -m http.server 8080
-# → http://localhost:8080/frontend/design-system/reference/index.html
-```
+The reference is no longer a set of isolated component demos. §9 is the canonical
+**Trading workspace** — shell with environment, AccountSelector, runtime state, Vox
+execution state, P&L and clock; nav rail; a 12-column workspace holding quote, chart,
+order ticket, order book, positions, tape and portfolio metrics — and every remaining
+workspace is drawn on the same shell and grid:
 
-No build step, no dependencies, no CDN. Relative paths only; verified rendering from
-`file://` and over a static server. Fonts degrade to system stacks (`system-ui`,
-`ui-monospace`) — no webfont download.
+| § | Screen | § | Screen |
+| --- | --- | --- | --- |
+| 9 | Trading workspace | 17 | Portfolio, operations, event journal |
+| 10 | Order ticket · execution target | 18 | Strategy |
+| 11 | Position protection | 19 | Decision Center |
+| 12 | Reconciliation and `UNKNOWN` | 20 | Research |
+| 13 | Bulk protection migration | 21 | ML / Models |
+| 14 | Execution authorization | 22 | System |
+| 15 | Brokers and accounts | 16 | Markets |
 
-## What is canonical
+A widget catalogue in §9 declares minimum and preferred sizes and states what each widget
+drops when squeezed: instrument, account, environment, P&L and protection never drop.
 
-1. `docs/design/*.md` — normative rules. Documentation wins over any rendering.
-2. `tokens/`, `primitives/`, `components/`, `patterns/` — source of truth for
-   implementation. `tokens.css` is the only place a raw HEX may appear.
-3. `reference/vox-trader-design-system.reference.html` — **canonical visual reference**:
-   the intended visual result, frozen. Generated output; read it, don't hand-edit it.
-4. `reference/index.html` — the sheet to extend when adding components.
+## Directive items closed in this revision
 
-Conflict order: docs > CSS layers > `index.html` > canonical export.
+- **Order Ticket execution target** as the first row, never collapsed, never inferred from
+  the last used account, with an explicit mismatch state (`EXEC_TARGET_MISMATCH`).
+- **Frozen submitted-command target** — a dispatched command keeps its broker, account and
+  environment. Switching the active account afterwards updates account-scoped views and
+  can never retarget that command; cancel and re-send are two separate operator actions.
+- **Broker-authoritative protection runtime states** — exactly `ACTIVE`, `STALE`,
+  `RECONCILING`, `TRIGGERED`, `CANCELLED`, alongside current level, reference level
+  (high-water for long, low-water for short), activation condition and the broker's answer
+  time. Unreported fields stay `UNKNOWN`. The terminal never recomputes or smooths a level,
+  and `CANCELLED` always names the reason and states that the position is now unprotected.
+- **`UNKNOWN_AFTER_DISPATCH` and reconciliation UX** — silence age, the facts Vox knows for
+  certain, re-dispatch blocked until `RECON_CONFIRMED` / `RECON_NOT_FOUND` /
+  `RECON_PENDING` resolves it. Never rendered as a failure.
+- **Bulk protection migration** as a separate capital-affecting flow: preview, affected
+  count with a breakdown, per-position `было → станет` in broker order terms, consequences
+  including the unprotected window, typed confirmation, and per-position results including
+  `ОТКЛОНЕНО` and reconciliation. Manually overridden positions are never touched.
+- **Execution authorization** — broker token capability and Vox execution shown as separate
+  facts, `PRODUCTION` off by default, scoped to account and environment, typed confirmation
+  to enable, one-press halt, backend audit metadata. Strategy, ML and Decision Center link
+  to it and can never grant it.
+- **Default vs risk guardrail** — separated visually, with backend `BLOCKED` and `RESIZE`
+  verdicts rendered rather than silently clamped in the browser.
+- **Connection vocabulary** — `CONNECTED`, `VALIDATING`, `RECONNECTING`, `DEGRADED`,
+  `INVALID_CREDENTIAL`, `REVOKED`, `PERMISSION_LIMITED`, `ROTATE`, `PROVIDER_UNAVAILABLE`,
+  `DISABLED`, `UNKNOWN`, each with its own action and reason code. Plus multiple
+  connections per provider, connection lifecycle actions, three-step token rotation that
+  never reads a stored secret back, and provider capability gating.
 
-## Documentation vs generated/reference output
+## Review blockers from the previous round
 
-| Hand-maintained (edit these) | Generated / frozen (don't hand-edit) |
-| --- | --- |
-| `docs/design/VOX_TRADER_DESIGN_SYSTEM.md` | `reference/vox-trader-design-system.reference.html` |
-| `docs/design/COMPONENT_SPEC.md` | `reference/source/vox-trader-design-system.dc.html` |
-| `frontend/design-system/README.md` | `reference/source/support.js` |
-| `tokens/`, `primitives/`, `components/`, `patterns/` | |
-| `reference/index.html`, `reference/assets/` | |
+- **Item 16 — token-only cleanup: closed.** No raw HEX and no raw `rgba()` outside
+  `tokens/tokens.css`, including the viewing wrapper.
+- **Item 17 — canonical wording: closed.** Wording implying the wrapper is the original
+  self-contained Claude export or an independent authority is removed from the docs, the
+  README and the wrapper itself.
 
-## Design decisions carried over unchanged
+## Compliance position
 
-- Dense professional trading terminal; **Compact is the production default**
-  (control 28 / row 26 / table header 28 / widget header 32). Standard and Comfortable
-  are accessibility preferences only, expressed purely as token overrides.
-- **Russian primary UI language.** Latin survives only for tickers (`SBER`), technical
-  states (`LIVE`, `READY`, `HALTED`), reason codes (`RISK_DAY_LOSS`) and marker letters.
-  Numbers use space thousands separators and comma decimals.
-- **Permanent dual order actions** `Купить` / `Продать`, one shared ticket body, each
-  action showing its own executable price. **No buy/sell mode toggle exists anywhere.**
-  A forbidden side stays in place, recessed, with its reason and reason code.
-- **Event markers** are exactly `B / S / F / SL / TP / D / E`, identical in chart, tape,
-  orders table and journal. Pictograms may not replace the letters.
-- **Explicit states.** Environment `LIVE / SANDBOX / PAPER / BACKTEST` always visible as
-  a labelled badge (never a bare dot); in `LIVE` irreversible controls take an inset red
-  hairline while the UI as a whole stays neutral. Runtime `READY / RECONCILING /
-  DEGRADED / HALTED` as a clickable diagnostics chip. Risk `SAFE / WARNING / BLOCKED /
-  UNKNOWN / RESIZE` always icon + sentence + reason code. **`UNKNOWN` has its own violet
-  semantic and is never rendered as failure.** Stale data declares its age.
-- **Widget model**: 32px header is the only drag handle, resize snaps to the 8px
-  workspace grid on a 12-column layout, layout persisted per workspace, and each widget
-  shows a linked or pinned instrument-context chip.
-- **No oversized generic SaaS cards** — portfolio numbers live in a dense bordered
-  metric grid; widgets have no shadow and radius never exceeds 8px.
-- **No raw broker identifiers in normal UI** — human account and instrument names only;
-  ids stay in diagnostics and explicit copy actions.
+`docs/design/COMPLIANCE_AUDIT.md` maps every issue #18 directive and all nineteen review
+items to a section of the rendered reference, and carries a screen-by-screen Design DoD
+table for all fourteen screens: account named, environment shown, non-happy states
+covered, reason codes present, and an explicit target for capital-affecting actions.
 
-## Implementation notes
+Outstanding, all stated in that document:
 
-- Layer order is one-directional (`tokens → primitives → components → patterns`); a
-  lower layer never references a higher one.
-- Every market number goes through `.vox-num` (tabular figures, right-aligned, no wrap)
-  so streaming updates never reflow a row; price change is a 480 ms background flash.
-- Shadows exist only on overlay layers (menu, tooltip, popover, modal).
-- `prefers-reduced-motion` neutralises all animation; focus rings are token-driven.
-- `tokens.json` mirrors `tokens.css` for future codegen (TS types, Figma sync).
+1. Responsive rendering check at 1280 / 1440 / 1920 in Compact / Standard / Comfortable —
+   the reference declares and is built to the targets; a human still has to look.
+2. On-candle marker geometry cannot be demonstrated while the chart region is a
+   placeholder; a chart engine is an explicit non-goal of #18. The letter vocabulary,
+   grouping, tooltip contents and the marker-versus-price-line distinction are specified.
+3. `Все счета` read-only aggregate — deferred by #18 until a backend aggregate execution
+   contract exists.
+4. The implementation half of #18 — typed Vox API clients, atomic account-context
+   switching, stale-response guards and the test matrix. The design contract for each is
+   written; the code is not in this branch.
 
-## Pre-commit checks
+On the design side no directive of issue #18 or of this review is unrepresented.
 
-- Reference renders locally from `file://` and from a static server; no console errors.
-- No temp/generated junk beyond the two declared frozen files; no build artefacts,
-  no `node_modules`, no editor files.
-- No secrets, no credentials, no API endpoints, no account or broker identifiers.
-- All paths relative; no external requests.
-- README documents local viewing and names the canonical visual reference.
-
-## Out of scope (intentionally)
-
-- No React/Vue/Svelte component library, no framework bindings, no state management.
-- No product feature work, no new screens beyond the reference sheet.
-- No chart engine — the chart region is an explicit placeholder.
-- No webfont bundling, no icon package vendoring, no light-theme rollout (light tokens
-  are declared for parity only).
-- No CI, lint or visual-regression wiring.
-
-## Backend / runtime confirmation
-
-No trading, runtime, risk-engine, broker-integration, API or configuration code was
-touched. This branch adds only files under `docs/design/` and
-`frontend/design-system/` (plus `PR_BODY.md`). Nothing is imported by the application
-at runtime.
-
-Do not merge automatically — review requested.
+Refs #18
+Refs #10
+Refs #11
+Refs #17
