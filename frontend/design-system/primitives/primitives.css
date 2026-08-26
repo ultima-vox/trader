@@ -83,14 +83,16 @@
 
 /* ---------- ScrollArea ---------- */
 .vox-scroll { overflow: auto; scrollbar-width: thin; }
-.vox-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
-.vox-scroll::-webkit-scrollbar-track { background: var(--vox-bg-canvas); }
-.vox-scroll::-webkit-scrollbar-thumb {
+/* Any scrollable region wears the same scrollbar, so a table that scrolls says so. */
+.vox-scroll, .vox-table { scrollbar-width: thin; scrollbar-color: var(--vox-border-default) var(--vox-bg-canvas); }
+.vox-scroll::-webkit-scrollbar, .vox-table::-webkit-scrollbar { width: 10px; height: 10px; }
+.vox-scroll::-webkit-scrollbar-track, .vox-table::-webkit-scrollbar-track { background: var(--vox-bg-canvas); }
+.vox-scroll::-webkit-scrollbar-thumb, .vox-table::-webkit-scrollbar-thumb {
   background: var(--vox-border-default);
   border: 2px solid var(--vox-bg-canvas);
   border-radius: 5px;
 }
-.vox-scroll::-webkit-scrollbar-thumb:hover { background: var(--vox-border-strong); }
+.vox-scroll::-webkit-scrollbar-thumb:hover, .vox-table::-webkit-scrollbar-thumb:hover { background: var(--vox-border-strong); }
 
 /* ---------- Tooltip / Popover (the only shadow-bearing layers) ---------- */
 .vox-tooltip {

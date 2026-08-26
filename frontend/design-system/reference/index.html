@@ -20,6 +20,7 @@
   .ref__sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
   .ref__num { font-family: var(--vox-font-mono); font-size: 11px; color: var(--vox-text-disabled); }
   .ref__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; align-items: start; }
+  .ref__wide { grid-column: 1 / -1; }
   .ref__spec { padding: 12px; }
   .ref__spec-title { font-size: var(--vox-text-12); font-weight: var(--vox-weight-medium); color: var(--vox-text-primary); margin-bottom: 10px; }
   .ref__demo { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; max-width: 100%; overflow-x: auto; }
@@ -531,7 +532,7 @@
 
           <div class="vox-widget vox-workspace__col-8">
             <div class="vox-widget__header"><span class="vox-widget__title">Позиции и заявки<span class="vox-widget__context">счёт «Основной брокерский»</span></span><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>1 в сверке</span></div>
-            <div class="vox-widget__body">
+            <div class="vox-widget__body ref__wide">
               <div class="vox-table">
                 <div class="vox-table__header" style="grid-template-columns:132px 84px 96px 96px 116px 104px 1fr">
                   <span class="vox-table__sort">Инструмент ▲</span><span>Кол-во</span><span class="vox-num">Средняя</span><span class="vox-num">Текущая</span><span class="vox-num">P&amp;L</span><span class="vox-num">Защита</span><span style="padding-left:24px">Статус</span>
@@ -1043,9 +1044,9 @@
         </div>
       </div>
 
-      <div class="vox-widget is-degraded" style="width:auto;position:relative">
+      <div class="vox-widget is-degraded ref__wide" style="width:auto;position:relative">
         <div class="vox-widget__header"><span class="vox-widget__title">Рантайм · сверка<span class="vox-widget__context">счёт «Основной брокерский»</span></span><span class="vox-runtime vox-runtime--reconciling"><span class="vox-dot"></span><span class="vox-runtime__label">RECONCILING</span></span></div>
-        <div class="vox-widget__body">
+        <div class="vox-widget__body ref__wide">
           <div class="vox-table">
             <div class="vox-table__header" style="grid-template-columns:120px 1fr 116px 132px">
               <span>Объект</span><span>Что известно</span><span class="vox-num">Возраст</span><span style="padding-left:16px">Состояние</span>
@@ -1090,9 +1091,9 @@
     <div class="ref__sec-head"><span class="ref__num">13</span><h2 class="vox-text--title">Массовое применение защиты</h2>
       <span class="ref__note">Смена значения по умолчанию действует только на новые заявки. Перенос новой политики на уже открытые позиции — отдельное действие, затрагивающее капитал: предпросмотр, список затронутых позиций, «было → станет», последствия, подтверждение словом и результат сверки.</span></div>
 
-    <div class="vox-widget" style="margin-bottom:12px">
+    <div class="vox-widget ref__wide" style="margin-bottom:12px">
       <div class="vox-widget__header"><span class="vox-widget__title">Применить защиту по умолчанию к открытым позициям<span class="vox-widget__context">счёт «Основной брокерский»</span></span><span class="vox-env vox-env--live" style="height:18px"><span class="vox-dot"></span>PRODUCTION</span></div>
-      <div class="vox-widget__body" style="padding:10px">
+      <div class="vox-widget__body ref__wide" style="padding:10px">
         <div class="vox-migrate">
 
           <div class="vox-migrate__policy">
@@ -1153,9 +1154,9 @@
     </div>
 
     <div class="ref__grid">
-      <div class="vox-widget">
+      <div class="vox-widget ref__wide">
         <div class="vox-widget__header"><span class="vox-widget__title">Результат применения<span class="vox-widget__context">сверка с брокером</span></span><span class="vox-runtime vox-runtime--reconciling"><span class="vox-dot"></span><span class="vox-runtime__label">RECONCILING</span></span></div>
-        <div class="vox-widget__body">
+        <div class="vox-widget__body ref__wide">
           <div class="vox-table">
             <div class="vox-table__header" style="grid-template-columns:120px 1fr 148px">
               <span>Инструмент</span><span>Результат</span><span style="padding-left:16px">Состояние</span>
@@ -1533,7 +1534,7 @@
             <span class="vox-widget__title">Список наблюдения<span class="vox-widget__context">связан с рабочим пространством</span></span>
             <span class="vox-widget__tools"><span class="vox-tabs"><span class="vox-tab is-selected">Мои<span class="vox-tab__count">12</span></span><span class="vox-tab">Акции</span><span class="vox-tab">Фьючерсы</span><span class="vox-tab">Облигации</span></span></span>
           </div>
-          <div class="vox-widget__body">
+          <div class="vox-widget__body ref__wide">
             <div class="vox-table">
               <div class="vox-table__header" style="grid-template-columns:150px 1fr 96px 104px 96px 104px">
                 <span class="vox-table__sort">Тикер ▲</span><span>Название</span><span class="vox-num">Цена</span><span class="vox-num">Изм.</span><span class="vox-num">Спред</span><span class="vox-num">Объём</span>
@@ -1607,7 +1608,7 @@
 
         <div class="vox-widget vox-workspace__col-8">
           <div class="vox-widget__header"><span class="vox-widget__title">Позиции<span class="vox-widget__context">счёт «Основной брокерский»</span></span><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>1 в сверке</span></div>
-          <div class="vox-widget__body">
+          <div class="vox-widget__body ref__wide">
             <div class="vox-table">
               <div class="vox-table__header" style="grid-template-columns:120px 84px 96px 112px 128px 1fr">
                 <span class="vox-table__sort">Инструмент ▲</span><span>Кол-во</span><span class="vox-num">Средняя</span><span class="vox-num">P&amp;L</span><span>Защита</span><span style="padding-left:16px">Источник защиты</span>
@@ -1652,7 +1653,7 @@
 
         <div class="vox-widget vox-workspace__col-6">
           <div class="vox-widget__header"><span class="vox-widget__title">Операции<span class="vox-widget__context">счёт «Основной брокерский»</span></span></div>
-          <div class="vox-widget__body">
+          <div class="vox-widget__body ref__wide">
             <div class="vox-table">
               <div class="vox-table__header" style="grid-template-columns:104px 1fr 128px">
                 <span>Дата</span><span>Операция</span><span class="vox-num">Сумма</span>
@@ -1668,7 +1669,7 @@
 
         <div class="vox-widget vox-workspace__col-6">
           <div class="vox-widget__header"><span class="vox-widget__title">Журнал событий</span><span class="vox-widget__tools"><span class="vox-segmented"><span class="vox-segmented__item is-selected">Все</span><span class="vox-segmented__item">Заявки</span><span class="vox-segmented__item">Защита</span><span class="vox-segmented__item">Система</span></span></span></div>
-          <div class="vox-widget__body">
+          <div class="vox-widget__body ref__wide">
             <div class="vox-table">
               <div class="vox-table__header" style="grid-template-columns:82px 40px 1fr 104px">
                 <span>Время</span><span>Тип</span><span>Событие</span><span style="padding-left:8px">Источник</span>
@@ -1702,7 +1703,7 @@
 
         <div class="vox-widget vox-workspace__col-7">
           <div class="vox-widget__header"><span class="vox-widget__title">Стратегии счёта<span class="vox-widget__context">Т-Инвест · Основной брокерский</span></span></div>
-          <div class="vox-widget__body">
+          <div class="vox-widget__body ref__wide">
             <div class="vox-table">
               <div class="vox-table__header" style="grid-template-columns:150px 128px minmax(0,1fr) minmax(148px,auto)">
                 <span class="vox-table__sort">Стратегия ▲</span><span>Счёт · среда</span><span>Защита стратегии</span><span style="padding-left:8px">Режим</span>
@@ -1786,7 +1787,7 @@
 
         <div class="vox-widget vox-workspace__col-7">
           <div class="vox-widget__header"><span class="vox-widget__title">Очередь намерений</span><span class="vox-widget__tools"><span class="vox-tabs"><span class="vox-tab is-selected">Ожидают<span class="vox-tab__count">2</span></span><span class="vox-tab">Согласованы</span><span class="vox-tab">Отклонены</span></span></span></div>
-          <div class="vox-widget__body">
+          <div class="vox-widget__body ref__wide">
             <div class="vox-table">
               <div class="vox-table__header" style="grid-template-columns:110px 1fr 120px 132px">
                 <span>Инструмент</span><span>Намерение</span><span class="vox-num">Уверенность</span><span style="padding-left:8px">Состояние</span>
@@ -1839,7 +1840,7 @@
 
         <div class="vox-widget vox-workspace__col-8">
           <div class="vox-widget__header"><span class="vox-widget__title">Прогоны и сравнение</span></div>
-          <div class="vox-widget__body">
+          <div class="vox-widget__body ref__wide">
             <div class="vox-table">
               <div class="vox-table__header" style="grid-template-columns:150px 104px 104px 104px 104px 1fr">
                 <span class="vox-table__sort">Прогон ▲</span><span class="vox-num">Доходность</span><span class="vox-num">Просадка</span><span class="vox-num">Шарп</span><span class="vox-num">Сделок</span><span style="padding-left:16px">Состояние</span>
@@ -1882,7 +1883,7 @@
 
         <div class="vox-widget vox-workspace__col-7">
           <div class="vox-widget__header"><span class="vox-widget__title">Реестр моделей</span></div>
-          <div class="vox-widget__body">
+          <div class="vox-widget__body ref__wide">
             <div class="vox-table">
               <div class="vox-table__header" style="grid-template-columns:170px 84px 104px 104px 1fr">
                 <span class="vox-table__sort">Модель ▲</span><span>Версия</span><span class="vox-num">ROC-AUC</span><span class="vox-num">Дрейф</span><span style="padding-left:16px">Состояние</span>
@@ -1944,7 +1945,7 @@
 
         <div class="vox-widget vox-workspace__col-6">
           <div class="vox-widget__header"><span class="vox-widget__title">Диагностика рантайма</span></div>
-          <div class="vox-widget__body">
+          <div class="vox-widget__body ref__wide">
             <div class="vox-table">
               <div class="vox-table__header" style="grid-template-columns:190px 1fr 128px"><span>Компонент</span><span>Показатель</span><span style="padding-left:8px">Состояние</span></div>
               <div class="vox-table__row" style="grid-template-columns:190px 1fr 128px"><span>Поток рыночных данных</span><span class="vox-text--dense">задержка 42 мс · последний пакет 11:42:06</span><span style="padding-left:4px"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>OK</span></span></div>
@@ -1971,7 +1972,7 @@
 
         <div class="vox-widget vox-workspace__col-7">
           <div class="vox-widget__header"><span class="vox-widget__title">Аудит</span></div>
-          <div class="vox-widget__body">
+          <div class="vox-widget__body ref__wide">
             <div class="vox-table">
               <div class="vox-table__header" style="grid-template-columns:132px 132px 1fr"><span>Время</span><span>Оператор</span><span>Действие</span></div>
               <div class="vox-table__row" style="grid-template-columns:132px 132px 1fr"><span class="vox-tape__time">25.08 09:14</span><span>А. Иванов</span><span class="vox-text--dense">Включено исполнение Vox · «Основной брокерский» · PRODUCTION</span></div>

@@ -126,17 +126,20 @@
 .vox-workspace .vox-ticket { width: auto; }
 .vox-ticket__body { padding: 10px; display: flex; flex-direction: column; gap: var(--vox-space-2); }
 .vox-ticket__instrument {
-  height: var(--vox-row-height); display: flex; align-items: center; justify-content: space-between;
+  min-height: var(--vox-row-height); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
   padding: 0 8px; background: var(--vox-bg-input);
   border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-sm);
 }
-.vox-ticket__field { display: flex; align-items: center; gap: var(--vox-space-2); }
+.vox-ticket__field { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vox-space-1) var(--vox-space-2); min-height: var(--vox-row-height); }
 .vox-ticket__label { width: 56px; font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
 .vox-ticket__preview {
   padding: 8px; background: var(--vox-bg-input);
   border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-sm);
 }
-.vox-ticket__preview-row { height: 20px; display: flex; align-items: center; justify-content: space-between; }
+.vox-ticket__preview-row {
+  min-height: 20px; display: flex; flex-wrap: wrap; align-items: baseline;
+  justify-content: space-between; gap: 2px var(--vox-space-2); padding: 1px 0;
+}
 .vox-ticket__disclosure {
   height: 24px; display: flex; align-items: center; gap: var(--vox-space-1);
   background: transparent; border: 0; padding: 0; color: var(--vox-text-secondary);
@@ -183,12 +186,12 @@
    never collapsed, never inferred from "the last used account". */
 .vox-ticket__target {
   display: flex; align-items: center; justify-content: space-between; gap: var(--vox-space-2);
-  height: var(--vox-row-height); padding: 0 8px;
+  min-height: var(--vox-row-height); padding: 4px 8px;
   background: var(--vox-bg-surface-hover);
   border: 1px solid var(--vox-border-default); border-radius: var(--vox-radius-sm);
   font-size: var(--vox-text-12);
 }
-.vox-ticket__target-account { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.vox-ticket__target-account { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; min-width: 0; }
 /* The account name answers "whose money is this" — it wraps rather than truncating.
    Ellipsis is allowed on decoration, never on the execution target. */
 .vox-ticket__target-name { font-weight: var(--vox-weight-medium); min-width: 0; overflow-wrap: anywhere; }
@@ -259,8 +262,8 @@
   background: var(--vox-bg-input); overflow: hidden;
 }
 .vox-protect__head {
-  height: var(--vox-row-height); display: flex; align-items: center; gap: var(--vox-space-2);
-  padding: 0 8px; font-size: var(--vox-text-12);
+  min-height: var(--vox-row-height); display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--vox-space-2);
+  padding: 4px 8px; font-size: var(--vox-text-12);
 }
 .vox-protect__title { display: flex; align-items: center; gap: 6px; }
 .vox-protect__mark {
@@ -282,7 +285,7 @@
 .vox-protect__hint { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); line-height: 1.45; }
 /* Resulting broker-side level, always shown as an absolute price + distance. */
 .vox-protect__result {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--vox-space-2); justify-content: space-between;
   padding: 6px 8px; border-radius: var(--vox-radius-xs);
   background: var(--vox-bg-surface); font-size: var(--vox-text-12);
 }
@@ -379,7 +382,7 @@
 /* Discovered accounts are read from the connection, never typed by the user. */
 .vox-brokers__discovered { border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-sm); overflow-x: auto; }
 .vox-brokers__discovered-head {
-  height: 24px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px;
+  min-height: 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; padding: 2px 10px;
   background: var(--vox-bg-surface-hover); border-bottom: 1px solid var(--vox-border-default);
   font-size: 10px; color: var(--vox-text-tertiary);
 }

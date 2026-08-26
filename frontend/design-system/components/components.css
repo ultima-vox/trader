@@ -283,12 +283,15 @@
 .vox-table { display: flex; flex-direction: column; font-size: var(--vox-text-12); }
 .vox-table__header {
   height: var(--vox-header-height); display: grid; align-items: center; padding: 0 8px;
+  border-left: 2px solid transparent; column-gap: var(--vox-space-2);
   background: var(--vox-bg-surface-hover); border-bottom: 1px solid var(--vox-border-default);
   font-size: var(--vox-text-11); color: var(--vox-text-tertiary); position: sticky; top: 0; z-index: 1;
 }
 .vox-table__sort { display: inline-flex; align-items: center; gap: var(--vox-space-1); cursor: pointer; color: var(--vox-text-primary); }
+/* Dense columns still need a gutter: without it a header label runs into its neighbour. */
 .vox-table__row {
   height: var(--vox-row-height); display: grid; align-items: center; padding: 0 8px;
+  column-gap: var(--vox-space-2);
   border-bottom: 1px solid var(--vox-bg-surface-hover);
   border-left: 2px solid transparent; cursor: pointer;
 }
@@ -296,7 +299,8 @@
 .vox-table__row.is-selected { background: var(--vox-accent-selected-surface); border-left-color: var(--vox-accent-primary); }
 .vox-table__row.is-unknown { background: var(--vox-unknown-surface-subtle); border-left-color: var(--vox-unknown-base); }
 .vox-table__footer {
-  height: 24px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px;
+  min-height: 24px; display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; justify-content: space-between; padding: 2px 12px;
+  border-left: 2px solid transparent;
   border-top: 1px solid var(--vox-border-subtle); background: var(--vox-bg-workspace);
   font-size: var(--vox-text-11); color: var(--vox-text-tertiary);
 }
@@ -304,9 +308,10 @@
 .vox-flash-down { animation: voxFlashDown var(--vox-motion-flash) ease-out; }
 
 /* A table wider than its widget scrolls inside the widget instead of being clipped:
-   columns are never silently cut off, and header and body stay aligned while scrolling. */
-.vox-table { overflow-x: auto; }
-.vox-table > * { min-width: max-content; }
+   columns are never silently cut off, and header and body stay aligned while scrolling.
+   The scroller is itself a grid, so header, rows and footer share one resolved width. */
+.vox-table { overflow-x: auto; display: grid; grid-auto-flow: row; }
+.vox-table > * { min-width: max-content; width: 100%; }
 
 /* =========================================================
    Widget — canonical anatomy: 32px header + content. No shadow on widgets.
@@ -331,7 +336,10 @@
 }
 .vox-widget__title { display: flex; align-items: center; gap: var(--vox-space-2); min-width: 0; }
 .vox-widget__tools { display: flex; align-items: center; gap: 2px; }
-.vox-widget__body { flex: 1 1 auto; min-height: 0; }
+/* The body grows to its content: a widget may get taller, but it may never clip what
+   it holds. A body that scrolls internally opts in with --scroll. */
+.vox-widget__body { flex: 1 1 auto; min-height: min-content; }
+.vox-widget__body--scroll { min-height: 0; overflow: auto; }
 .vox-widget__footer {
   height: 24px; display: flex; align-items: center; gap: var(--vox-space-3); padding: 0 12px;
   border-top: 1px solid var(--vox-border-subtle); background: var(--vox-bg-workspace);
