@@ -63,12 +63,26 @@ jobs:
         run: |
           set -euo pipefail
           if [[ ! -x "$CARGO_HOME/bin/rustup" ]]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --profile minimal --default-toolchain none
+            for attempt in 1 2 3; do
+              if curl --proto '=https' --tlsv1.2 --retry 5 \
+                --retry-all-errors --retry-delay 2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --profile minimal --default-toolchain none; then
+                break
+              fi
+              [[ "$attempt" -lt 3 ]] || exit 1
+              sleep "$((attempt * 2))"
+            done
           fi
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
           export PATH="$CARGO_HOME/bin:$PATH"
-          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+          for attempt in 1 2 3; do
+            if rustup toolchain install 1.97.1 --profile minimal \
+              --component clippy,rustfmt; then
+              break
+            fi
+            [[ "$attempt" -lt 3 ]] || exit 1
+            sleep "$((attempt * 2))"
+          done
           rustup default 1.97.1
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
