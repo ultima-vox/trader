@@ -61,7 +61,9 @@ Acceptance: a client can list scopes, read one account fully, submit a command, 
 `DISPATCHING → ACKNOWLEDGED|REJECTED|UNKNOWN_AFTER_DISPATCH`, and be told to stop when the
 epoch changes.
 
-Owner: **#11**.
+Owner: **#38 — Application API Foundation**, which was opened from the finding in
+`BACKEND_CONTRACTS.md` and covers exactly this dependency. It builds on **#11** for the
+read models and ownership/epoch semantics.
 
 ## BD-2 · Risk read model — **P1** (Trade, Portfolio, Decision)
 
@@ -85,7 +87,8 @@ Required:
 Acceptance: submitting an order that violates a limit returns `BLOCKED` with the limit
 named; one that can be reduced returns `RESIZE` with `adjusted_quantity_lots`.
 
-Owner: unassigned — needs a risk-engine issue.
+Owner: **#21 — Risk Foundation** (pre-trade, portfolio risk, reservations, kill switch),
+surfaced through #38.
 
 ## BD-3 · Market-data read model — **P1** (Markets, Trade)
 
@@ -108,7 +111,7 @@ Required:
 Acceptance: the Markets watchlist and the Trade quote strip render from Vox alone, and the
 ticket's lot/step validation is metadata-driven.
 
-Owner: **#8** (market data) extended into a runtime read model.
+Owner: **#8** (T-Invest market data) extended into a Vox read model and surfaced through #38.
 
 ## BD-4 · Portfolio valuation and P&L — **P1** (Portfolio, Trade)
 
@@ -128,7 +131,8 @@ Required:
 Acceptance: the portfolio screen shows value, P&L and coverage without a single computed
 guess, and every figure is exact.
 
-Owner: unassigned — depends on BD-3 for pricing.
+Owner: **#22 — Portfolio Foundation** (allocation, capital budgets, exposure); depends on
+BD-3 for pricing and is surfaced through #38.
 
 ## BD-5 · Account, credential and RBAC API — **P1** (Settings → Brokers & Accounts, Users)
 
@@ -154,7 +158,7 @@ Acceptance: the settings screen can add a sandbox and a production connection to
 provider, discover accounts, bind two of them, rotate a credential, and never receive the
 stored secret back.
 
-Owner: **#17**.
+Owner: **#17 — Platform Foundation**, surfaced through #38.
 
 ## BD-9 · Protection defaults — **P2** (Trade, Portfolio, Settings)
 
@@ -174,7 +178,7 @@ Required:
 Acceptance: the ticket shows `Плавающий стоп 1,00 % · Источник: заявка` from a backend
 field, and changing an account default does not alter any existing stop order.
 
-Owner: **#10**.
+Owner: **#10 — Broker Foundation 05**, surfaced through #38.
 
 ## BD-10 · Bulk protection migration — **P2** (Portfolio, Settings)
 
@@ -194,7 +198,7 @@ Required:
 Acceptance: preview changes nothing at the broker; apply produces per-position results, and
 a failure of one position never silently succeeds as a whole.
 
-Owner: **#10**.
+Owner: **#10 — Broker Foundation 05**, surfaced through #38.
 
 ## BD-6 · Strategy and decision contracts — **P1** (Strategy, Decision)
 
@@ -214,7 +218,7 @@ Required:
 Acceptance: the Decision queue renders candidates and approves one through the same command
 path as a manual order.
 
-Owner: unassigned.
+Owner: **#23 — Strategy Foundation** and **#27 — Decision Foundation**.
 
 ## BD-7 · ML / model contracts — **P1** (ML / Models, Settings → ML)
 
@@ -232,7 +236,7 @@ Required:
 Acceptance: the registry lists models with real metrics, and promoting a candidate is an
 audited command that leaves execution authorization untouched.
 
-Owner: unassigned.
+Owner: **#26 — ML Foundation**.
 
 ## BD-8 · Research / backtest contracts — **P1** (Research)
 
@@ -251,7 +255,7 @@ Required:
 Acceptance: a run either completes with a full result or fails with a named reason; no
 partial curve is ever shown as final.
 
-Owner: unassigned.
+Owner: **#29 — Backtesting Foundation**.
 
 ## BD-11 · Aggregate accounts read model — **P2** (`Все счета`)
 
@@ -260,7 +264,7 @@ accounts, aggregate valuation, and an explicit flag that the aggregate scope is
 **not executable**. Until it exists, the UI keeps the mode disabled; there is no
 aggregate execution contract and the frontend must not synthesise one.
 
-Owner: unassigned.
+Owner: **#22 — Portfolio Foundation** (aggregate read side).
 
 ## BD-12 · Application version, updates and background jobs — **P2** (System, Settings)
 
@@ -268,7 +272,7 @@ Required: current version, available version, update state, restart-required fla
 maintenance state, update history, and a list of background jobs with their state. No field
 in normal UI may accept a Git URL or a shell command.
 
-Owner: unassigned.
+Owner: unassigned; closest home is **#30 — Operator Workspace**.
 
 ## BD-13 · Second provider and additional environments — **P2**
 
@@ -277,7 +281,31 @@ Owner: unassigned.
 means extending `Provider` and the capability metadata; adding an environment means
 extending `RuntimeEnvironment` and every scope key derived from it.
 
-Owner: unassigned.
+Owner: unassigned; requires extending `Provider` and `RuntimeEnvironment` in
+`vox-runtime`, which touches every scope key.
+
+---
+
+## Mapping to repository issues
+
+| Dependency | Issue |
+| --- | --- |
+| BD-1 transport, generated client | **#38** |
+| BD-2 risk | #21 |
+| BD-3 market data | #8 → #38 |
+| BD-4 valuation, P&L, operation amounts | #22 |
+| BD-5 accounts, credentials, RBAC | #17 |
+| BD-6 strategy, decision | #23, #27 |
+| BD-7 models | #26 |
+| BD-8 research, backtest | #29 |
+| BD-9 protection defaults | #10 |
+| BD-10 bulk migration | #10 |
+| BD-11 aggregate accounts | #22 |
+| BD-12 version, updates, jobs | #30 |
+| BD-13 second provider, PAPER/BACKTEST | — |
+
+Note for the Head of Development: **#30 (Operator Workspace)** overlaps #18 in scope. One
+of the two should own the terminal screens, or #30 should be scoped to what #18 defers.
 
 ---
 
