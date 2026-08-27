@@ -1,11 +1,11 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use vox_runtime::{
     BrokerAccount, BrokerEvent, BrokerEventClass, BrokerIdentityLinks, BrokerMethod,
     BrokerPortError, BrokerReadPort, BrokerResultClass, CredentialResolution,
@@ -54,6 +54,9 @@ struct FakeBroker {
     snapshot: Mutex<FakeSnapshot>,
     failures: Mutex<BTreeMap<BrokerMethod, VecDeque<BrokerPortError>>>,
     calls: Mutex<BTreeMap<BrokerMethod, u64>>,
+    pause_next_accounts: AtomicBool,
+    accounts_paused: Notify,
+    release_accounts: Notify,
 }
 
 impl FakeBroker {
@@ -62,6 +65,9 @@ impl FakeBroker {
             snapshot: Mutex::new(snapshot),
             failures: Mutex::new(BTreeMap::new()),
             calls: Mutex::new(BTreeMap::new()),
+            pause_next_accounts: AtomicBool::new(false),
+            accounts_paused: Notify::new(),
+            release_accounts: Notify::new(),
         }
     }
 
@@ -101,6 +107,10 @@ impl FakeBroker {
 impl BrokerReadPort for FakeBroker {
     async fn accounts(&self, _: &RuntimeScope) -> Result<Vec<BrokerAccount>, BrokerPortError> {
         self.before(BrokerMethod::GetAccounts)?;
+        if self.pause_next_accounts.swap(false, Ordering::SeqCst) {
+            self.accounts_paused.notify_waiters();
+            self.release_accounts.notified().await;
+        }
         Ok(self.snapshot().accounts)
     }
 
@@ -204,6 +214,7 @@ impl ExecutionPort for FakeExecution {
 #[derive(Default)]
 struct FakeStreams {
     sender: Mutex<Option<mpsc::Sender<StreamSignal>>>,
+    omitted_required: Mutex<Option<StreamKind>>,
     connects: AtomicU64,
     disconnects: AtomicU64,
 }
@@ -228,16 +239,21 @@ impl ExecutionStreamPort for FakeStreams {
         _: &RuntimeScope,
         _: u64,
         output: mpsc::Sender<StreamSignal>,
-    ) -> Result<(), BrokerPortError> {
+    ) -> Result<BTreeSet<StreamKind>, BrokerPortError> {
         self.connects.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut sender) = self.sender.lock() {
-            *sender = Some(output.clone());
+            *sender = Some(output);
         }
-        output
-            .send(StreamSignal::Connected(StreamKind::OrderState))
-            .await
-            .map_err(|error| permanent("OrdersStreamService", "OrderStateStream", error))?;
-        Ok(())
+        let omitted = self.omitted_required.lock().ok().and_then(|value| *value);
+        Ok([
+            StreamKind::OrderState,
+            StreamKind::Positions,
+            StreamKind::Portfolio,
+            StreamKind::Operations,
+        ]
+        .into_iter()
+        .filter(|stream| Some(*stream) != omitted)
+        .collect())
     }
 
     async fn disconnect(&self) -> Result<(), BrokerPortError> {
@@ -542,6 +558,189 @@ async fn cancel_absence_never_fabricates_rejection_or_success()
 }
 
 #[tokio::test]
+async fn partial_fill_operation_does_not_resolve_ambiguous_cancel_until_terminal_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = runtime_path("cancel-partial-fill");
+    let scope = scope()?;
+    {
+        let store = SqliteRuntimeStore::open(&path)?;
+        let epoch = store.acquire_ownership(&scope, "seed", 1)?;
+        seed_unknown(
+            &store,
+            &scope,
+            epoch,
+            "cancel-partial",
+            MutationKind::CancelOrder,
+        )?;
+        store.upsert_identity_links(
+            &scope.key(),
+            &BrokerIdentityLinks {
+                logical_request_id: "cancel-partial".into(),
+                broker_order_id: Some("old-order".into()),
+                ..BrokerIdentityLinks::default()
+            },
+            epoch,
+            3,
+        )?;
+    }
+    let partial = OrderFact {
+        account_id: "account-1".into(),
+        broker_order_id: "old-order".into(),
+        logical_request_id: Some("original-post".into()),
+        instrument_uid: "instrument-1".into(),
+        active: true,
+        terminal: false,
+    };
+    let mut snapshot = FakeSnapshot::flat("account-1");
+    snapshot.active_orders.push(partial.clone());
+    snapshot.order_states.push(partial);
+    snapshot.operations.push(OperationFact {
+        account_id: "account-1".into(),
+        cursor: "existing-partial-fill".into(),
+        provider_operation_id: Some("operation-before-cancel".into()),
+        broker_order_id: Some("old-order".into()),
+        logical_request_id: Some("original-post".into()),
+        broker_fill_ids: ["fill-before-cancel".into()].into_iter().collect(),
+    });
+    let store = SqliteRuntimeStore::open(&path)?;
+    let broker = Arc::new(FakeBroker::new(snapshot));
+    let coordinator = RuntimeCoordinator::new(
+        scope.clone(),
+        store.clone(),
+        broker.clone(),
+        Arc::new(FakeExecution::new([])),
+        Arc::new(FakeStreams::default()),
+        Arc::new(FakeCredential::accepted(true)),
+        Arc::new(InMemoryMetrics::default()),
+        ReconciliationConfig::default(),
+        RuntimeConfig::default(),
+    );
+    let report = coordinator.start().await?;
+    assert_eq!(report.resulting_state, RuntimeState::Halted);
+    assert_eq!(report.unresolved_logical_request_ids, ["cancel-partial"]);
+
+    if let Ok(mut snapshot) = broker.snapshot.lock() {
+        snapshot.active_orders.clear();
+        snapshot.order_states = vec![OrderFact {
+            account_id: "account-1".into(),
+            broker_order_id: "old-order".into(),
+            logical_request_id: Some("original-post".into()),
+            instrument_uid: "instrument-1".into(),
+            active: false,
+            terminal: true,
+        }];
+    }
+    let report = coordinator
+        .force_reconciliation(
+            ReasonCode::ReconciliationStarted,
+            "terminal cancel readback",
+        )
+        .await?;
+    assert_eq!(report.resulting_state, RuntimeState::Ready);
+    assert!(store.unresolved_mutations(&scope.key())?.is_empty());
+    coordinator.shutdown().await?;
+    drop(coordinator);
+    drop(store);
+    cleanup_path(&path);
+    Ok(())
+}
+
+#[tokio::test]
+async fn old_order_operation_does_not_resolve_replace_until_exact_replacement_identity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = runtime_path("replace-old-operation");
+    let scope = scope()?;
+    {
+        let store = SqliteRuntimeStore::open(&path)?;
+        let epoch = store.acquire_ownership(&scope, "seed", 1)?;
+        seed_unknown(
+            &store,
+            &scope,
+            epoch,
+            "replace-1",
+            MutationKind::ReplaceOrder,
+        )?;
+        store.upsert_identity_links(
+            &scope.key(),
+            &BrokerIdentityLinks {
+                logical_request_id: "replace-1".into(),
+                broker_order_id: Some("old-order".into()),
+                ..BrokerIdentityLinks::default()
+            },
+            epoch,
+            3,
+        )?;
+    }
+    let old = OrderFact {
+        account_id: "account-1".into(),
+        broker_order_id: "old-order".into(),
+        logical_request_id: Some("original-post".into()),
+        instrument_uid: "instrument-1".into(),
+        active: true,
+        terminal: false,
+    };
+    let mut snapshot = FakeSnapshot::flat("account-1");
+    snapshot.active_orders.push(old.clone());
+    snapshot.order_states.push(old);
+    snapshot.operations.push(OperationFact {
+        account_id: "account-1".into(),
+        cursor: "existing-old-fill".into(),
+        provider_operation_id: Some("operation-before-replace".into()),
+        broker_order_id: Some("old-order".into()),
+        logical_request_id: Some("original-post".into()),
+        broker_fill_ids: ["fill-before-replace".into()].into_iter().collect(),
+    });
+    let store = SqliteRuntimeStore::open(&path)?;
+    let broker = Arc::new(FakeBroker::new(snapshot));
+    let coordinator = RuntimeCoordinator::new(
+        scope.clone(),
+        store.clone(),
+        broker.clone(),
+        Arc::new(FakeExecution::new([])),
+        Arc::new(FakeStreams::default()),
+        Arc::new(FakeCredential::accepted(true)),
+        Arc::new(InMemoryMetrics::default()),
+        ReconciliationConfig::default(),
+        RuntimeConfig::default(),
+    );
+    let report = coordinator.start().await?;
+    assert_eq!(report.resulting_state, RuntimeState::Halted);
+    assert_eq!(report.unresolved_logical_request_ids, ["replace-1"]);
+
+    if let Ok(mut snapshot) = broker.snapshot.lock() {
+        let replacement = OrderFact {
+            account_id: "account-1".into(),
+            broker_order_id: "replacement-order".into(),
+            logical_request_id: Some("replace-1".into()),
+            instrument_uid: "instrument-1".into(),
+            active: true,
+            terminal: false,
+        };
+        snapshot.active_orders.push(replacement.clone());
+        snapshot.order_states.push(replacement);
+    }
+    let report = coordinator
+        .force_reconciliation(
+            ReasonCode::ReconciliationStarted,
+            "exact replacement identity readback",
+        )
+        .await?;
+    assert_eq!(report.resulting_state, RuntimeState::Ready);
+    assert!(store.unresolved_mutations(&scope.key())?.is_empty());
+    assert_eq!(
+        store.all_identity_links(&scope.key())?[0]
+            .replacement_broker_order_id
+            .as_deref(),
+        Some("replacement-order")
+    );
+    coordinator.shutdown().await?;
+    drop(coordinator);
+    drop(store);
+    cleanup_path(&path);
+    Ok(())
+}
+
+#[tokio::test]
 async fn manual_order_and_orphan_stop_are_preserved_and_halt_runtime()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut snapshot = FakeSnapshot::flat("account-1");
@@ -595,12 +794,30 @@ async fn stream_gap_closes_gate_reconnects_and_reconciles() -> Result<(), Box<dy
     harness.coordinator.start().await?;
     let reads_before = harness.broker.call_count(BrokerMethod::GetAccounts);
     harness
+        .broker
+        .pause_next_accounts
+        .store(true, Ordering::SeqCst);
+    let accounts_paused = harness.broker.accounts_paused.notified();
+    harness
         .streams
-        .send(StreamSignal::Gap {
-            stream: StreamKind::OrderState,
+        .send(StreamSignal::Disconnected {
+            stream: StreamKind::Positions,
             reason: "forced deterministic gap".into(),
         })
         .await?;
+    tokio::time::timeout(Duration::from_secs(1), accounts_paused).await?;
+    let disconnected = harness.coordinator.health().await;
+    assert_eq!(disconnected.state, RuntimeState::Reconciling);
+    assert!(!disconnected.new_exposure_allowed);
+    assert_eq!(
+        disconnected
+            .stream_states
+            .iter()
+            .find(|stream| stream.stream == StreamKind::Positions)
+            .map(|stream| stream.state),
+        Some(vox_runtime::StreamState::Stale)
+    );
+    harness.broker.release_accounts.notify_one();
     for _ in 0..100 {
         if harness.broker.call_count(BrokerMethod::GetAccounts) > reads_before
             && harness.coordinator.health().await.state == RuntimeState::Ready
@@ -611,6 +828,71 @@ async fn stream_gap_closes_gate_reconnects_and_reconciles() -> Result<(), Box<dy
     }
     assert!(harness.broker.call_count(BrokerMethod::GetAccounts) > reads_before);
     assert!(harness.streams.connects.load(Ordering::SeqCst) >= 2);
+    assert!(harness.coordinator.health().await.new_exposure_allowed);
+    harness.coordinator.shutdown().await?;
+    harness.cleanup();
+    Ok(())
+}
+
+#[tokio::test]
+async fn ready_requires_every_correctness_stream_ack() -> Result<(), Box<dyn std::error::Error>> {
+    let harness = Harness::new(FakeSnapshot::flat("account-1"), [], true)?;
+    if let Ok(mut omitted) = harness.streams.omitted_required.lock() {
+        *omitted = Some(StreamKind::Portfolio);
+    }
+    assert!(matches!(
+        harness.coordinator.start().await,
+        Err(RuntimeError::Safety(detail)) if detail.contains("Portfolio")
+    ));
+    let health = harness.coordinator.health().await;
+    assert_eq!(health.state, RuntimeState::Halted);
+    assert!(!health.new_exposure_allowed);
+    harness.coordinator.shutdown().await?;
+    harness.cleanup();
+    Ok(())
+}
+
+#[tokio::test]
+async fn external_position_event_forces_authoritative_refresh_before_ready()
+-> Result<(), Box<dyn std::error::Error>> {
+    let harness = Harness::new(FakeSnapshot::flat("account-1"), [], true)?;
+    harness.coordinator.start().await?;
+    let reads_before = harness.broker.call_count(BrokerMethod::GetAccounts);
+    let epoch = harness.coordinator.health().await.runtime_epoch;
+    harness
+        .broker
+        .pause_next_accounts
+        .store(true, Ordering::SeqCst);
+    let accounts_paused = harness.broker.accounts_paused.notified();
+    harness
+        .streams
+        .send(StreamSignal::Event(BrokerEvent {
+            account_id: "account-1".into(),
+            event_class: BrokerEventClass::Position,
+            stable_event_id: "external-position-change".into(),
+            broker_order_id: None,
+            broker_stop_order_id: None,
+            logical_request_id: None,
+            runtime_epoch: epoch,
+        }))
+        .await?;
+    tokio::time::timeout(Duration::from_secs(1), accounts_paused).await?;
+    assert_eq!(
+        harness.coordinator.health().await.state,
+        RuntimeState::Reconciling
+    );
+    assert!(!harness.coordinator.health().await.new_exposure_allowed);
+    harness.broker.release_accounts.notify_one();
+    for _ in 0..100 {
+        if harness.broker.call_count(BrokerMethod::GetAccounts) > reads_before
+            && harness.coordinator.health().await.state == RuntimeState::Ready
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(harness.broker.call_count(BrokerMethod::GetAccounts) > reads_before);
+    assert!(harness.coordinator.health().await.new_exposure_allowed);
     harness.coordinator.shutdown().await?;
     harness.cleanup();
     Ok(())
@@ -1131,18 +1413,4 @@ fn cleanup_path(path: &PathBuf) {
     let _ = std::fs::remove_file(path.with_extension("runtime.lock"));
     let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
     let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
-}
-
-fn permanent(
-    service: &'static str,
-    method: &'static str,
-    error: impl core::fmt::Display,
-) -> BrokerPortError {
-    BrokerPortError {
-        service,
-        method,
-        class: BrokerResultClass::Permanent,
-        message: error.to_string(),
-        retry_after: None,
-    }
 }

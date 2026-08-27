@@ -421,6 +421,7 @@ pub enum StreamState {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StreamHealth {
     pub stream: StreamKind,
+    pub required_for_ready: bool,
     pub state: StreamState,
     pub queue_depth: usize,
     pub last_event_at_unix_ms: Option<i64>,
@@ -530,8 +531,12 @@ mod tests {
         );
         assert_eq!(contracts["runtime_facts"].as_array().map(Vec::len), Some(8));
         assert_eq!(
-            contracts["stream_policy"]["documented_ping_interval_seconds"]["minimum"],
-            5
+            contracts["stream_policy"]["documented_ping_interval_ms"]["TradesStream"]["minimum"],
+            5_000
+        );
+        assert_eq!(
+            contracts["stream_policy"]["documented_ping_interval_ms"]["OrderStateStream"]["minimum"],
+            1_000
         );
 
         let live: serde_json::Value = serde_json::from_str(include_str!(
@@ -541,7 +546,7 @@ mod tests {
         let chaos: serde_json::Value = serde_json::from_str(include_str!(
             "../../../qualification/tinvest_runtime_chaos_matrix.json"
         ))?;
-        assert_eq!(chaos["scenarios"].as_array().map(Vec::len), Some(29));
+        assert_eq!(chaos["scenarios"].as_array().map(Vec::len), Some(31));
         Ok(())
     }
 }

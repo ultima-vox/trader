@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -114,12 +115,14 @@ pub enum StreamSignal {
 
 #[async_trait]
 pub trait ExecutionStreamPort: Send + Sync {
+    /// Returns exact streams whose provider subscription ACKs were verified.
+    /// Returning transport success without required ACKs cannot open runtime admission.
     async fn connect(
         &self,
         scope: &RuntimeScope,
         runtime_epoch: u64,
         output: mpsc::Sender<StreamSignal>,
-    ) -> Result<(), BrokerPortError>;
+    ) -> Result<BTreeSet<StreamKind>, BrokerPortError>;
     async fn disconnect(&self) -> Result<(), BrokerPortError>;
 }
 

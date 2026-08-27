@@ -368,10 +368,13 @@ where
                 | MutationKind::CancelOrder
         );
         if order_kind {
-            let broker_id = existing
-                .replacement_broker_order_id
-                .as_deref()
-                .or(existing.broker_order_id.as_deref());
+            let broker_id = match mutation.kind {
+                MutationKind::ReplaceOrder => existing.replacement_broker_order_id.as_deref(),
+                _ => existing
+                    .replacement_broker_order_id
+                    .as_deref()
+                    .or(existing.broker_order_id.as_deref()),
+            };
             let direct = self
                 .safe_read(BrokerMethod::GetOrderState, || {
                     self.reads
@@ -379,7 +382,7 @@ where
                 })
                 .await?;
             if let Some(order) = direct
-                && order_evidence_resolves(mutation.kind, &order)
+                && order_evidence_resolves(&mutation, &existing, &order)
             {
                 let mut links = existing;
                 if mutation.kind == MutationKind::ReplaceOrder {
@@ -397,11 +400,11 @@ where
             }
         }
 
-        if let Some(order) = snapshot.active_orders.iter().find(|order| {
-            order.logical_request_id.as_deref() == Some(&mutation.logical_request_id)
-                || existing.broker_order_id.as_deref() == Some(&order.broker_order_id)
-                || existing.replacement_broker_order_id.as_deref() == Some(&order.broker_order_id)
-        }) && !matches!(mutation.kind, MutationKind::CancelOrder)
+        if let Some(order) = snapshot
+            .active_orders
+            .iter()
+            .find(|order| order_evidence_resolves(&mutation, &existing, order))
+            && !matches!(mutation.kind, MutationKind::CancelOrder)
         {
             let mut links = existing.clone();
             if mutation.kind == MutationKind::ReplaceOrder {
@@ -446,11 +449,11 @@ where
             }
         }
 
-        if let Some(operation) = snapshot.operations.iter().find(|operation| {
-            operation.logical_request_id.as_deref() == Some(&mutation.logical_request_id)
-                || operation.broker_order_id.as_deref() == existing.broker_order_id.as_deref()
-                    && operation.broker_order_id.is_some()
-        }) {
+        if let Some(operation) = snapshot
+            .operations
+            .iter()
+            .find(|operation| operation_evidence_resolves(&mutation, &existing, operation))
+        {
             let mut links = existing.clone();
             if let Some(operation_id) = &operation.provider_operation_id {
                 links.provider_operation_ids.insert(operation_id.clone());
@@ -467,13 +470,11 @@ where
             return Ok(Some((mutation, links)));
         }
 
-        if let Some(event) = snapshot.stream_evidence.iter().find(|event| {
-            event.logical_request_id.as_deref() == Some(&mutation.logical_request_id)
-                || event.broker_order_id.as_deref() == existing.broker_order_id.as_deref()
-                    && event.broker_order_id.is_some()
-                || event.broker_stop_order_id.as_deref() == existing.broker_stop_order_id.as_deref()
-                    && event.broker_stop_order_id.is_some()
-        }) {
+        if let Some(event) = snapshot
+            .stream_evidence
+            .iter()
+            .find(|event| stream_evidence_resolves(&mutation, &existing, event))
+        {
             reconcile_record(
                 &mut mutation,
                 runtime_epoch,
@@ -744,11 +745,68 @@ fn duplicate_identity<'a>(
     }
 }
 
-fn order_evidence_resolves(kind: MutationKind, order: &crate::model::OrderFact) -> bool {
-    match kind {
-        MutationKind::PostOrder | MutationKind::PostOrderAsync | MutationKind::ReplaceOrder => true,
-        MutationKind::CancelOrder => order.terminal && !order.active,
+fn order_evidence_resolves(
+    mutation: &MutationRecord,
+    links: &BrokerIdentityLinks,
+    order: &crate::model::OrderFact,
+) -> bool {
+    let logical_match = order.logical_request_id.as_deref() == Some(&mutation.logical_request_id);
+    let original_match = links.broker_order_id.as_deref() == Some(&order.broker_order_id);
+    let replacement_match =
+        links.replacement_broker_order_id.as_deref() == Some(&order.broker_order_id);
+    match mutation.kind {
+        MutationKind::PostOrder | MutationKind::PostOrderAsync => logical_match || original_match,
+        MutationKind::ReplaceOrder => logical_match || replacement_match,
+        MutationKind::CancelOrder => {
+            (original_match || replacement_match) && order.terminal && !order.active
+        }
         _ => false,
+    }
+}
+
+fn operation_evidence_resolves(
+    mutation: &MutationRecord,
+    links: &BrokerIdentityLinks,
+    operation: &crate::model::OperationFact,
+) -> bool {
+    matches!(
+        mutation.kind,
+        MutationKind::PostOrder | MutationKind::PostOrderAsync
+    ) && (operation.logical_request_id.as_deref() == Some(&mutation.logical_request_id)
+        || operation.broker_order_id.as_deref() == links.broker_order_id.as_deref()
+            && operation.broker_order_id.is_some())
+}
+
+fn stream_evidence_resolves(
+    mutation: &MutationRecord,
+    links: &BrokerIdentityLinks,
+    event: &crate::model::BrokerEvent,
+) -> bool {
+    let logical_match = event.logical_request_id.as_deref() == Some(&mutation.logical_request_id);
+    match mutation.kind {
+        MutationKind::PostOrder | MutationKind::PostOrderAsync => {
+            matches!(
+                event.event_class,
+                BrokerEventClass::Order | BrokerEventClass::Fill
+            ) && (logical_match
+                || event.broker_order_id.as_deref() == links.broker_order_id.as_deref()
+                    && event.broker_order_id.is_some())
+        }
+        MutationKind::ReplaceOrder => {
+            event.event_class == BrokerEventClass::Order
+                && (logical_match
+                    || event.broker_order_id.as_deref()
+                        == links.replacement_broker_order_id.as_deref()
+                        && event.broker_order_id.is_some())
+        }
+        MutationKind::PostStopOrder | MutationKind::ProtectionLeg => {
+            event.event_class == BrokerEventClass::Stop
+                && (logical_match
+                    || event.broker_stop_order_id.as_deref()
+                        == links.broker_stop_order_id.as_deref()
+                        && event.broker_stop_order_id.is_some())
+        }
+        MutationKind::CancelOrder | MutationKind::CancelStopOrder => false,
     }
 }
 

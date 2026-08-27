@@ -20,18 +20,21 @@ Result: `1 passed; 0 failed`; 16/16 rows `QUALIFIED`.
 Evidence:
 
 - ownership epoch 1 acquired; second starts used fenced higher epochs;
-- strict OrderStateStream subscription ACK received before runtime connection became active;
+- exact OrderStateStream, PositionsStream, PortfolioStream and OperationsStream
+  subscription ACKs received before runtime connection became active; TradesStream
+  remains optional for READY and strict when configured;
 - initial broker snapshot/stream/snapshot handoff committed reconciliation
-  `9c9485f5-8bfd-4c54-abcf-4deaedd127b6` before READY;
+  `51bbab1b-c3cf-4d8c-90a8-e16b892542a8` before READY;
 - one durable `UNKNOWN_AFTER_DISPATCH` fence preceded each single transport attempt;
 - acknowledged sandbox order retained typed logical-request/broker-order link;
 - restart observed broker-visible open order without replay;
 - controlled post-dispatch UNKNOWN survived shutdown and resolved through
   `GetSandboxOrderState` with `ORDER_ID_TYPE_REQUEST`; execution adapter received no
   replay call;
-- authoritative position snapshot returned 12 position facts;
+- authoritative position snapshot returned 12 position facts; injected external-position
+  notification closed admission and forced unary refresh before READY;
 - duplicate stable broker evidence inserted once;
-- forced stream gap closed admission, strict ACK reconnect plus unary reconciliation
+- forced required-stream gap closed admission; four exact ACKs plus unary reconciliation
   restored READY;
 - unresolved UNKNOWN count finished at zero;
 - cleanup canceled two qualification orders; active-order readback returned zero.
@@ -62,6 +65,7 @@ Acceptance: average idle CPU at most 2% of one logical core, max RSS at most 150
 post-warm-up RSS growth at most 20 MiB, runtime stays READY, queue bounds hold, no
 reconnect storm.
 
-Observed result: `QUALIFIED`; 716 samples over 60 minutes, average idle CPU 0.02%
-of one logical core, max RSS 17.8 MiB, post-warm-up RSS growth 0.0 MiB. Runtime
-stayed READY, bounded queues held, and no reconnect storm occurred.
+Observed result after four required account streams and bounded stale detection:
+`QUALIFIED`; 717 samples over 60 minutes, average idle CPU 0.02% of one logical
+core, max RSS 18.4 MiB, post-warm-up RSS growth 0.0 MiB. Runtime stayed READY,
+bounded queues held, and no reconnect storm occurred.

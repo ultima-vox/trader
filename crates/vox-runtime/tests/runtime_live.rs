@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -60,11 +62,13 @@ type LiveCoordinator = RuntimeCoordinator<
 #[derive(Clone)]
 struct SandboxReads {
     client: TInvestGrpcClient,
+    snapshot_starts: Arc<AtomicU64>,
 }
 
 #[async_trait]
 impl BrokerReadPort for SandboxReads {
     async fn accounts(&self, _: &RuntimeScope) -> Result<Vec<BrokerAccount>, BrokerPortError> {
+        self.snapshot_starts.fetch_add(1, Ordering::SeqCst);
         let catalogue = AccountReadClient::new(self.client.clone())
             .sandbox_accounts()
             .await
@@ -353,7 +357,7 @@ impl ExecutionPort for SandboxExecution {
 
 struct SandboxStreams {
     client: TInvestGrpcClient,
-    task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     output: Mutex<Option<mpsc::Sender<StreamSignal>>>,
 }
 
@@ -361,7 +365,7 @@ impl SandboxStreams {
     fn new(client: TInvestGrpcClient) -> Self {
         Self {
             client,
-            task: Mutex::new(None),
+            tasks: Mutex::new(Vec::new()),
             output: Mutex::new(None),
         }
     }
@@ -379,6 +383,29 @@ impl SandboxStreams {
             .await?;
         Ok(())
     }
+
+    async fn force_external_position_signal(
+        &self,
+        account_id: &str,
+        runtime_epoch: u64,
+    ) -> Result<(), BoxError> {
+        self.output
+            .lock()
+            .await
+            .clone()
+            .ok_or("runtime stream output unavailable")?
+            .send(StreamSignal::Event(BrokerEvent {
+                account_id: account_id.to_owned(),
+                event_class: BrokerEventClass::Position,
+                stable_event_id: format!("qualification-external-position-{runtime_epoch}"),
+                broker_order_id: None,
+                broker_stop_order_id: None,
+                logical_request_id: None,
+                runtime_epoch,
+            }))
+            .await?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -388,8 +415,8 @@ impl ExecutionStreamPort for SandboxStreams {
         scope: &RuntimeScope,
         runtime_epoch: u64,
         output: mpsc::Sender<StreamSignal>,
-    ) -> Result<(), BrokerPortError> {
-        if let Some(task) = self.task.lock().await.take() {
+    ) -> Result<BTreeSet<StreamKind>, BrokerPortError> {
+        for task in self.tasks.lock().await.drain(..) {
             task.abort();
         }
         let supervisor = ExecutionStreamSupervisor::new(
@@ -436,34 +463,322 @@ impl ExecutionStreamPort for SandboxStreams {
             retry_after: None,
         })?;
         let _ = ack;
-        output
-            .send(StreamSignal::Connected(StreamKind::OrderState))
-            .await
-            .map_err(|error| port_error("Runtime", "stream_channel", error))?;
-        *self.output.lock().await = Some(output.clone());
+
         let account_id = scope.broker_account_id.clone();
-        let task = tokio::spawn(async move {
+        let ping_settings = || {
+            Some(v1::PingDelaySettings {
+                ping_delay_ms: Some(5_000),
+            })
+        };
+        let mut portfolio = self
+            .client
+            .open_portfolio_stream(v1::PortfolioStreamRequest {
+                accounts: vec![account_id.clone()],
+                ping_settings: ping_settings(),
+            })
+            .await
+            .map_err(|error| {
+                grpc_port_error("OperationsStreamService", "PortfolioStream", error)
+            })?;
+        await_portfolio_ack(&mut portfolio, &account_id).await?;
+
+        let mut positions = self
+            .client
+            .open_positions_stream(v1::PositionsStreamRequest {
+                accounts: vec![account_id.clone()],
+                with_initial_positions: true,
+                ping_settings: ping_settings(),
+            })
+            .await
+            .map_err(|error| {
+                grpc_port_error("OperationsStreamService", "PositionsStream", error)
+            })?;
+        await_positions_ack(&mut positions, &account_id).await?;
+
+        let mut operations = self
+            .client
+            .open_operations_stream(v1::OperationsStreamRequest {
+                accounts: vec![account_id.clone()],
+                ping_settings: ping_settings(),
+            })
+            .await
+            .map_err(|error| {
+                grpc_port_error("OperationsStreamService", "OperationsStream", error)
+            })?;
+        await_operations_ack(&mut operations, &account_id).await?;
+
+        *self.output.lock().await = Some(output.clone());
+        let order_output = output.clone();
+        let order_account_id = account_id.clone();
+        let order_task = tokio::spawn(async move {
             while let Some(event) = handle.recv().await {
-                let signal = stream_signal(event, &account_id, runtime_epoch);
+                let signal = stream_signal(event, &order_account_id, runtime_epoch);
                 if let Some(signal) = signal
-                    && output.send(signal).await.is_err()
+                    && order_output.send(signal).await.is_err()
                 {
                     return;
                 }
             }
         });
-        *self.task.lock().await = Some(task);
-        Ok(())
+        let portfolio_output = output.clone();
+        let portfolio_task = tokio::spawn(async move {
+            let mut revision = 0_u64;
+            loop {
+                match tokio::time::timeout(Duration::from_secs(15), portfolio.message()).await {
+                    Ok(Ok(Some(message))) => {
+                        if let Some(v1::portfolio_stream_response::Payload::Portfolio(value)) =
+                            message.payload
+                        {
+                            revision = revision.saturating_add(1);
+                            if portfolio_output
+                                .send(StreamSignal::Event(BrokerEvent {
+                                    account_id: value.account_id,
+                                    event_class: BrokerEventClass::Portfolio,
+                                    stable_event_id: format!(
+                                        "portfolio:{runtime_epoch}:{revision}"
+                                    ),
+                                    broker_order_id: None,
+                                    broker_stop_order_id: None,
+                                    logical_request_id: None,
+                                    runtime_epoch,
+                                }))
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {
+                        let _ = portfolio_output
+                            .send(StreamSignal::Disconnected {
+                                stream: StreamKind::Portfolio,
+                                reason: "PortfolioStream closed or faulted".into(),
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            }
+        });
+        let positions_output = output.clone();
+        let positions_task = tokio::spawn(async move {
+            let mut revision = 0_u64;
+            loop {
+                match tokio::time::timeout(Duration::from_secs(15), positions.message()).await {
+                    Ok(Ok(Some(message))) => {
+                        let account = match message.payload {
+                            Some(v1::positions_stream_response::Payload::Position(value)) => {
+                                Some(value.account_id)
+                            }
+                            Some(v1::positions_stream_response::Payload::InitialPositions(
+                                value,
+                            )) => Some(value.account_id),
+                            _ => None,
+                        };
+                        if let Some(account_id) = account {
+                            revision = revision.saturating_add(1);
+                            if positions_output
+                                .send(StreamSignal::Event(BrokerEvent {
+                                    account_id,
+                                    event_class: BrokerEventClass::Position,
+                                    stable_event_id: format!("position:{runtime_epoch}:{revision}"),
+                                    broker_order_id: None,
+                                    broker_stop_order_id: None,
+                                    logical_request_id: None,
+                                    runtime_epoch,
+                                }))
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {
+                        let _ = positions_output
+                            .send(StreamSignal::Disconnected {
+                                stream: StreamKind::Positions,
+                                reason: "PositionsStream closed or faulted".into(),
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            }
+        });
+        let operations_output = output;
+        let operations_task = tokio::spawn(async move {
+            let mut revision = 0_u64;
+            loop {
+                match tokio::time::timeout(Duration::from_secs(15), operations.message()).await {
+                    Ok(Ok(Some(message))) => {
+                        if let Some(v1::operations_stream_response::Payload::Operation(value)) =
+                            message.payload
+                        {
+                            revision = revision.saturating_add(1);
+                            let stable_id = if value.id.trim().is_empty() {
+                                format!("operation:{runtime_epoch}:{revision}")
+                            } else {
+                                format!("operation:{}", value.id)
+                            };
+                            if operations_output
+                                .send(StreamSignal::Event(BrokerEvent {
+                                    account_id: value.broker_account_id,
+                                    event_class: BrokerEventClass::Operation,
+                                    stable_event_id: stable_id,
+                                    broker_order_id: None,
+                                    broker_stop_order_id: None,
+                                    logical_request_id: None,
+                                    runtime_epoch,
+                                }))
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {
+                        let _ = operations_output
+                            .send(StreamSignal::Disconnected {
+                                stream: StreamKind::Operations,
+                                reason: "OperationsStream closed or faulted".into(),
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            }
+        });
+        *self.tasks.lock().await =
+            vec![order_task, portfolio_task, positions_task, operations_task];
+        Ok([
+            StreamKind::OrderState,
+            StreamKind::Positions,
+            StreamKind::Portfolio,
+            StreamKind::Operations,
+        ]
+        .into_iter()
+        .collect())
     }
 
     async fn disconnect(&self) -> Result<(), BrokerPortError> {
-        if let Some(task) = self.task.lock().await.take() {
+        for task in self.tasks.lock().await.drain(..) {
             task.abort();
             let _ = task.await;
         }
         self.output.lock().await.take();
         Ok(())
     }
+}
+
+async fn await_portfolio_ack(
+    stream: &mut vox_tinvest::GrpcServerStream<v1::PortfolioStreamResponse>,
+    account_id: &str,
+) -> Result<(), BrokerPortError> {
+    await_stream_ack("PortfolioStream", async {
+        loop {
+            let message = stream
+                .message()
+                .await
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "stream closed before subscription ACK".to_owned())?;
+            if let Some(v1::portfolio_stream_response::Payload::Subscriptions(result)) =
+                message.payload
+            {
+                let exact = result.accounts.len() == 1
+                    && result.accounts[0].account_id == account_id
+                    && result.accounts[0].subscription_status
+                        == v1::PortfolioSubscriptionStatus::Success as i32
+                    && !result.stream_id.trim().is_empty();
+                return exact
+                    .then_some(())
+                    .ok_or_else(|| "PortfolioStream subscription ACK mismatch".to_owned());
+            }
+        }
+    })
+    .await
+}
+
+async fn await_positions_ack(
+    stream: &mut vox_tinvest::GrpcServerStream<v1::PositionsStreamResponse>,
+    account_id: &str,
+) -> Result<(), BrokerPortError> {
+    await_stream_ack("PositionsStream", async {
+        loop {
+            let message = stream
+                .message()
+                .await
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "stream closed before subscription ACK".to_owned())?;
+            if let Some(v1::positions_stream_response::Payload::Subscriptions(result)) =
+                message.payload
+            {
+                let exact = result.accounts.len() == 1
+                    && result.accounts[0].account_id == account_id
+                    && result.accounts[0].subscription_status
+                        == v1::PositionsAccountSubscriptionStatus::PositionsSubscriptionStatusSuccess
+                            as i32
+                    && !result.stream_id.trim().is_empty();
+                return exact
+                    .then_some(())
+                    .ok_or_else(|| "PositionsStream subscription ACK mismatch".to_owned());
+            }
+        }
+    })
+    .await
+}
+
+async fn await_operations_ack(
+    stream: &mut vox_tinvest::GrpcServerStream<v1::OperationsStreamResponse>,
+    account_id: &str,
+) -> Result<(), BrokerPortError> {
+    await_stream_ack("OperationsStream", async {
+        loop {
+            let message = stream
+                .message()
+                .await
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "stream closed before subscription ACK".to_owned())?;
+            if let Some(v1::operations_stream_response::Payload::Subscriptions(result)) =
+                message.payload
+            {
+                let exact = result.accounts.len() == 1
+                    && result.accounts[0] == account_id
+                    && result.subscription_status
+                        == v1::OperationsAccountSubscriptionStatus::OperationsSubscriptionStatusSuccess
+                            as i32
+                    && !result.stream_id.trim().is_empty();
+                return exact
+                    .then_some(())
+                    .ok_or_else(|| "OperationsStream subscription ACK mismatch".to_owned());
+            }
+        }
+    })
+    .await
+}
+
+async fn await_stream_ack<F>(method: &'static str, future: F) -> Result<(), BrokerPortError>
+where
+    F: Future<Output = Result<(), String>>,
+{
+    tokio::time::timeout(Duration::from_secs(20), future)
+        .await
+        .map_err(|_| BrokerPortError {
+            service: "OperationsStreamService",
+            method,
+            class: BrokerResultClass::Transient,
+            message: "subscription ACK timeout".into(),
+            retry_after: None,
+        })?
+        .map_err(|message| BrokerPortError {
+            service: "OperationsStreamService",
+            method,
+            class: BrokerResultClass::Permanent,
+            message,
+            retry_after: None,
+        })
 }
 
 struct SandboxCredential;
@@ -500,8 +815,10 @@ async fn complete_runtime_qualification_in_sandbox() -> Result<(), BoxError> {
         OpaqueRef::new("connection:sandbox-qualification")?,
         OpaqueRef::new("credential:environment")?,
     )?;
+    let snapshot_starts = Arc::new(AtomicU64::new(0));
     let reads = Arc::new(SandboxReads {
         client: client.clone(),
+        snapshot_starts: snapshot_starts.clone(),
     });
     let execution = Arc::new(SandboxExecution {
         client: client.clone(),
@@ -527,7 +844,32 @@ async fn complete_runtime_qualification_in_sandbox() -> Result<(), BoxError> {
         );
         let initial = coordinator.start().await?;
         ledger.qualified("runtime_startup_ownership", format!("epoch={}", initial.runtime_epoch));
-        ledger.qualified("connecting", "credential resolved; OrderStateStream ACK verified");
+        let startup_health = coordinator.health().await;
+        for required_stream in [
+            StreamKind::OrderState,
+            StreamKind::Positions,
+            StreamKind::Portfolio,
+            StreamKind::Operations,
+        ] {
+            require(
+                startup_health.stream_states.iter().any(|health| {
+                    health.stream == required_stream
+                        && health.required_for_ready
+                        && health.state == vox_runtime::StreamState::Active
+                }),
+                "required stream ACK not active before READY",
+            )?;
+        }
+        require(
+            startup_health.stream_states.iter().any(|health| {
+                health.stream == StreamKind::Trades && !health.required_for_ready
+            }),
+            "TradesStream optional readiness policy missing",
+        )?;
+        ledger.qualified(
+            "connecting",
+            "credential resolved; exact OrderState/Positions/Portfolio/Operations ACKs verified; Trades optional",
+        );
         ledger.qualified(
             "initial_authoritative_reconciliation",
             format!("reconciliation_id={}", initial.reconciliation_id),
@@ -576,9 +918,31 @@ async fn complete_runtime_qualification_in_sandbox() -> Result<(), BoxError> {
             "restart_with_broker_visible_open_state",
             format!("active_orders={}", restart_report.active_order_count),
         );
+        let snapshots_before_external = snapshot_starts.load(Ordering::SeqCst);
+        streams
+            .force_external_position_signal(
+                &scope.broker_account_id,
+                restart_report.runtime_epoch,
+            )
+            .await?;
+        for _ in 0..200 {
+            if snapshot_starts.load(Ordering::SeqCst) > snapshots_before_external
+                && restarted.health().await.state == RuntimeState::Ready
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        require(
+            snapshot_starts.load(Ordering::SeqCst) > snapshots_before_external,
+            "external position signal did not force authoritative reconciliation",
+        )?;
         ledger.qualified(
             "position_snapshot_reconciliation",
-            format!("positions={}", restart_report.position_count),
+            format!(
+                "positions={}; external position signal closed admission and forced unary refresh before READY",
+                restart_report.position_count
+            ),
         );
         ledger.qualified(
             "regular_order_reconciliation",
@@ -660,7 +1024,7 @@ async fn complete_runtime_qualification_in_sandbox() -> Result<(), BoxError> {
         wait_ready(&resolved).await?;
         ledger.qualified(
             "stream_gap_reconciliation_recovery",
-            "forced gap closed gate; strict OrderStateStream ACK and unary reconciliation restored READY",
+            "forced required-stream gap closed gate; four exact ACKs and unary reconciliation restored READY",
         );
         resolved.shutdown().await?;
         ledger.qualified(
@@ -747,6 +1111,7 @@ async fn runtime_idle_soak_in_sandbox() -> Result<(), BoxError> {
         store,
         Arc::new(SandboxReads {
             client: client.clone(),
+            snapshot_starts: Arc::new(AtomicU64::new(0)),
         }),
         Arc::new(SandboxExecution {
             client,

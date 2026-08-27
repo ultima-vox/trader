@@ -19,13 +19,22 @@ STARTING -> CONNECTING -> RECONCILING -> READY
 exposure when execution authorization is disabled. `DEGRADED` rejects exposure by
 default. `HALTED` always rejects it.
 
+READY requires exact provider ACKs for OrderStateStream, PositionsStream,
+PortfolioStream and OperationsStream. Their `required_for_ready` health flags stay
+explicit. TradesStream is optional for readiness: required streams already signal
+order, position, portfolio and operation changes, while TradesStream remains strict
+when enabled and never substitutes pings for ACK. Any required disconnect or any
+capital-state event closes admission until broker-authoritative unary refresh
+completes.
+
 ## Diagnose HALTED
 
 Read typed `reason_code`, then inspect bounded audit records and provider tracking
 metadata. Never paste token or authorization header into logs or DB.
 
 - `UNKNOWN_MUTATION`: do not retry command. Query exact order/request/stop identity,
-  then run reconciliation.
+  then run reconciliation. Operations history never proves cancel/replace: cancel
+  needs terminal non-active order state; replace needs exact replacement identity.
 - `BROKER_POSITION_CONFLICT`, `BROKER_ORDER_CONFLICT`,
   `BROKER_STOP_CONFLICT`: compare direct broker snapshots. Preserve unfamiliar manual
   orders/stops. Operator resolves provenance; runtime never auto-cancels them.

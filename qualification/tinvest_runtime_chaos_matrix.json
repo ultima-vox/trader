@@ -10,11 +10,11 @@
     { "id": 5, "scenario": "crash after durable dispatch fence before transport", "test": "cancel_absence_never_fabricates_rejection_or_success" },
     { "id": 6, "scenario": "possible dispatch before ACK", "test": "unknown_survives_restart_resolves_from_direct_readback_without_replay" },
     { "id": 7, "scenario": "persisted UNKNOWN restart", "test": "unknown_survives_restart_resolves_from_direct_readback_without_replay" },
-    { "id": 8, "scenario": "broker disconnect while READY", "test": "stream_gap_closes_gate_reconnects_and_reconciles" },
-    { "id": 9, "scenario": "stream gap reconnect reconciliation", "test": "stream_gap_closes_gate_reconnects_and_reconciles" },
+    { "id": 8, "scenario": "required position stream disconnect closes READY", "test": "stream_gap_closes_gate_reconnects_and_reconciles" },
+    { "id": 9, "scenario": "required stream recovery performs unary reads before READY", "test": "stream_gap_closes_gate_reconnects_and_reconciles" },
     { "id": 10, "scenario": "duplicate/replayed stream events", "test": "duplicate_and_stale_epoch_events_are_idempotent" },
-    { "id": 11, "scenario": "stream before unary", "test": "duplicate_and_stale_epoch_events_are_idempotent" },
-    { "id": 12, "scenario": "unary before stream", "test": "duplicate_and_stale_epoch_events_are_idempotent" },
+    { "id": 11, "scenario": "external position event forces authoritative refresh", "test": "external_position_event_forces_authoritative_refresh_before_ready" },
+    { "id": 12, "scenario": "missing required stream ACK blocks READY", "test": "ready_requires_every_correctness_stream_ack" },
     { "id": 13, "scenario": "temporary 429 reset metadata", "test": "safe_reads_retry_429_and_transient_failures_with_bound" },
     { "id": 14, "scenario": "temporary transport/5xx", "test": "safe_reads_retry_429_and_transient_failures_with_bound" },
     { "id": 15, "scenario": "invalid credential", "test": "invalid_credential_and_inaccessible_account_fail_closed" },
@@ -31,6 +31,8 @@
     { "id": 26, "scenario": "stale old epoch event", "test": "duplicate_and_stale_epoch_events_are_idempotent" },
     { "id": 27, "scenario": "bounded queue overflow", "test": "position_conflict_and_stream_overflow_force_reconciliation" },
     { "id": 28, "scenario": "schema migration with UNKNOWN", "test": "store::tests::epoch_fences_old_work_and_unknown_survives_restart" },
-    { "id": 29, "scenario": "60-minute resource soak", "test": "qualification/live/runtime_soak.ps1 -Minutes 60" }
+    { "id": 29, "scenario": "60-minute resource soak", "test": "qualification/live/runtime_soak.ps1 -Minutes 60" },
+    { "id": 30, "scenario": "partial fill before ambiguous cancel cannot prove cancellation", "test": "partial_fill_operation_does_not_resolve_ambiguous_cancel_until_terminal_state" },
+    { "id": 31, "scenario": "old-order operation cannot prove ambiguous replacement", "test": "old_order_operation_does_not_resolve_replace_until_exact_replacement_identity" }
   ]
 }

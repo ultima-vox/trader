@@ -27,21 +27,25 @@ documentation/proto differences.
 4. Read accounts, portfolio, positions, active orders, stops, point order states and
    cursor operations. Safe reads use bounded classified retries. Mutations receive no
    runtime retry layer.
-5. Resolve durable uncertainty using exact typed identity precedence: point state,
-   active/list state, operation/fill identity, accepted stream evidence, then local
-   evidence only to preserve uncertainty.
+5. Resolve durable uncertainty with mutation-kind-specific evidence. Post-order
+   execution may use exact logical-request or linked broker-order fill evidence.
+   Cancel requires terminal, non-active `GetOrderState`; replace requires exact new
+   request/replacement identity. Old-order operations never prove cancel/replace.
 6. Persist resolved records, identity links, dedupe facts, checkpoint and readiness
    decision in one transaction.
-7. Connect streams, then reconcile again. Snapshot/event races converge through
-   broker identities, dedupe and reconciliation generation.
+7. Require exact subscription ACKs for OrderStateStream, PositionsStream,
+   PortfolioStream and OperationsStream, then reconcile again. TradesStream is
+   optional for READY because those four streams already signal every capital-state
+   change and sandbox cannot satisfy strict TradesStream ACK semantics. Production
+   TradesStream use remains strict when configured.
 8. Enter `READY` only after committed complete reconciliation. Execution remains
    separately gated by authorization.
 
-Any capital-relevant stream gap or bounded-channel overflow closes admission and
-runs authoritative reconciliation. Events carry runtime epoch; stale epoch work is
-ignored. Production subscription ACK semantics remain strict. Sandbox TradesStream
-missing ACK stays qualification-only `QUALIFIED_WITH_PROVIDER_DEVIATION`; pings never
-become an ACK.
+Any required-stream disconnect/gap, capital-state event or bounded-channel overflow
+closes admission and runs authoritative unary reconciliation before READY. Events
+carry runtime epoch; stale epoch work is ignored. Production subscription ACK
+semantics remain strict. Sandbox TradesStream missing ACK stays qualification-only
+`QUALIFIED_WITH_PROVIDER_DEVIATION`; pings never become an ACK.
 
 ## Mutation invariant
 
@@ -50,7 +54,8 @@ Coordinator inserts unique logical mutation, then atomically changes it to
 that durable row. Crash, transport loss or shutdown leaves UNKNOWN intact. Restart
 never submits it again. Only exact broker readback can reconcile it.
 
-Cancel absence is inconclusive. Multi-leg protection resolves each leg separately.
+Cancel absence and pre-existing fill/operation history are inconclusive. Replace
+never resolves from old-order history. Multi-leg protection resolves each leg separately.
 Unknown/manual broker orders and stops remain untouched; ambiguous provenance halts
 execution for operator reconciliation.
 

@@ -100,11 +100,15 @@ Missing matching event is `BLOCKED/PROVIDER`; stream, identity, readback, or cle
 strict for production supervision. OrderStateStream qualification remains strict because sandbox
 returns its valid exact-account ACK.
 
+Provider ping limits are stream-specific: TradesStream accepts 5000–180000 ms;
+OrderStateStream accepts 1000–120000 ms. `ExecutionStreamConfig` validates against selected
+stream kind. These are provider limits, not a shared Vox restriction.
+
 Observed 2026-08-27 sandbox evidence: targeted request
-`47c2eca4-22e7-478b-8757-1e2da04a3a65` / tracking
-`a2f218b4b71d699fb9f0cc436cf354a5`; full-runner request
-`d246e2b0-fcae-41fe-a09f-b407ac374ec7` / tracking
-`5f9e2a86dc0ab361c8cea9abd0bcf5d8`. Both observed five pings, matching BUY/SELL
+`bf964e43-15c1-45a4-a871-009a89d20c63` / tracking
+`87d3e7bc86e73252029c022121cd7986`; full-runner request
+`494c8f29-1a5f-4579-a557-3edc02482cb1` / tracking
+`fa9e78958d0a108095563f96e432b7bc`. Both observed five pings, matching BUY/SELL
 trade events and authoritative fill readback, no stream errors, and qualified cleanup; only
 subscription ACK was absent.
 

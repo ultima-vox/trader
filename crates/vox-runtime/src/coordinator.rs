@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -792,23 +793,37 @@ where
                         )
                         .await?;
                     }
+                } else if matches!(
+                    event_class,
+                    crate::model::BrokerEventClass::Fill
+                        | crate::model::BrokerEventClass::Operation
+                        | crate::model::BrokerEventClass::Position
+                        | crate::model::BrokerEventClass::Portfolio
+                ) {
+                    self.force_reconciliation(
+                        ReasonCode::ReconciliationStarted,
+                        "capital-state stream event requires authoritative unary refresh",
+                    )
+                    .await?;
                 }
             }
             StreamSignal::Gap { stream, reason }
             | StreamSignal::Disconnected { stream, reason } => {
-                self.connected.store(false, Ordering::SeqCst);
-                self.update_health(|health| {
-                    health.connected = false;
-                    health.new_exposure_allowed = false;
-                })
-                .await;
                 self.set_stream_state(stream, StreamState::Stale, 0).await;
                 self.metrics.increment(
                     MetricName::StreamReconnectTotal,
                     &[MetricLabel::Stream(stream)],
                     1,
                 );
-                self.recover_stream_gap(&reason).await?;
+                if required_stream(stream) {
+                    self.connected.store(false, Ordering::SeqCst);
+                    self.update_health(|health| {
+                        health.connected = false;
+                        health.new_exposure_allowed = false;
+                    })
+                    .await;
+                    self.recover_stream_gap(&reason).await?;
+                }
             }
         }
         Ok(())
@@ -888,9 +903,22 @@ where
                 .connect(&self.scope, epoch, sender.clone())
                 .await
             {
-                Ok(()) => {
+                Ok(active_streams) if required_streams().is_subset(&active_streams) => {
+                    for stream in active_streams {
+                        self.set_stream_state(stream, StreamState::Active, 0).await;
+                    }
                     self.connected.store(true, Ordering::SeqCst);
                     return Ok(());
+                }
+                Ok(active_streams) => {
+                    let missing = required_streams()
+                        .difference(&active_streams)
+                        .map(|stream| format!("{stream:?}"))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    return Err(RuntimeError::Safety(format!(
+                        "required stream ACK set incomplete: {missing}"
+                    )));
                 }
                 Err(error) if attempt < 3 && error.safe_read_retryable() => {
                     tokio::time::sleep(jittered_delay(delay, Duration::from_secs(2))).await;
@@ -982,11 +1010,33 @@ fn all_stream_health() -> Vec<StreamHealth> {
     .into_iter()
     .map(|stream| StreamHealth {
         stream,
+        required_for_ready: required_stream(stream),
         state: StreamState::Disconnected,
         queue_depth: 0,
         last_event_at_unix_ms: None,
     })
     .collect()
+}
+
+fn required_streams() -> BTreeSet<StreamKind> {
+    [
+        StreamKind::OrderState,
+        StreamKind::Positions,
+        StreamKind::Portfolio,
+        StreamKind::Operations,
+    ]
+    .into_iter()
+    .collect()
+}
+
+const fn required_stream(stream: StreamKind) -> bool {
+    matches!(
+        stream,
+        StreamKind::OrderState
+            | StreamKind::Positions
+            | StreamKind::Portfolio
+            | StreamKind::Operations
+    )
 }
 
 fn receipt(record: MutationRecord) -> DispatchReceipt {
