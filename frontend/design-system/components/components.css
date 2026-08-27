@@ -54,11 +54,11 @@
    They are always both present in the ticket — never behind a mode toggle. */
 .vox-btn--buy { background: var(--vox-positive-base); border-color: var(--vox-positive-strong); color: var(--vox-on-positive); font-weight: var(--vox-weight-semibold); }
 .vox-btn--buy:hover { background: var(--vox-positive-hover); }
-.vox-btn--buy:active { background: var(--vox-positive-strong); color: var(--vox-text-primary); }
+.vox-btn--buy:active { background: var(--vox-positive-pressed); color: var(--vox-text-primary); }
 
 .vox-btn--sell { background: var(--vox-negative-base); border-color: var(--vox-negative-strong); color: var(--vox-on-negative); font-weight: var(--vox-weight-semibold); }
 .vox-btn--sell:hover { background: var(--vox-negative-hover); }
-.vox-btn--sell:active { background: var(--vox-negative-strong); color: var(--vox-text-primary); }
+.vox-btn--sell:active { background: var(--vox-negative-pressed); color: var(--vox-text-primary); }
 
 .vox-btn.is-selected { background: var(--vox-accent-selected-surface); border-color: var(--vox-accent-primary); color: var(--vox-blue-300); }
 .vox-btn.is-focused, .vox-btn:focus-visible { box-shadow: var(--vox-focus-ring); border-color: var(--vox-border-focus); }
@@ -288,6 +288,21 @@
   font-size: var(--vox-text-11); color: var(--vox-text-tertiary); position: sticky; top: 0; z-index: 1;
 }
 .vox-table__sort { display: inline-flex; align-items: center; gap: var(--vox-space-1); cursor: pointer; color: var(--vox-text-primary); }
+/* Selection and the row menu are part of the canonical table anatomy: a row can be
+   selected without opening it, and every row exposes its actions in one place instead of
+   scattering buttons across the grid. */
+.vox-table__select { display: inline-flex; align-items: center; justify-content: center; }
+.vox-table__menu {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: var(--vox-radius-xs);
+  color: var(--vox-text-tertiary); cursor: pointer;
+}
+.vox-table__menu:hover { background: var(--vox-bg-elevated); color: var(--vox-text-primary); }
+/* The capability line under a table states what the component does, in the canon's voice. */
+.vox-table__caption {
+  display: flex; flex-wrap: wrap; gap: 4px var(--vox-space-2); padding: 6px 2px 0;
+  font-size: var(--vox-text-11); color: var(--vox-text-tertiary);
+}
 /* Dense columns still need a gutter: without it a header label runs into its neighbour. */
 .vox-table__row {
   height: var(--vox-row-height); display: grid; align-items: center; padding: 0 8px;
@@ -328,14 +343,14 @@
 .vox-widget.is-stale, .vox-widget.is-degraded { border-color: var(--vox-warning-strong); }
 .vox-widget.is-error { border-color: var(--vox-negative-strong); }
 .vox-widget__header {
-  height: var(--vox-widget-header-height); flex: 0 0 auto;
+  min-height: var(--vox-widget-header-height); flex: 0 0 auto;
   display: flex; align-items: center; justify-content: space-between; gap: var(--vox-space-2);
   padding: 0 8px 0 12px; border-bottom: 1px solid var(--vox-border-subtle);
   font-size: var(--vox-text-13); font-weight: var(--vox-weight-medium); color: var(--vox-text-primary);
   cursor: grab; /* draggable by the header */
 }
-.vox-widget__title { display: flex; align-items: center; gap: var(--vox-space-2); min-width: 0; }
-.vox-widget__tools { display: flex; align-items: center; gap: 2px; }
+.vox-widget__title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--vox-space-2); min-width: 0; padding: 4px 0; }
+.vox-widget__tools { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-width: 0; }
 /* The body grows to its content: a widget may get taller, but it may never clip what
    it holds. A body that scrolls internally opts in with --scroll. */
 .vox-widget__body { flex: 1 1 auto; min-height: min-content; }

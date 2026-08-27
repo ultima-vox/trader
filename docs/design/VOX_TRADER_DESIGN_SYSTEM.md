@@ -7,8 +7,9 @@ implementation disagrees with it, the implementation is wrong.
 Related files
 
 - `COMPONENT_SPEC.md` — anatomy, variants and states per component.
-- `../../frontend/design-system/reference/index.html` — **the maintainable rendered reference**, built on the CSS layers and extended whenever a component or state is added.
-- `../../frontend/design-system/reference/vox-trader-design-system.reference.html` — a stable local viewing entry point for that reference. It is not a separate design authority.
+- `../../frontend/design-system/reference/index.html` — **the one rendered reference**, built on the CSS layers and extended whenever a component or state is added.
+- `CANONICAL_DESIGN.md` and `source/Vox-Trader-Design-System-canonical.html` — the visual and component authority this implementation converges to.
+- `RECONCILIATION_MATRIX.md` — how the two sources were reconciled, row by row.
 - `../../frontend/design-system/README.md` — how to view locally, layer map.
 
 ---
@@ -73,7 +74,18 @@ separated by a 1px border first, not by a large gap.
 
 `--vox-font-ui` (Inter → system) for UI, `--vox-font-mono` (JetBrains Mono → system)
 for codes, timestamps and shortcuts. Scale: 11 / 12 / **13 = base** / 14 / 16 / 18 /
-22 / 28. Every market number goes through `.vox-num`: `font-variant-numeric:
+22 / 28. Weights: 400 tables and body, 500 widget titles, 600 metrics and actions,
+700 rarely.
+
+**Number formatting is part of the system, not of a feature.** Values arrive exact
+(`FixedPoint` at nano scale) and are formatted for display: tabular and right aligned, sign
+always explicit (`+12 450,25 ₽`, `−3 140,70 ₽`), units always visible (`10 лотов`,
+`1 000 шт`, `140 п.`), and never a raw float (`12450.24738183`) or a bare quantity whose
+unit the operator has to guess. Backend precision does not dictate UI precision, and no
+capital-affecting value is ever computed with floating-point arithmetic in the browser.
+
+Breakpoints: ≥1600 wide terminal, 1440 primary desktop, 1280 laptop, 1024 supervisory;
+below 1024 is a separate workflow, never a shrunken desktop grid. Every market number goes through `.vox-num`: `font-variant-numeric:
 tabular-nums`, right-aligned, `white-space: nowrap` — so streaming values never
 reflow the row.
 
@@ -417,9 +429,9 @@ leave the screen coherent rather than half-submitted.
   A lower layer never imports an upper one.
 - Canonical hierarchy: this document and `COMPONENT_SPEC.md` are normative; the CSS
   layers are the implementation source of truth;
-  `frontend/design-system/reference/index.html` is the maintainable rendered
-  reference built on those layers; `vox-trader-design-system.reference.html` is only
-  a stable viewing entry point for that reference and is not a design authority.
+  `frontend/design-system/reference/index.html` is the one rendered reference built on
+  those layers, and no second entry point exists. For visual language and component
+  geometry the canonical source in `docs/design/source/` is the authority.
 - Before review, validate at 1280 / 1440 / 1920 px, in Compact / Standard /
   Comfortable, and in every state: happy, loading, empty, stale, reconnecting,
   degraded, error, permission-denied, `UNKNOWN`, `BLOCKED`.
