@@ -1,12 +1,21 @@
 name: Design Preview
 
+# The only workflow that publishes GitHub Pages. Two others used to deploy the whole
+# repository on every push to main, which replaced this build with a root that has no
+# index.html and left the site returning 404. They are removed; this one owns the site.
 on:
+  push:
+    branches: ["main"]
+    paths:
+      - 'frontend/design-system/**'
+      - 'docs/design/**'
+      - '.github/workflows/design-preview.yml'
   workflow_dispatch:
     inputs:
       ref:
         description: 'Git ref to publish (branch, tag, or commit SHA)'
         required: false
-        default: 'claude/design-system-foundation'
+        default: 'main'
 
 permissions:
   contents: read
@@ -24,7 +33,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Build static preview
         shell: bash

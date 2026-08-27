@@ -94,6 +94,49 @@ drops when squeezed: instrument, account, environment, P&L and protection never 
   self-contained Claude export or an independent authority is removed from the docs, the
   README and the wrapper itself.
 
+## Scope after the ownership decision
+
+#18 — and therefore this PR — owns frontend **foundation and infrastructure**: the design
+system, the shell, account/instrument context, typed state, the generated Vox client,
+atomic context switching, stale-response suppression, frozen command targets and the shared
+components. Production operator workspaces and screen composition belong to **#30**, which
+builds on this infrastructure over stable backend contracts and is blocked on #21–#29.
+
+The workspace designs in the reference stay here as the canonical visual specification for
+those screens; implementing them is #30's work.
+
+Frontend application code does not start before **#38 — Application API Foundation**
+publishes the first generated Vox TypeScript client: the repository has canonical Rust
+contracts but no Vox transport, so a typed client could only be invented. This PR therefore
+delivers the design system, the contract conformance pass and the backend dependency
+specification, and #18 stays open for the infrastructure work that follows #38.
+
+## Contract conformance
+
+Every state word, environment and reason code rendered on a working screen is now a value
+from `vox-domain` or `vox-runtime`: `SANDBOX`/`PRODUCTION` environments, the single
+`Provider` variant, all eight `RuntimeState` values, nine canonical reason codes, and
+`ProtectionEstablishmentState` for protection runtime with the operator vocabulary mapped
+onto it. Eleven invented codes were removed.
+
+Fifteen regions whose capability has no contract render **deferred** — named, disabled and
+tagged with a `BD-*` dependency — instead of simulating data: risk verdict and guardrails
+(BD-2), quotes/book/tape/chart (BD-3), valuation and P&L (BD-4), credential lifecycle and
+RBAC (BD-5), strategy and decision (BD-6), models (BD-7), research (BD-8), protection
+defaults (BD-9), bulk migration (BD-10), aggregate accounts (BD-11), updates and jobs
+(BD-12), second provider and PAPER/BACKTEST (BD-13).
+
+`docs/design/BACKEND_CONTRACTS.md` records what the contracts expose today;
+`docs/design/BACKEND_DEPENDENCY_SPEC.md` specifies what each backend owner must add, with
+acceptance criteria, and carries the definition of done for #18.
+
+## Visual verification
+
+A strict per-widget verifier — painted geometry, nine rules, 1280/1440/1920 ×
+Compact/Standard/Comfortable — reports **zero findings**, and four injected defects are
+still detected, so the zero is meaningful. The first run of that verifier found 663
+findings, all fixed in the layers.
+
 ## Compliance position
 
 `docs/design/COMPLIANCE_AUDIT.md` maps every issue #18 directive and all nineteen review

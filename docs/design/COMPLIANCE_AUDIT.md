@@ -5,6 +5,14 @@ Scope: the repository-native design system (`docs/design/*.md`,
 **PR #20 Head-of-Development directive**.
 
 `§n` refers to a numbered section of `frontend/design-system/reference/index.html`.
+
+**Ownership:** #18 owns frontend foundation and infrastructure — design system, shell,
+context, typed state, generated client, atomic switching, stale-response suppression and
+shared components. #30 owns the production operator workspaces and screen composition
+built on that infrastructure, over stable backend contracts. The screen designs below stay
+canonical; the row's status describes the *design*, and implementation of a product screen
+belongs to #30.
+
 Status values:
 
 - **Represented** — visible in the rendered reference and stated in the normative docs.
@@ -83,6 +91,11 @@ Sections of the rendered reference:
 | Testing matrix | | — | Outside artefact (implementation) |
 
 ## 2. Screen-by-screen Design DoD
+
+Design ownership of every screen below is #30 (implementation) over #18 (infrastructure).
+The infrastructure rows — execution target and freeze, reconciliation, account context,
+protection readback — are #18's own scope because they are shell and state behaviour rather
+than a screen.
 
 Every production screen must name the account whose data it shows, show the
 environment, cover at least one non-happy state, carry a reason code where something is
