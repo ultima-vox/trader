@@ -1,0 +1,191 @@
+/*
+ * Vox Trader — semantic design tokens
+ * Design system v1.0. Single source of truth for colour, type, space, radius, motion.
+ *
+ * Rules:
+ *  - Components consume tokens only. Raw HEX outside this file is a review blocker.
+ *  - Dark Terminal is the production theme. Light tokens are declared for parity only.
+ *  - Accent (blue) never means BUY. Trade side uses positive/negative + text.
+ */
+
+:root {
+  /* ---------- Neutral palette ---------- */
+  --vox-neutral-0: #FFFFFF;
+  --vox-neutral-50: #F7F8FA;
+  --vox-neutral-100: #EEF0F3;
+  --vox-neutral-200: #D9DDE3;
+  --vox-neutral-300: #B8BEC8;
+  --vox-neutral-400: #929AA7;
+  --vox-neutral-500: #707986;
+  --vox-neutral-600: #515966;
+  --vox-neutral-700: #383F49;
+  --vox-neutral-800: #252A32;
+  --vox-neutral-850: #1D2229;
+  --vox-neutral-900: #161A20;
+  --vox-neutral-925: #12161B;
+  --vox-neutral-950: #0D1014;
+  --vox-neutral-1000: #080A0D;
+
+  /* ---------- Primary accent (cold blue) ---------- */
+  --vox-blue-300: #78B7FF;
+  --vox-blue-400: #4C9FFF;
+  --vox-blue-500: #2788F5;
+  --vox-blue-600: #176FD1;
+  --vox-blue-700: #1158AA;
+
+  /* ---------- Financial semantics ---------- */
+  --vox-positive-base: #27B07D;
+  --vox-positive-strong: #159466;
+  --vox-positive-hover: #34C08B;
+  --vox-positive-surface: rgba(39, 176, 125, 0.10);
+  /* Text/icon colour on filled positive & negative fills (AA on the base fill). */
+  --vox-on-positive: #08120E;
+  --vox-positive-flash: rgba(39, 176, 125, 0.28);
+
+  --vox-negative-base: #E45858;
+  --vox-negative-strong: #CA3F3F;
+  --vox-negative-hover: #EC6C6C;
+  --vox-negative-surface: rgba(228, 88, 88, 0.10);
+  --vox-on-negative: #1A0A0A;
+  --vox-negative-surface-hover: rgba(228, 88, 88, 0.14);
+  --vox-negative-surface-active: rgba(228, 88, 88, 0.22);
+  --vox-negative-flash: rgba(228, 88, 88, 0.28);
+  /* Inset outline that marks a capital-affecting LIVE control. */
+  --vox-negative-outline: rgba(228, 88, 88, 0.50);
+
+  --vox-warning-base: #D9A441;
+  --vox-warning-strong: #BD8621;
+  --vox-warning-surface: rgba(217, 164, 65, 0.11);
+  --vox-warning-surface-strong: rgba(217, 164, 65, 0.14);
+
+  --vox-info-base: #5794E6;
+  --vox-info-surface: rgba(87, 148, 230, 0.10);
+
+  /* UNKNOWN is its own semantic. It must never render as FAILED. */
+  --vox-unknown-base: #A77BE8;
+  --vox-unknown-surface: rgba(167, 123, 232, 0.11);
+  --vox-unknown-surface-subtle: rgba(167, 123, 232, 0.06);
+
+  /* ---------- Semantic surfaces (dark terminal) ---------- */
+  --vox-bg-canvas: var(--vox-neutral-950);
+  --vox-bg-workspace: var(--vox-neutral-925);
+  --vox-bg-surface: var(--vox-neutral-900);
+  --vox-bg-surface-hover: var(--vox-neutral-850);
+  --vox-bg-elevated: var(--vox-neutral-800);
+  --vox-bg-input: var(--vox-neutral-925);
+
+  --vox-border-subtle: #252A32;
+  --vox-border-default: #303741;
+  --vox-border-strong: #454D59;
+  --vox-border-focus: var(--vox-blue-500);
+
+  --vox-text-primary: #EDF0F4;
+  --vox-text-secondary: #B8BEC8;
+  --vox-text-tertiary: #858E9B;
+  --vox-text-disabled: #59616C;
+
+  --vox-accent-primary: var(--vox-blue-500);
+  --vox-accent-selected-surface: rgba(39, 136, 245, 0.12);
+  --vox-focus-ring: 0 0 0 2px rgba(39, 136, 245, 0.35);
+
+  /* Protection language — Stop Loss / Take Profit / Trailing.
+     Protection is an execution instrument, not decoration: every colour here maps to
+     a broker-side order state owned by Broker Foundation (issue #10). */
+  --vox-protect-sl: var(--vox-warning-base);
+  --vox-protect-sl-surface: var(--vox-warning-surface);
+  --vox-protect-tp: var(--vox-positive-base);
+  --vox-protect-tp-surface: var(--vox-positive-surface);
+  --vox-protect-trailing: var(--vox-info-base);
+  --vox-protect-trailing-surface: var(--vox-info-surface);
+  /* Inherited default (portfolio/account or strategy policy), not an own value. */
+  --vox-protect-inherited: var(--vox-text-tertiary);
+  --vox-protect-inherited-surface: var(--vox-bg-surface-hover);
+
+  /* Risk language */
+  --vox-risk-safe: var(--vox-positive-base);
+  --vox-risk-warning: var(--vox-warning-base);
+  --vox-risk-blocked: var(--vox-negative-base);
+  --vox-risk-unknown: var(--vox-unknown-base);
+
+  /* ---------- Typography ---------- */
+  --vox-font-ui: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --vox-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --vox-text-11: 11px;  /* caption / secondary technical */
+  --vox-text-12: 12px;  /* dense table / order book */
+  --vox-text-13: 13px;  /* primary terminal UI — BASE */
+  --vox-text-14: 14px;  /* controls / body */
+  --vox-text-16: 16px;  /* widget title / emphasised value */
+  --vox-text-18: 18px;  /* section headline */
+  --vox-text-22: 22px;  /* large metric */
+  --vox-text-28: 28px;  /* exceptional dashboard metric */
+
+  --vox-weight-regular: 400;
+  --vox-weight-medium: 500;
+  --vox-weight-semibold: 600;
+
+  /* ---------- Spacing (base unit 4px) ---------- */
+  --vox-space-0: 0px;
+  --vox-space-1: 4px;
+  --vox-space-2: 8px;
+  --vox-space-3: 12px;
+  --vox-space-4: 16px;
+  --vox-space-5: 20px;
+  --vox-space-6: 24px;
+  --vox-space-8: 32px;
+  --vox-space-10: 40px;
+
+  /* ---------- Radius ---------- */
+  --vox-radius-xs: 2px;
+  --vox-radius-sm: 4px;  /* default control */
+  --vox-radius-md: 6px;  /* default widget */
+  --vox-radius-lg: 8px;
+
+  /* ---------- Elevation (overlay layers only) ---------- */
+  --vox-shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.55);
+  --vox-shadow-modal: 0 12px 32px rgba(0, 0, 0, 0.60);
+
+  /* ---------- Motion ---------- */
+  --vox-motion-fast: 80ms;
+  --vox-motion-normal: 120ms;
+  --vox-motion-slow: 180ms;
+  --vox-motion-flash: 480ms;
+  --vox-motion-ease: ease;
+
+  /* ---------- Density: Compact is the production default ---------- */
+  --vox-control-height: 28px;
+  --vox-row-height: 26px;
+  --vox-header-height: 28px;
+  --vox-widget-header-height: 32px;
+}
+
+[data-density="standard"] {
+  --vox-control-height: 32px;
+  --vox-row-height: 30px;
+  --vox-header-height: 32px;
+  --vox-widget-header-height: 36px;
+}
+
+[data-density="comfortable"] {
+  --vox-control-height: 36px;
+  --vox-row-height: 36px;
+  --vox-header-height: 36px;
+  --vox-widget-header-height: 36px;
+}
+
+/* Light theme declared for token parity. Dark Terminal remains the product theme. */
+[data-theme="light"] {
+  --vox-bg-canvas: var(--vox-neutral-50);
+  --vox-bg-workspace: var(--vox-neutral-100);
+  --vox-bg-surface: var(--vox-neutral-0);
+  --vox-bg-surface-hover: var(--vox-neutral-50);
+  --vox-bg-elevated: var(--vox-neutral-0);
+  --vox-bg-input: var(--vox-neutral-0);
+  --vox-border-subtle: var(--vox-neutral-200);
+  --vox-border-default: var(--vox-neutral-300);
+  --vox-border-strong: var(--vox-neutral-400);
+  --vox-text-primary: #12161B;
+  --vox-text-secondary: #515966;
+  --vox-text-tertiary: #707986;
+  --vox-text-disabled: #929AA7;
+}

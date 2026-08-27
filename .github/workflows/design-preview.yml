@@ -35,20 +35,21 @@ jobs:
           mkdir -p _site
           cp -a frontend/design-system/. _site/
           touch _site/.nojekyll
-          cat > _site/index.html <<'EOF'
-          <!doctype html>
-          <html lang="ru">
-          <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width,initial-scale=1">
-            <meta http-equiv="refresh" content="0; url=reference/index.html">
-            <title>Vox Trader Design Preview</title>
-          </head>
-          <body>
-            <p><a href="reference/index.html">Open Vox Trader Design System</a></p>
-          </body>
-          </html>
-          EOF
+
+          # The canonical reference renders at the site root itself — no redirect page.
+          # The design file is not edited: only its relative asset paths are rewritten
+          # for the shallower location (reference/index.html keeps working as before).
+          sed -e 's|\.\./tokens/|tokens/|g'               -e 's|\.\./primitives/|primitives/|g'               -e 's|\.\./components/|components/|g'               -e 's|\.\./patterns/|patterns/|g'               -e 's|"\./assets/|"reference/assets/|g'               frontend/design-system/reference/index.html > _site/index.html
+
+          # Fail the build rather than publish a page whose styles will not resolve.
+          grep -q 'href="tokens/tokens.css"' _site/index.html
+          grep -q 'href="primitives/primitives.css"' _site/index.html
+          grep -q 'href="components/components.css"' _site/index.html
+          grep -q 'href="patterns/patterns.css"' _site/index.html
+          grep -q 'href="reference/assets/vox-mark.svg"' _site/index.html
+          ! grep -q 'http-equiv="refresh"' _site/index.html
+          test -s _site/tokens/tokens.css
+          test -s _site/reference/index.html
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Vox Trader">
+  <rect width="32" height="32" rx="4" fill="#0D1014"></rect>
+  <rect x="3.5" y="3.5" width="25" height="25" rx="3" fill="#161A20" stroke="#2788F5"></rect>
+  <text x="16" y="21" text-anchor="middle" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#EDF0F4">VX</text>
+</svg>

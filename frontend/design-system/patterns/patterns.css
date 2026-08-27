@@ -1,0 +1,444 @@
+/*
+ * Vox Trader — trading patterns
+ * Composed layouts: application shell, workspace grid, instrument header,
+ * order book, trade tape, dual-action order ticket, portfolio summary.
+ * Depends on ../tokens/tokens.css, ../primitives/primitives.css, ../components/components.css.
+ */
+
+/* ---------- Application shell ---------- */
+.vox-shell { display: flex; flex-direction: column; min-height: 100vh; background: var(--vox-bg-canvas); }
+.vox-topbar {
+  height: 44px; flex: 0 0 44px; display: flex; align-items: center; padding: 0 12px;
+  background: var(--vox-bg-workspace); border-bottom: 1px solid var(--vox-border-default);
+}
+/* Top bar answers five questions without leaving the screen:
+   where am I · which broker · which account · can I trade now · what is the portfolio doing. */
+.vox-topbar__group {
+  height: 100%; display: flex; align-items: center; gap: var(--vox-space-2);
+  padding: 0 12px; border-right: 1px solid var(--vox-border-subtle);
+}
+.vox-topbar__brand { font-size: var(--vox-text-13); font-weight: var(--vox-weight-semibold); letter-spacing: 0.06em; }
+.vox-topbar__clock { font-family: var(--vox-font-mono); font-variant-numeric: tabular-nums; font-size: var(--vox-text-12); color: var(--vox-text-tertiary); }
+
+.vox-shell__body { display: flex; align-items: stretch; flex: 1 1 auto; min-height: 0; }
+.vox-nav {
+  width: 118px; flex: 0 0 118px; display: flex; flex-direction: column; padding: 6px 0;
+  background: var(--vox-bg-workspace); border-right: 1px solid var(--vox-border-subtle);
+}
+.vox-nav__item {
+  height: var(--vox-row-height); display: flex; align-items: center; gap: var(--vox-space-2);
+  padding: 0 10px; border-left: 2px solid transparent;
+  font-size: var(--vox-text-12); color: var(--vox-text-secondary); cursor: pointer;
+}
+.vox-nav__item:hover { background: var(--vox-bg-surface-hover); color: var(--vox-text-primary); }
+.vox-nav__item.is-active {
+  background: var(--vox-accent-selected-surface); border-left-color: var(--vox-accent-primary);
+  color: var(--vox-text-primary); font-weight: var(--vox-weight-medium);
+}
+.vox-nav__secondary { margin-top: auto; padding-top: 6px; border-top: 1px solid var(--vox-border-subtle); }
+.vox-nav__secondary .vox-nav__item { height: 24px; font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+
+/* ---------- Workspace grid ---------- */
+/* 12-column desktop grid, 8px minimum resize step, layout persisted per workspace. */
+.vox-workspace {
+  flex: 1 1 auto; min-width: 0; padding: 6px;
+  display: grid; grid-template-columns: repeat(12, 1fr); grid-auto-rows: minmax(48px, auto);
+  gap: 6px; background: var(--vox-bg-workspace);
+}
+.vox-workspace .vox-widget { position: relative; }
+.vox-workspace.is-dragging { cursor: grabbing; }
+.vox-drop-target { border: 1px dashed var(--vox-accent-primary); border-radius: var(--vox-radius-md); background: var(--vox-accent-selected-surface); }
+
+/* Declared widget widths on the 12-column grid — widths belong to the system, not to
+   inline styles. Below 1366px the ticket takes a wider track so it never falls under
+   its 300px minimum; the chart gives up the column, because a chart may lose width and
+   a capital-affecting form may not. */
+.vox-workspace__col-2 { grid-column: span 2; }
+.vox-workspace__col-3 { grid-column: span 3; }
+.vox-workspace__col-4 { grid-column: span 4; }
+.vox-workspace__col-5 { grid-column: span 5; }
+.vox-workspace__col-6 { grid-column: span 6; }
+.vox-workspace__col-7 { grid-column: span 7; }
+.vox-workspace__col-8 { grid-column: span 8; }
+.vox-workspace__col-12 { grid-column: span 12; }
+
+@media (max-width: 1366px) {
+  .vox-workspace__col-3 { grid-column: span 4; }
+  .vox-workspace__col-7 { grid-column: span 6; }
+}
+
+/* ---------- Instrument header / quote ---------- */
+.vox-quote { display: flex; align-items: stretch; height: 56px; }
+.vox-quote__cell { display: flex; flex-direction: column; justify-content: center; padding: 0 14px; border-right: 1px solid var(--vox-border-subtle); }
+.vox-quote__symbol { font-size: var(--vox-text-16); font-weight: var(--vox-weight-semibold); color: var(--vox-text-primary); }
+.vox-quote__meta { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+.vox-quote__last { font-variant-numeric: tabular-nums; font-size: var(--vox-text-22); font-weight: var(--vox-weight-medium); }
+.vox-quote__stats { display: grid; grid-auto-flow: column; align-items: center; flex: 1 1 auto; }
+.vox-quote__stat { padding: 0 12px; }
+.vox-quote__stat-label { font-size: 10px; color: var(--vox-text-disabled); }
+.vox-quote__stat-value { font-variant-numeric: tabular-nums; font-size: var(--vox-text-13); color: var(--vox-text-secondary); }
+.vox-quote__actions { display: flex; align-items: center; gap: var(--vox-space-1); padding: 0 12px; }
+/* Instrument context is linkable and pinnable across widgets. */
+.vox-context-link { display: inline-flex; align-items: center; gap: 4px; font-size: var(--vox-text-11); color: var(--vox-text-tertiary); cursor: pointer; }
+.vox-context-link.is-linked { color: var(--vox-blue-300); }
+.vox-context-link.is-pinned { color: var(--vox-warning-base); }
+
+/* ---------- Order book ---------- */
+/* Depth sits BEHIND the number, never replaces it. Max 12% alpha so text keeps contrast. */
+.vox-book__header {
+  height: 22px; display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center; padding: 0 10px;
+  background: var(--vox-bg-surface-hover); border-bottom: 1px solid var(--vox-border-default);
+  font-size: 10px; color: var(--vox-text-tertiary);
+}
+.vox-book__row {
+  height: 20px; position: relative; display: grid; grid-template-columns: 1fr 1fr 1fr;
+  align-items: center; padding: 0 10px; font-size: var(--vox-text-12); cursor: pointer;
+}
+.vox-book__row.is-own { background: var(--vox-accent-selected-surface); border-left: 2px solid var(--vox-accent-primary); }
+.vox-book__depth { position: absolute; inset: 0 0 0 auto; }
+.vox-book__row--ask .vox-book__depth { background: var(--vox-negative-surface); }
+.vox-book__row--bid .vox-book__depth { background: var(--vox-positive-surface); }
+.vox-book__cell { position: relative; font-variant-numeric: tabular-nums; }
+.vox-book__price--ask { color: var(--vox-negative-base); }
+.vox-book__price--bid { color: var(--vox-positive-base); }
+.vox-book__spread {
+  height: 22px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px;
+  background: var(--vox-bg-workspace);
+  border-top: 1px solid var(--vox-border-subtle); border-bottom: 1px solid var(--vox-border-subtle);
+  font-size: var(--vox-text-12); font-weight: var(--vox-weight-semibold);
+}
+
+/* ---------- Trade tape ---------- */
+.vox-tape__row {
+  height: 20px; display: grid; grid-template-columns: 76px 1fr 1fr 40px; align-items: center;
+  padding: 0 10px; font-size: var(--vox-text-12); border-bottom: 1px solid var(--vox-bg-workspace);
+}
+.vox-tape__row.is-own { background: var(--vox-accent-selected-surface); }
+.vox-tape__time { font-family: var(--vox-font-mono); font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+.vox-tape__size--large { font-weight: var(--vox-weight-semibold); color: var(--vox-text-primary); }
+
+/* ---------- Order ticket — DUAL ACTION ----------
+   One shared body. Both actions are permanently visible.
+   There is NO buy/sell mode toggle: the side IS the final action.
+   Shortcuts map straight to the actions (B = Купить, S = Продать). */
+.vox-ticket { width: 300px; min-width: 300px; }
+/* Inside the workspace the grid sizes the ticket, but never below its minimum. */
+.vox-workspace .vox-ticket { width: auto; }
+.vox-ticket__body { padding: 10px; display: flex; flex-direction: column; gap: var(--vox-space-2); }
+.vox-ticket__instrument {
+  min-height: var(--vox-row-height); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  padding: 0 8px; background: var(--vox-bg-input);
+  border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-sm);
+}
+.vox-ticket__field { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vox-space-1) var(--vox-space-2); min-height: var(--vox-row-height); }
+.vox-ticket__label { width: 56px; font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+.vox-ticket__preview {
+  padding: 8px; background: var(--vox-bg-input);
+  border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-sm);
+}
+.vox-ticket__preview-row {
+  min-height: 20px; display: flex; flex-wrap: wrap; align-items: baseline;
+  justify-content: space-between; gap: 2px var(--vox-space-2); padding: 1px 0;
+}
+.vox-ticket__disclosure {
+  height: 24px; display: flex; align-items: center; gap: var(--vox-space-1);
+  background: transparent; border: 0; padding: 0; color: var(--vox-text-secondary);
+  font: inherit; font-size: var(--vox-text-12); cursor: pointer;
+}
+.vox-ticket__actions { display: flex; gap: var(--vox-space-1); }
+.vox-ticket__action {
+  flex: 1; height: 34px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  border-radius: var(--vox-radius-sm); font-family: inherit; cursor: pointer;
+  transition: background var(--vox-motion-normal) var(--vox-motion-ease);
+}
+.vox-ticket__action-label { font-size: var(--vox-text-12); font-weight: var(--vox-weight-semibold); }
+.vox-ticket__action-value { font-variant-numeric: tabular-nums; font-size: 10px; opacity: 0.75; }
+.vox-ticket__action--buy { background: var(--vox-positive-base); border: 1px solid var(--vox-positive-strong); color: var(--vox-on-positive); }
+.vox-ticket__action--buy:hover { background: var(--vox-positive-hover); }
+.vox-ticket__action--buy:active { background: var(--vox-positive-strong); }
+.vox-ticket__action--sell { background: var(--vox-negative-base); border: 1px solid var(--vox-negative-strong); color: var(--vox-on-negative); }
+.vox-ticket__action--sell:hover { background: var(--vox-negative-hover); }
+.vox-ticket__action--sell:active { background: var(--vox-negative-strong); }
+/* Blocked side stays visible: the restriction affects execution, not the widget concept. */
+.vox-ticket__action.is-blocked { cursor: not-allowed; }
+.vox-ticket__action--buy.is-blocked { background: var(--vox-positive-surface); color: var(--vox-positive-base); }
+.vox-ticket__action--sell.is-blocked { background: var(--vox-negative-surface); color: var(--vox-negative-base); }
+.vox-ticket__action-note { font-size: 10px; color: var(--vox-neutral-400); }
+.vox-ticket__hint { font-family: var(--vox-font-mono); font-size: 10px; color: var(--vox-text-disabled); text-align: center; }
+
+/* ---------- Portfolio / risk summary ---------- */
+/* Dense metric grid separated by borders. No oversized card for a single number. */
+.vox-metrics { display: grid; grid-template-columns: repeat(4, 1fr); }
+.vox-metrics__cell { padding: 10px 12px; border-right: 1px solid var(--vox-bg-surface-hover); border-bottom: 1px solid var(--vox-bg-surface-hover); }
+.vox-metrics__cell:last-child { border-right: 0; }
+.vox-metrics__label { font-size: 10px; color: var(--vox-text-disabled); }
+.vox-metrics__value { font-variant-numeric: tabular-nums; font-size: var(--vox-text-16); font-weight: var(--vox-weight-medium); color: var(--vox-text-primary); }
+.vox-limit { display: flex; flex-direction: column; gap: var(--vox-space-1); }
+.vox-limit__track { height: 4px; background: var(--vox-bg-elevated); border-radius: 2px; overflow: hidden; }
+.vox-limit__fill { height: 4px; background: var(--vox-positive-base); }
+.vox-limit__fill--warning { background: var(--vox-warning-base); }
+.vox-limit__fill--blocked { background: var(--vox-negative-base); }
+.vox-limit__fill--neutral { background: var(--vox-accent-primary); }
+
+/* ---------- Order ticket — execution target ----------
+   The ticket always states which broker/account/environment will receive the
+   command. It is the first row of the ticket, above the instrument, and it is
+   never collapsed, never inferred from "the last used account". */
+.vox-ticket__target {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--vox-space-2);
+  min-height: var(--vox-row-height); padding: 4px 8px;
+  background: var(--vox-bg-surface-hover);
+  border: 1px solid var(--vox-border-default); border-radius: var(--vox-radius-sm);
+  font-size: var(--vox-text-12);
+}
+.vox-ticket__target-account { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; min-width: 0; }
+/* The account name answers "whose money is this" — it wraps rather than truncating.
+   Ellipsis is allowed on decoration, never on the execution target. */
+.vox-ticket__target-name { font-weight: var(--vox-weight-medium); min-width: 0; overflow-wrap: anywhere; }
+.vox-ticket__target-broker { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+/* LIVE target: inset marker on the target row, not a red screen. */
+.vox-ticket__target.is-live { box-shadow: inset 0 0 0 1px var(--vox-negative-outline); }
+/* Target differs from the workspace-level selection — the mismatch must be loud. */
+.vox-ticket__target.is-mismatch { border-color: var(--vox-warning-base); background: var(--vox-warning-surface); }
+/* Once the command is constructed/submitted its target is frozen: changing the active
+   account in the shell can never retarget it. The row stops being interactive and says so. */
+.vox-ticket__target.is-frozen { background: var(--vox-bg-elevated); border-color: var(--vox-border-strong); cursor: default; }
+.vox-ticket__target-lock {
+  font-family: var(--vox-font-mono); font-size: 10px; letter-spacing: 0.06em;
+  color: var(--vox-text-tertiary); white-space: nowrap;
+}
+
+/* ---------- Reconciliation / UNKNOWN_AFTER_DISPATCH ----------
+   The command left Vox but the broker has not confirmed the outcome. This is an
+   unfinished answer, never a rejection: the violet UNKNOWN semantic is mandatory and
+   the negative semantic is forbidden here. Resolution is owned by #11. */
+.vox-recon {
+  display: flex; flex-direction: column; gap: var(--vox-space-2); padding: 10px;
+  border-radius: var(--vox-radius-sm); background: var(--vox-unknown-surface-subtle);
+  border: 1px solid var(--vox-unknown-base);
+}
+.vox-recon__head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vox-space-2); font-size: var(--vox-text-12); }
+.vox-recon__title { min-width: 0; overflow-wrap: anywhere; font-weight: var(--vox-weight-medium); color: var(--vox-unknown-base); }
+.vox-recon__body { font-size: var(--vox-text-11); color: var(--vox-text-secondary); line-height: 1.5; }
+/* What Vox knows for certain about the frozen command, so the operator does not guess. */
+.vox-recon__facts {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px var(--vox-space-2);
+  padding: 6px 8px; border-radius: var(--vox-radius-xs);
+  background: var(--vox-bg-surface); border: 1px solid var(--vox-border-subtle);
+}
+.vox-recon__facts > * { min-width: 0; }
+.vox-recon__fact-label { font-size: 10px; color: var(--vox-text-disabled); }
+.vox-recon__fact-value { font-variant-numeric: tabular-nums; font-size: var(--vox-text-12); color: var(--vox-text-primary); }
+.vox-recon__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vox-space-1); }
+
+/* ---------- Bulk protection migration ----------
+   Re-applying an account default to positions that already carry broker-side stop
+   orders is a separate capital-affecting action: preview, affected count, before/after,
+   consequences, typed confirmation, then a per-position reconciliation result. */
+.vox-migrate { display: flex; flex-direction: column; gap: var(--vox-space-2); }
+.vox-migrate__policy {
+  display: grid; grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr); align-items: center; gap: var(--vox-space-2);
+}
+.vox-migrate__policy-cell {
+  display: flex; flex-direction: column; gap: 2px; padding: 8px;
+  border-radius: var(--vox-radius-sm); background: var(--vox-bg-input); border: 1px solid var(--vox-border-subtle);
+}
+.vox-migrate__policy-label { font-size: 10px; color: var(--vox-text-disabled); }
+.vox-migrate__policy-value { font-variant-numeric: tabular-nums; font-size: var(--vox-text-13); color: var(--vox-text-primary); }
+.vox-migrate__policy-cell--after { border-color: var(--vox-accent-primary); }
+.vox-migrate__arrow { text-align: center; color: var(--vox-text-tertiary); }
+.vox-migrate__count { display: flex; align-items: baseline; gap: var(--vox-space-2); font-size: var(--vox-text-12); color: var(--vox-text-secondary); }
+.vox-migrate__count-value { font-variant-numeric: tabular-nums; font-size: var(--vox-text-16); font-weight: var(--vox-weight-medium); color: var(--vox-text-primary); }
+
+/* ---------- Protection: Stop Loss / Take Profit ----------
+   Independent and optional. Enabling SL does not require TP and vice versa.
+   Each block maps to a real broker order (stop / take-profit / trailing stop)
+   owned by Broker Foundation (issue #10) — it is never decorative UI.
+   Where the broker does not support a mode, the control states that instead of
+   silently degrading to a client-side emulation. */
+.vox-protect { display: flex; flex-direction: column; gap: var(--vox-space-1); }
+.vox-protect__block {
+  border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-sm);
+  background: var(--vox-bg-input); overflow: hidden;
+}
+.vox-protect__head {
+  min-height: var(--vox-row-height); display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--vox-space-2);
+  padding: 4px 8px; font-size: var(--vox-text-12);
+}
+.vox-protect__title { display: flex; align-items: center; gap: 6px; }
+.vox-protect__mark {
+  width: 18px; height: 16px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--vox-radius-xs); font-family: var(--vox-font-mono);
+  font-size: 10px; font-weight: var(--vox-weight-semibold);
+}
+.vox-protect__block--sl .vox-protect__mark { background: var(--vox-protect-sl-surface); color: var(--vox-protect-sl); border: 1px solid var(--vox-warning-strong); }
+.vox-protect__block--tp .vox-protect__mark { background: var(--vox-protect-tp-surface); color: var(--vox-protect-tp); border: 1px solid var(--vox-positive-strong); }
+.vox-protect__spacer { flex: 1 1 auto; }
+.vox-protect__body {
+  display: flex; flex-direction: column; gap: var(--vox-space-2);
+  padding: 8px; border-top: 1px solid var(--vox-border-subtle);
+}
+.vox-protect__block.is-off .vox-protect__body { display: none; }
+.vox-protect__block.is-off .vox-protect__head { color: var(--vox-text-tertiary); }
+.vox-protect__row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vox-space-2); }
+.vox-protect__label { width: 56px; flex: 0 0 56px; font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+.vox-protect__hint { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); line-height: 1.45; }
+/* Resulting broker-side level, always shown as an absolute price + distance. */
+.vox-protect__result {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--vox-space-2); justify-content: space-between;
+  padding: 6px 8px; border-radius: var(--vox-radius-xs);
+  background: var(--vox-bg-surface); font-size: var(--vox-text-12);
+}
+.vox-protect__result-value { font-variant-numeric: tabular-nums; font-weight: var(--vox-weight-medium); }
+
+/* Trailing stop — broker-native. Relative % or provider-supported absolute. */
+.vox-trailing { display: flex; flex-direction: column; gap: var(--vox-space-2); }
+.vox-trailing__mode { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vox-space-1) var(--vox-space-2); }
+.vox-trailing__badge {
+  height: 18px; display: inline-flex; align-items: center; gap: 4px; padding: 0 6px;
+  border-radius: var(--vox-radius-xs); background: var(--vox-protect-trailing-surface);
+  border: 1px solid var(--vox-blue-600); font-family: var(--vox-font-mono);
+  font-size: 10px; color: var(--vox-protect-trailing);
+}
+/* Current / reference state of a live trailing stop, when the broker reports it. */
+.vox-trailing__state {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px var(--vox-space-2);
+  padding: 6px 8px; border-radius: var(--vox-radius-xs);
+  background: var(--vox-bg-surface); border: 1px solid var(--vox-border-subtle);
+}
+.vox-trailing__state-label { font-size: 10px; color: var(--vox-text-disabled); }
+.vox-trailing__state-value { font-variant-numeric: tabular-nums; font-size: var(--vox-text-12); color: var(--vox-text-primary); }
+/* Broker does not report the reference level: UNKNOWN, never an error. */
+.vox-trailing__state-value.is-unknown { color: var(--vox-unknown-base); }
+/* Mode not supported by this provider — stated, not hidden. */
+.vox-trailing__unsupported {
+  display: flex; align-items: flex-start; gap: 6px; padding: 6px 8px;
+  border-radius: var(--vox-radius-xs); background: var(--vox-unknown-surface);
+  border: 1px solid var(--vox-unknown-base);
+  font-size: var(--vox-text-11); color: var(--vox-text-secondary); line-height: 1.45;
+}
+
+/* ---------- Protection precedence ----------
+   Explicit and visible, always in this order:
+   order/position override  >  strategy policy  >  portfolio/account default.
+   The winning level is marked; the others stay readable, not hidden. */
+.vox-precedence { display: flex; flex-direction: column; }
+.vox-precedence__row {
+  display: grid; grid-template-columns: 20px minmax(0, 1fr) 96px 92px; align-items: center; gap: var(--vox-space-2);
+  min-height: var(--vox-row-height); padding: 0 8px;
+  border-bottom: 1px solid var(--vox-border-subtle); font-size: var(--vox-text-12);
+}
+.vox-precedence__scope { min-width: 0; overflow-wrap: anywhere; }
+.vox-precedence__row:last-child { border-bottom: 0; }
+.vox-precedence__rank { font-family: var(--vox-font-mono); font-size: 10px; color: var(--vox-text-disabled); }
+.vox-precedence__scope { color: var(--vox-text-secondary); }
+.vox-precedence__value { font-variant-numeric: tabular-nums; text-align: right; color: var(--vox-text-tertiary); }
+.vox-precedence__row.is-effective { background: var(--vox-accent-selected-surface); border-left: 2px solid var(--vox-accent-primary); }
+.vox-precedence__row.is-effective .vox-precedence__scope,
+.vox-precedence__row.is-effective .vox-precedence__value { color: var(--vox-text-primary); }
+.vox-precedence__row.is-overridden .vox-precedence__value { text-decoration: line-through; color: var(--vox-text-disabled); }
+.vox-precedence__note { padding: 8px; font-size: var(--vox-text-11); color: var(--vox-text-tertiary); line-height: 1.45; }
+
+/* Default policy at portfolio/account scope. A default is NOT a hard risk limit;
+   guardrails are a separate policy object with its own screen. */
+.vox-policy { display: flex; flex-direction: column; gap: var(--vox-space-2); }
+.vox-policy__row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--vox-space-2);
+  min-height: var(--vox-row-height);
+}
+.vox-policy__label { flex: 1 1 112px; min-width: 112px; }
+.vox-policy__label { font-size: var(--vox-text-12); color: var(--vox-text-secondary); }
+.vox-policy__scope { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); text-wrap: pretty; }
+/* Changing a default never rewrites orders that already exist at the broker. */
+.vox-policy__migration {
+  display: flex; align-items: flex-start; gap: 6px; padding: 8px;
+  border-radius: var(--vox-radius-sm); background: var(--vox-warning-surface);
+  border: 1px solid var(--vox-warning-strong);
+  font-size: var(--vox-text-11); color: var(--vox-text-primary); line-height: 1.45;
+}
+
+/* ---------- Settings → Брокеры и счета ----------
+   Add connection · environment · human label · token · validate · discovered
+   accounts · health · rotation. A connection is not a portfolio, and the token
+   is never revealed after saving. */
+.vox-brokers { display: grid; grid-template-columns: 260px 1fr; align-items: stretch; min-height: 0; }
+.vox-brokers__list { border-right: 1px solid var(--vox-border-subtle); background: var(--vox-bg-workspace); }
+.vox-brokers__item {
+  display: flex; flex-direction: column; gap: 2px; padding: 8px 10px;
+  border-bottom: 1px solid var(--vox-border-subtle); border-left: 2px solid transparent; cursor: pointer;
+}
+.vox-brokers__item:hover { background: var(--vox-bg-surface-hover); }
+.vox-brokers__item.is-selected { background: var(--vox-accent-selected-surface); border-left-color: var(--vox-accent-primary); }
+.vox-brokers__item-top { display: flex; align-items: center; justify-content: space-between; gap: var(--vox-space-2); font-size: var(--vox-text-12); }
+.vox-brokers__item-meta { display: flex; align-items: center; gap: 6px; font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+.vox-brokers__detail { display: flex; flex-direction: column; gap: var(--vox-space-3); padding: 12px; min-width: 0; }
+.vox-brokers__section { display: flex; flex-direction: column; gap: var(--vox-space-2); }
+.vox-brokers__section-title {
+  font-family: var(--vox-font-mono); font-size: 10px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--vox-text-tertiary);
+}
+.vox-brokers__field { display: grid; grid-template-columns: 132px 1fr; align-items: center; gap: var(--vox-space-2); }
+.vox-brokers__field-label { font-size: var(--vox-text-12); color: var(--vox-text-secondary); }
+/* Discovered accounts are read from the connection, never typed by the user. */
+.vox-brokers__discovered { border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-sm); overflow-x: auto; }
+.vox-brokers__discovered-head {
+  min-height: 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; padding: 2px 10px;
+  background: var(--vox-bg-surface-hover); border-bottom: 1px solid var(--vox-border-default);
+  font-size: 10px; color: var(--vox-text-tertiary);
+}
+.vox-brokers__actions { display: flex; align-items: center; gap: var(--vox-space-1); }
+
+/* ---------- Deferred capability ----------
+   A region whose data or action has no backend contract yet. It is rendered, named and
+   disabled, and it carries the tracked dependency id from docs/design/BACKEND_CONTRACTS.md.
+   Simulating the missing data in the browser is prohibited: an empty, honest region beats
+   a plausible lie. Deferred is not an error state and never borrows the negative semantic. */
+.vox-deferred {
+  display: flex; flex-direction: column; gap: var(--vox-space-2); padding: 10px;
+  border-radius: var(--vox-radius-sm);
+  background: var(--vox-unknown-surface-subtle);
+  border: 1px dashed var(--vox-border-strong);
+}
+.vox-deferred__head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vox-space-2); }
+.vox-deferred__title { font-size: var(--vox-text-12); font-weight: var(--vox-weight-medium); color: var(--vox-text-secondary); }
+.vox-deferred__body { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); line-height: 1.5; }
+/* The tracked backend dependency. Mono, so it reads as an identifier, not as prose. */
+.vox-dep {
+  height: 18px; display: inline-flex; align-items: center; gap: 4px; padding: 0 6px;
+  border-radius: var(--vox-radius-xs); background: var(--vox-bg-surface-hover);
+  border: 1px solid var(--vox-border-strong);
+  font-family: var(--vox-font-mono); font-size: 10px; letter-spacing: 0.06em;
+  color: var(--vox-text-tertiary); white-space: nowrap;
+}
+/* A control that exists in the design but cannot be executed yet. */
+.vox-deferred__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vox-space-1); }
+
+/* ---------- Live execution authorization ----------
+   A broker token that permits trading does NOT enable Vox live execution.
+   The two facts are separate objects on screen and separate policy states.
+   PRODUCTION execution is OFF by default; enabling is high-friction, halting is one step. */
+.vox-exec-auth { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: var(--vox-space-3); align-items: start; }
+.vox-exec-fact {
+  display: flex; flex-direction: column; gap: var(--vox-space-1); padding: 10px;
+  background: var(--vox-bg-surface); border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-md);
+}
+.vox-exec-fact__label { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+/* The Vox-side switch is the capital-affecting one and is marked as such. */
+.vox-exec-fact--vox { border-color: var(--vox-negative-strong); }
+.vox-exec-fact__state { font-family: var(--vox-font-mono); font-size: var(--vox-text-13); font-weight: var(--vox-weight-medium); }
+.vox-exec-fact__state.is-off { color: var(--vox-negative-base); }
+.vox-exec-fact__state.is-on { color: var(--vox-positive-base); }
+.vox-exec-consequences {
+  padding: 8px; border-radius: var(--vox-radius-sm);
+  background: var(--vox-negative-surface); border: 1px solid var(--vox-negative-strong);
+  font-size: var(--vox-text-11); line-height: 1.5; color: var(--vox-text-primary);
+}
+/* Typed confirmation word — keyboard shortcuts never bypass it. */
+.vox-exec-confirm { display: flex; align-items: center; gap: var(--vox-space-2); }
+/* Halt is always cheaper than enable: one action, no confirmation. */
+.vox-exec-halt {
+  width: 100%; height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  border-radius: var(--vox-radius-sm); background: var(--vox-negative-surface-hover);
+  border: 1px solid var(--vox-negative-strong); color: var(--vox-negative-base);
+  font-size: var(--vox-text-12); font-weight: var(--vox-weight-semibold); cursor: pointer;
+}

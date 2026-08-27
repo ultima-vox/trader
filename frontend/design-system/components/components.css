@@ -1,0 +1,465 @@
+/*
+ * Vox Trader — controls & data components
+ * Button, IconButton, Input, NumericInput, Select, Tabs, SegmentedControl,
+ * Checkbox, Switch, Slider, Menu, Badge, Status, Table, Widget, MarkerBadge.
+ * Depends on ../tokens/tokens.css and ../primitives/primitives.css.
+ */
+
+/* =========================================================
+   Button — variants: primary, secondary, ghost, danger, buy, sell
+   States: default, hover, pressed(:active), selected, focused, disabled, loading
+   Height: var(--vox-control-height) (28px Compact). padding-x 8–12px. radius 4px.
+   ========================================================= */
+.vox-btn {
+  height: var(--vox-control-height);
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--vox-space-1);
+  border-radius: var(--vox-radius-sm);
+  border: 1px solid transparent;
+  font-family: inherit;
+  font-size: var(--vox-text-12);
+  font-weight: var(--vox-weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--vox-motion-normal) var(--vox-motion-ease),
+              border-color var(--vox-motion-normal) var(--vox-motion-ease);
+}
+.vox-btn:disabled,
+.vox-btn[aria-disabled="true"] {
+  background: var(--vox-bg-surface-hover);
+  border-color: var(--vox-border-subtle);
+  color: var(--vox-text-disabled);
+  cursor: not-allowed;
+}
+.vox-btn--primary { background: var(--vox-blue-500); border-color: var(--vox-blue-600); color: var(--vox-neutral-0); }
+.vox-btn--primary:hover { background: var(--vox-blue-400); }
+.vox-btn--primary:active { background: var(--vox-blue-600); }
+
+.vox-btn--secondary { background: var(--vox-bg-elevated); border-color: var(--vox-neutral-700); color: var(--vox-text-primary); }
+.vox-btn--secondary:hover { background: var(--vox-neutral-700); }
+.vox-btn--secondary:active { background: var(--vox-bg-surface-hover); }
+
+.vox-btn--ghost { background: transparent; border-color: transparent; color: var(--vox-text-secondary); font-weight: var(--vox-weight-regular); }
+.vox-btn--ghost:hover { background: var(--vox-bg-surface-hover); color: var(--vox-text-primary); }
+.vox-btn--ghost:active { background: var(--vox-bg-elevated); }
+
+.vox-btn--danger { background: transparent; border-color: var(--vox-negative-strong); color: var(--vox-negative-base); }
+.vox-btn--danger:hover { background: var(--vox-negative-surface); border-color: var(--vox-negative-base); }
+.vox-btn--danger:active { background: var(--vox-negative-surface-active); color: var(--vox-text-primary); }
+
+/* BUY / SELL are financial actions, not generic design-system buttons.
+   They are always both present in the ticket — never behind a mode toggle. */
+.vox-btn--buy { background: var(--vox-positive-base); border-color: var(--vox-positive-strong); color: var(--vox-on-positive); font-weight: var(--vox-weight-semibold); }
+.vox-btn--buy:hover { background: var(--vox-positive-hover); }
+.vox-btn--buy:active { background: var(--vox-positive-strong); color: var(--vox-text-primary); }
+
+.vox-btn--sell { background: var(--vox-negative-base); border-color: var(--vox-negative-strong); color: var(--vox-on-negative); font-weight: var(--vox-weight-semibold); }
+.vox-btn--sell:hover { background: var(--vox-negative-hover); }
+.vox-btn--sell:active { background: var(--vox-negative-strong); color: var(--vox-text-primary); }
+
+.vox-btn.is-selected { background: var(--vox-accent-selected-surface); border-color: var(--vox-accent-primary); color: var(--vox-blue-300); }
+.vox-btn.is-focused, .vox-btn:focus-visible { box-shadow: var(--vox-focus-ring); border-color: var(--vox-border-focus); }
+
+.vox-spinner {
+  width: 10px; height: 10px; border-radius: 50%;
+  border: 1.5px solid var(--vox-border-default);
+  border-top-color: currentColor;
+  animation: voxSpin 700ms linear infinite;
+}
+
+.vox-icon-btn {
+  width: var(--vox-control-height); height: var(--vox-control-height);
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid transparent;
+  border-radius: var(--vox-radius-sm); color: var(--vox-text-secondary); cursor: pointer;
+}
+.vox-icon-btn:hover { background: var(--vox-bg-surface-hover); color: var(--vox-text-primary); }
+.vox-icon-btn--sm { width: 24px; height: 24px; }
+.vox-icon-btn--xs { width: 22px; height: 22px; border-radius: var(--vox-radius-xs); }
+
+/* =========================================================
+   Input / NumericInput
+   Field width follows the data. Never full-width without a reason.
+   ========================================================= */
+.vox-input {
+  height: var(--vox-control-height);
+  display: inline-flex; align-items: center; gap: var(--vox-space-1);
+  padding: 0 8px;
+  background: var(--vox-bg-input);
+  border: 1px solid var(--vox-border-default);
+  border-radius: var(--vox-radius-sm);
+  color: var(--vox-text-primary);
+  font-family: inherit; font-size: var(--vox-text-13);
+}
+.vox-input:hover { border-color: var(--vox-border-strong); }
+.vox-input:focus-within { border-color: var(--vox-border-focus); box-shadow: var(--vox-focus-ring); }
+.vox-input.is-invalid { border-color: var(--vox-negative-base); background: var(--vox-negative-surface); }
+.vox-input.is-validating { color: var(--vox-text-secondary); }
+.vox-input:disabled, .vox-input.is-disabled {
+  background: var(--vox-bg-surface); border-color: var(--vox-border-subtle); color: var(--vox-text-disabled);
+}
+.vox-input__field { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: inherit; font: inherit; }
+
+/* [ − ] [ 10 ] [ + ] — stepper, keyboard arrows, Enter commits, Escape reverts.
+   Mouse wheel MUST NOT change a trading-critical value. */
+.vox-numeric {
+  height: var(--vox-control-height);
+  display: inline-flex; align-items: stretch;
+  background: var(--vox-bg-input);
+  border: 1px solid var(--vox-border-default);
+  border-radius: var(--vox-radius-sm);
+  overflow: hidden;
+}
+.vox-numeric:focus-within { border-color: var(--vox-border-focus); box-shadow: var(--vox-focus-ring); }
+.vox-numeric.is-invalid { border-color: var(--vox-negative-base); }
+.vox-numeric__step {
+  width: 22px; display: flex; align-items: center; justify-content: center;
+  background: var(--vox-bg-surface-hover); border: 0; color: var(--vox-text-secondary); cursor: pointer;
+}
+.vox-numeric__step:hover { background: var(--vox-bg-elevated); color: var(--vox-text-primary); }
+.vox-numeric__step--dec { border-right: 1px solid var(--vox-border-default); }
+.vox-numeric__step--inc { border-left: 1px solid var(--vox-border-default); }
+.vox-numeric__value {
+  min-width: 56px; display: flex; align-items: center; justify-content: flex-end;
+  padding: 0 8px; font-variant-numeric: tabular-nums; font-size: var(--vox-text-13); color: var(--vox-text-primary);
+}
+.vox-field-error {
+  display: flex; align-items: flex-start; gap: var(--vox-space-1);
+  font-size: var(--vox-text-11); color: var(--vox-negative-base); line-height: 1.45;
+}
+
+/* =========================================================
+   Select / Tabs / SegmentedControl / Checkbox / Switch / Slider / Menu
+   ========================================================= */
+.vox-select {
+  height: var(--vox-control-height);
+  display: inline-flex; align-items: center; justify-content: space-between; gap: var(--vox-space-2);
+  padding: 0 8px; background: var(--vox-bg-input);
+  border: 1px solid var(--vox-border-default); border-radius: var(--vox-radius-sm);
+  color: var(--vox-text-primary); font: inherit; font-size: var(--vox-text-12); cursor: pointer;
+}
+.vox-select:hover { border-color: var(--vox-border-strong); }
+
+.vox-tabs { display: flex; border-bottom: 1px solid var(--vox-border-subtle); }
+.vox-tab {
+  height: var(--vox-header-height); display: inline-flex; align-items: center; gap: 5px;
+  padding: 0 10px; border-bottom: 2px solid transparent;
+  font-size: var(--vox-text-12); color: var(--vox-text-tertiary); cursor: pointer;
+}
+.vox-tab:hover { color: var(--vox-text-primary); }
+.vox-tab.is-selected { color: var(--vox-text-primary); font-weight: var(--vox-weight-medium); border-bottom-color: var(--vox-accent-primary); }
+.vox-tab.is-disabled { color: var(--vox-text-disabled); cursor: not-allowed; }
+.vox-tab__count { font-family: var(--vox-font-mono); font-size: 10px; color: var(--vox-text-tertiary); }
+
+.vox-segmented {
+  height: var(--vox-control-height); display: inline-flex; gap: 2px; padding: 2px;
+  flex: 0 1 auto; min-width: min-content; max-width: 100%; white-space: nowrap;
+  background: var(--vox-bg-input); border: 1px solid var(--vox-border-default); border-radius: var(--vox-radius-sm);
+}
+.vox-segmented__item {
+  display: flex; align-items: center; flex: 0 0 auto; padding: 0 10px; border-radius: var(--vox-radius-xs);
+  font-size: var(--vox-text-12); color: var(--vox-text-tertiary); cursor: pointer;
+}
+.vox-segmented__item:hover { background: var(--vox-bg-surface-hover); color: var(--vox-text-primary); }
+.vox-segmented__item.is-selected { background: var(--vox-accent-primary); color: var(--vox-neutral-0); font-weight: var(--vox-weight-medium); }
+
+.vox-check {
+  width: 14px; height: 14px; border-radius: var(--vox-radius-xs);
+  background: var(--vox-bg-input); border: 1px solid var(--vox-border-strong);
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.vox-check.is-checked { background: var(--vox-accent-primary); border-color: var(--vox-blue-600); }
+.vox-check.is-disabled { background: var(--vox-bg-surface-hover); border-color: var(--vox-border-subtle); cursor: not-allowed; }
+
+.vox-switch {
+  width: 32px; height: 18px; border-radius: 9px; position: relative; cursor: pointer;
+  background: var(--vox-bg-elevated); border: 1px solid var(--vox-neutral-700);
+  transition: background var(--vox-motion-normal) var(--vox-motion-ease);
+}
+.vox-switch.is-on { background: var(--vox-accent-primary); border-color: var(--vox-blue-600); }
+.vox-switch__knob {
+  position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--vox-neutral-400); transition: left var(--vox-motion-normal) var(--vox-motion-ease);
+}
+.vox-switch.is-on .vox-switch__knob { left: 16px; background: var(--vox-neutral-0); }
+
+.vox-slider { position: relative; height: 4px; background: var(--vox-bg-elevated); border-radius: 2px; }
+.vox-slider__fill { position: absolute; inset: 0 auto 0 0; height: 4px; background: var(--vox-accent-primary); border-radius: 2px; }
+.vox-slider__knob {
+  position: absolute; top: -4px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%;
+  background: var(--vox-text-primary); border: 1px solid var(--vox-border-strong); cursor: pointer;
+}
+
+.vox-menu { min-width: 200px; padding: var(--vox-space-1) 0; }
+.vox-menu__item {
+  height: var(--vox-row-height); display: flex; align-items: center; justify-content: space-between;
+  padding: 0 10px; font-size: var(--vox-text-12); color: var(--vox-text-primary); cursor: pointer;
+}
+.vox-menu__item:hover { background: var(--vox-neutral-700); }
+.vox-menu__item.is-disabled { color: var(--vox-text-disabled); cursor: not-allowed; }
+.vox-menu__item--danger { color: var(--vox-negative-base); }
+.vox-menu__item--danger:hover { background: var(--vox-negative-surface-hover); }
+.vox-menu__shortcut { font-family: var(--vox-font-mono); font-size: 10px; color: var(--vox-text-tertiary); }
+.vox-menu__sep { height: 1px; background: var(--vox-border-strong); margin: var(--vox-space-1) 0; }
+
+/* =========================================================
+   Badge / Status — colour is never the only carrier of meaning
+   ========================================================= */
+.vox-badge {
+  height: 20px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px;
+  border-radius: var(--vox-radius-xs); border: 1px solid var(--vox-border-default);
+  background: var(--vox-bg-surface-hover); font-size: var(--vox-text-11); color: var(--vox-text-secondary);
+}
+.vox-badge--positive { background: var(--vox-positive-surface); border-color: var(--vox-positive-strong); color: var(--vox-positive-base); }
+.vox-badge--negative { background: var(--vox-negative-surface); border-color: var(--vox-negative-strong); color: var(--vox-negative-base); }
+.vox-badge--warning { background: var(--vox-warning-surface); border-color: var(--vox-warning-strong); color: var(--vox-warning-base); }
+.vox-badge--info { background: var(--vox-info-surface); border-color: var(--vox-blue-600); color: var(--vox-blue-300); }
+.vox-badge--unknown { background: var(--vox-unknown-surface); border-color: var(--vox-unknown-base); color: var(--vox-unknown-base); font-weight: var(--vox-weight-medium); }
+.vox-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+
+/* Environment badge — always visible, never a bare dot. */
+.vox-env {
+  height: 22px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px;
+  border-radius: var(--vox-radius-xs); font-size: var(--vox-text-11);
+  font-weight: var(--vox-weight-semibold); letter-spacing: 0.07em;
+}
+.vox-env--live { background: var(--vox-negative-surface-hover); border: 1px solid var(--vox-negative-strong); color: var(--vox-negative-base); }
+.vox-env--sandbox { background: var(--vox-info-surface); border: 1px solid var(--vox-blue-600); color: var(--vox-blue-300); }
+.vox-env--paper { background: var(--vox-unknown-surface); border: 1px solid var(--vox-unknown-base); color: var(--vox-unknown-base); }
+.vox-env--backtest { background: var(--vox-bg-surface-hover); border: 1px solid var(--vox-border-strong); color: var(--vox-text-secondary); }
+/* LIVE actions get an extra inset marker — the UI itself does not turn red. */
+.vox-live-action { box-shadow: inset 0 0 0 1px var(--vox-negative-outline); }
+
+/* Runtime status — clickable, opens diagnostics. */
+.vox-runtime {
+  height: var(--vox-row-height); display: inline-flex; align-items: center; gap: var(--vox-space-2);
+  padding: 0 8px; background: var(--vox-bg-input);
+  border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-sm); cursor: pointer;
+}
+.vox-runtime__label { font-size: var(--vox-text-12); font-weight: var(--vox-weight-medium); letter-spacing: 0.03em; }
+.vox-runtime--ready .vox-dot { background: var(--vox-positive-base); }
+.vox-runtime--reconciling .vox-dot { background: var(--vox-info-base); animation: voxPulse 1.4s ease-in-out infinite; }
+.vox-runtime--degraded { background: var(--vox-warning-surface); border-color: var(--vox-warning-strong); color: var(--vox-warning-base); }
+.vox-runtime--halted { background: var(--vox-negative-surface); border-color: var(--vox-negative-strong); color: var(--vox-negative-base); font-weight: var(--vox-weight-semibold); }
+
+/* Risk indicator — SAFE / WARNING / BLOCKED / UNKNOWN, always icon + text + reason. */
+.vox-risk {
+  display: flex; align-items: flex-start; gap: var(--vox-space-2);
+  padding: 6px 8px; border-radius: var(--vox-radius-sm); font-size: var(--vox-text-12);
+}
+.vox-risk--safe { background: var(--vox-positive-surface); border: 1px solid var(--vox-positive-strong); color: var(--vox-positive-base); }
+.vox-risk--warning { background: var(--vox-warning-surface); border: 1px solid var(--vox-warning-strong); color: var(--vox-warning-base); }
+.vox-risk--blocked { background: var(--vox-negative-surface); border: 1px solid var(--vox-negative-strong); color: var(--vox-negative-base); }
+.vox-risk--unknown { background: var(--vox-unknown-surface); border: 1px solid var(--vox-unknown-base); color: var(--vox-unknown-base); }
+.vox-risk--resize { background: var(--vox-info-surface); border: 1px solid var(--vox-blue-600); color: var(--vox-blue-300); }
+.vox-risk__reason { color: var(--vox-text-secondary); font-size: var(--vox-text-11); }
+.vox-reason-code { font-family: var(--vox-font-mono); font-size: 10px; color: var(--vox-text-tertiary); }
+
+/* Chart / event markers — letter badges are the primary marker language.
+   B buy · S sell · F fill · SL stop loss · TP take profit · D dividend · E event.
+   Same badges are reused in tape, orders and the event journal. */
+.vox-marker {
+  min-width: 14px; height: 14px; padding: 0 3px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--vox-radius-xs);
+  font-family: var(--vox-font-ui); font-size: 9px; font-weight: var(--vox-weight-semibold);
+  letter-spacing: 0.01em; line-height: 1;
+}
+.vox-marker--b { background: var(--vox-positive-base); color: var(--vox-bg-canvas); }
+.vox-marker--s { background: var(--vox-negative-base); color: var(--vox-bg-canvas); }
+.vox-marker--f { background: var(--vox-blue-400); color: var(--vox-bg-canvas); }
+.vox-marker--sl { background: var(--vox-bg-canvas); border: 1px solid var(--vox-warning-base); color: var(--vox-warning-base); }
+.vox-marker--tp { background: var(--vox-bg-canvas); border: 1px solid var(--vox-positive-base); color: var(--vox-positive-base); }
+.vox-marker--d { background: var(--vox-bg-canvas); border: 1px solid var(--vox-unknown-base); color: var(--vox-unknown-base); }
+.vox-marker--e { background: var(--vox-bg-canvas); border: 1px solid var(--vox-info-base); color: var(--vox-info-base); }
+
+/* =========================================================
+   Table — the primary component of the terminal
+   12–13px, row 26px, header 28px (Compact). Numbers right. No layout jump on stream.
+   ========================================================= */
+.vox-table { display: flex; flex-direction: column; font-size: var(--vox-text-12); }
+.vox-table__header {
+  height: var(--vox-header-height); display: grid; align-items: center; padding: 0 8px;
+  border-left: 2px solid transparent; column-gap: var(--vox-space-2);
+  background: var(--vox-bg-surface-hover); border-bottom: 1px solid var(--vox-border-default);
+  font-size: var(--vox-text-11); color: var(--vox-text-tertiary); position: sticky; top: 0; z-index: 1;
+}
+.vox-table__sort { display: inline-flex; align-items: center; gap: var(--vox-space-1); cursor: pointer; color: var(--vox-text-primary); }
+/* Dense columns still need a gutter: without it a header label runs into its neighbour. */
+.vox-table__row {
+  height: var(--vox-row-height); display: grid; align-items: center; padding: 0 8px;
+  column-gap: var(--vox-space-2);
+  border-bottom: 1px solid var(--vox-bg-surface-hover);
+  border-left: 2px solid transparent; cursor: pointer;
+}
+.vox-table__row:hover { background: var(--vox-bg-surface-hover); }
+.vox-table__row.is-selected { background: var(--vox-accent-selected-surface); border-left-color: var(--vox-accent-primary); }
+.vox-table__row.is-unknown { background: var(--vox-unknown-surface-subtle); border-left-color: var(--vox-unknown-base); }
+.vox-table__footer {
+  min-height: 24px; display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; justify-content: space-between; padding: 2px 12px;
+  border-left: 2px solid transparent;
+  border-top: 1px solid var(--vox-border-subtle); background: var(--vox-bg-workspace);
+  font-size: var(--vox-text-11); color: var(--vox-text-tertiary);
+}
+.vox-flash-up { animation: voxFlashUp var(--vox-motion-flash) ease-out; }
+.vox-flash-down { animation: voxFlashDown var(--vox-motion-flash) ease-out; }
+
+/* A table wider than its widget scrolls inside the widget instead of being clipped:
+   columns are never silently cut off, and header and body stay aligned while scrolling.
+   The scroller is itself a grid, so header, rows and footer share one resolved width. */
+.vox-table { overflow-x: auto; display: grid; grid-auto-flow: row; }
+.vox-table > * { min-width: max-content; width: 100%; }
+
+/* =========================================================
+   Widget — canonical anatomy: 32px header + content. No shadow on widgets.
+   States: loading, live, stale, reconnecting, degraded, empty, error, permission-denied
+   ========================================================= */
+.vox-widget {
+  display: flex; flex-direction: column; min-width: 0;
+  background: var(--vox-bg-surface);
+  border: 1px solid var(--vox-border-subtle);
+  border-radius: var(--vox-radius-md);
+  overflow: hidden;
+}
+.vox-widget.is-active { border-color: var(--vox-border-default); }
+.vox-widget.is-stale, .vox-widget.is-degraded { border-color: var(--vox-warning-strong); }
+.vox-widget.is-error { border-color: var(--vox-negative-strong); }
+.vox-widget__header {
+  height: var(--vox-widget-header-height); flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: space-between; gap: var(--vox-space-2);
+  padding: 0 8px 0 12px; border-bottom: 1px solid var(--vox-border-subtle);
+  font-size: var(--vox-text-13); font-weight: var(--vox-weight-medium); color: var(--vox-text-primary);
+  cursor: grab; /* draggable by the header */
+}
+.vox-widget__title { display: flex; align-items: center; gap: var(--vox-space-2); min-width: 0; }
+.vox-widget__tools { display: flex; align-items: center; gap: 2px; }
+/* The body grows to its content: a widget may get taller, but it may never clip what
+   it holds. A body that scrolls internally opts in with --scroll. */
+.vox-widget__body { flex: 1 1 auto; min-height: min-content; }
+.vox-widget__body--scroll { min-height: 0; overflow: auto; }
+.vox-widget__footer {
+  height: 24px; display: flex; align-items: center; gap: var(--vox-space-3); padding: 0 12px;
+  border-top: 1px solid var(--vox-border-subtle); background: var(--vox-bg-workspace);
+  font-size: var(--vox-text-11); color: var(--vox-text-tertiary);
+}
+/* Resize handle — minimum resize step is 8px on the workspace grid. */
+.vox-widget__resize {
+  position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; cursor: nwse-resize;
+}
+.vox-widget.is-pinned .vox-widget__header { cursor: default; }
+.vox-widget__context {
+  height: 20px; display: inline-flex; align-items: center; padding: 0 7px;
+  border-radius: var(--vox-radius-xs); background: var(--vox-bg-surface-hover);
+  border: 1px solid var(--vox-neutral-700);
+  font-family: var(--vox-font-mono); font-size: 10px; color: var(--vox-text-secondary);
+}
+.vox-widget__context--instrument { background: var(--vox-accent-selected-surface); border-color: var(--vox-blue-600); color: var(--vox-blue-300); }
+.vox-skeleton { height: 12px; border-radius: var(--vox-radius-xs); background: var(--vox-bg-surface-hover); animation: voxSkeleton 1.2s ease-in-out infinite; }
+.vox-state-note { padding: 10px; display: flex; flex-direction: column; gap: 6px; font-size: var(--vox-text-11); color: var(--vox-text-tertiary); line-height: 1.5; }
+.vox-state-note__title { font-size: var(--vox-text-12); color: var(--vox-text-primary); }
+.vox-stale-bar {
+  display: flex; align-items: center; gap: var(--vox-space-1); height: var(--vox-row-height);
+  padding: 0 10px; background: var(--vox-warning-surface-strong);
+  border-top: 1px solid var(--vox-warning-strong); font-size: var(--vox-text-11); color: var(--vox-text-primary);
+}
+
+/* =========================================================
+   AccountSelector — execution target
+   Always visible in the shell. It answers: which broker connection, which
+   account, which environment receives a capital-affecting command.
+   A token is NOT an account and is never shown here (see .vox-secret).
+   Owned semantics: Platform Foundation (issue #17).
+   ========================================================= */
+.vox-account {
+  height: var(--vox-control-height); max-width: 300px;
+  display: inline-flex; align-items: center; gap: var(--vox-space-2);
+  padding: 0 8px; background: var(--vox-bg-input);
+  border: 1px solid var(--vox-border-default); border-radius: var(--vox-radius-sm);
+  font-size: var(--vox-text-12); color: var(--vox-text-primary); cursor: pointer;
+}
+.vox-account:hover { border-color: var(--vox-border-strong); }
+.vox-account__broker { color: var(--vox-text-secondary); white-space: nowrap; }
+.vox-account__sep { color: var(--vox-text-disabled); }
+.vox-account__label { font-weight: var(--vox-weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* LIVE target is marked, but the shell does not turn red. */
+.vox-account.is-live { box-shadow: inset 0 0 0 1px var(--vox-negative-outline); }
+.vox-account.is-degraded { border-color: var(--vox-warning-strong); }
+.vox-account.is-unknown { border-color: var(--vox-unknown-base); }
+
+/* Row inside the account popover / settings list. The human name keeps a floor of
+   112px and the status columns size to their content: an account row may scroll, but
+   the name of the account may never collapse to nothing. */
+.vox-account-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--vox-space-2);
+  min-height: var(--vox-row-height); padding: 4px 10px; cursor: pointer;
+  border-left: 2px solid transparent; font-size: var(--vox-text-12);
+}
+.vox-account-row > * { flex: 0 0 auto; }
+.vox-account-row__name { flex: 1 1 112px; }
+.vox-account-row:hover { background: var(--vox-bg-surface-hover); }
+.vox-account-row.is-selected { background: var(--vox-accent-selected-surface); border-left-color: var(--vox-accent-primary); }
+.vox-account-row__name { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.vox-account-row__meta { font-size: 10px; color: var(--vox-text-tertiary); }
+
+/* Connection health — a connection, not a portfolio. */
+.vox-conn {
+  height: 20px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px;
+  border-radius: var(--vox-radius-xs); font-family: var(--vox-font-mono);
+  font-size: var(--vox-text-11); letter-spacing: 0.06em;
+}
+.vox-conn--ok { background: var(--vox-positive-surface); border: 1px solid var(--vox-positive-strong); color: var(--vox-positive-base); }
+.vox-conn--degraded { background: var(--vox-warning-surface); border: 1px solid var(--vox-warning-strong); color: var(--vox-warning-base); }
+.vox-conn--invalid { background: var(--vox-negative-surface); border: 1px solid var(--vox-negative-strong); color: var(--vox-negative-base); }
+.vox-conn--expiring { background: var(--vox-warning-surface); border: 1px solid var(--vox-warning-base); color: var(--vox-warning-base); }
+/* Credential revoked by its owner and scope-limited credential are distinct from a
+   merely invalid token: same colour family, different reason code and different action. */
+.vox-conn--revoked { background: var(--vox-negative-surface); border: 1px solid var(--vox-negative-base); color: var(--vox-negative-base); }
+.vox-conn--scope { background: var(--vox-warning-surface); border: 1px solid var(--vox-warning-strong); color: var(--vox-warning-base); }
+.vox-conn--disabled { background: var(--vox-bg-surface-hover); border: 1px solid var(--vox-border-strong); color: var(--vox-text-tertiary); }
+/* Transient connection states. VALIDATING and RECONNECTING are work in progress,
+   not verdicts, so they never borrow the negative semantic. */
+.vox-conn--validating { background: var(--vox-bg-surface-hover); border: 1px solid var(--vox-border-strong); color: var(--vox-text-secondary); }
+.vox-conn--reconnecting { background: var(--vox-info-surface); border: 1px solid var(--vox-blue-600); color: var(--vox-blue-300); }
+/* The provider is down — the credential is not at fault and must not be blamed. */
+.vox-conn--provider { background: var(--vox-warning-surface); border: 1px solid var(--vox-warning-base); color: var(--vox-warning-base); }
+/* Never rendered as a failure: the answer is missing, not negative. */
+.vox-conn--unknown { background: var(--vox-unknown-surface); border: 1px solid var(--vox-unknown-base); color: var(--vox-unknown-base); }
+
+/* =========================================================
+   SecretInput — broker token entry
+   Write-only. The stored value is never returned to normal UI: after saving,
+   the field shows a masked fingerprint and a rotation action, never the token.
+   ========================================================= */
+.vox-secret { display: flex; flex-direction: column; gap: var(--vox-space-1); }
+.vox-secret__field {
+  height: var(--vox-control-height); display: flex; align-items: center; gap: var(--vox-space-1);
+  padding: 0 8px; background: var(--vox-bg-input);
+  border: 1px solid var(--vox-border-default); border-radius: var(--vox-radius-sm);
+}
+.vox-secret__field:focus-within { border-color: var(--vox-border-focus); box-shadow: var(--vox-focus-ring); }
+.vox-secret__input {
+  flex: 1; min-width: 0; background: transparent; border: 0; outline: none;
+  color: var(--vox-text-primary); font-family: var(--vox-font-mono); font-size: var(--vox-text-12);
+  letter-spacing: 0.14em;
+}
+/* Saved state: fingerprint only — no reveal control exists in normal UI. */
+.vox-secret__fingerprint { font-family: var(--vox-font-mono); font-size: var(--vox-text-11); color: var(--vox-text-tertiary); }
+.vox-secret__note { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); line-height: 1.45; }
+.vox-secret.is-invalid .vox-secret__field { border-color: var(--vox-negative-base); background: var(--vox-negative-surface); }
+.vox-secret.is-validating .vox-secret__field { border-color: var(--vox-border-strong); }
+
+/* =========================================================
+   Inherited value chip — a value that is not the object's own
+   Marks "this comes from the strategy policy / account default".
+   Editing it locally creates an override; see .vox-precedence in patterns.
+   ========================================================= */
+.vox-inherited {
+  height: 18px; display: inline-flex; align-items: center; gap: 4px; padding: 0 6px;
+  border-radius: var(--vox-radius-xs); background: var(--vox-protect-inherited-surface);
+  border: 1px dashed var(--vox-border-strong);
+  font-size: 10px; color: var(--vox-protect-inherited);
+}
+.vox-inherited--override { border-style: solid; border-color: var(--vox-accent-primary); color: var(--vox-blue-300); background: var(--vox-accent-selected-surface); }
