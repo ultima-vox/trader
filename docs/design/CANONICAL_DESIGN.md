@@ -2,7 +2,17 @@
 
 ## Canonical visual source
 
+Restored working file:
+
 `docs/design/source/Vox-Trader-Design-System-canonical.html`
+
+The exact uploaded source is preserved byte-for-byte in the repository as three XZ/base64 text parts and reconstructed with:
+
+```bash
+bash docs/design/source/restore-canonical-design.sh
+```
+
+The restore script verifies SHA-256 before and after decompression. See `docs/design/source/README.md` for integrity details.
 
 This source is the **visual and component design authority** for Vox Trader.
 
