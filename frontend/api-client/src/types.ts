@@ -36,6 +36,32 @@ export type CancelOrderRequest = {
   logical_request_id?: string | null;
 };
 
+/** One candle. `closed` distinguishes a settled bar from the one still forming. */
+export type CandleDto = {
+  instrument_uid: string;
+  interval: CandleIntervalDto;
+  /** Opening time of the bar, milliseconds since the Unix epoch, UTC. */
+  opened_at_unix_ms: number;
+  open: Decimal;
+  high: Decimal;
+  low: Decimal;
+  close: Decimal;
+  volume_units: number;
+  /** False while the bar is still forming. An open bar may be revised. */
+  closed: boolean;
+};
+
+/** Candle interval. Only intervals the provider actually serves appear here. */
+export type CandleIntervalDto = "ONE_MINUTE" | "FIVE_MINUTES" | "FIFTEEN_MINUTES" | "ONE_HOUR" | "ONE_DAY";
+
+/** A page of candles for one instrument and interval. */
+export type CandlesDto = {
+  instrument_uid: string;
+  interval: CandleIntervalDto;
+  candles: Array<CandleDto>;
+  freshness: MarketFreshness;
+};
+
 /** A capability the frontend may gate on. */
 export type Capability = "RUNTIME_HEALTH" | "ACCOUNT_READ_SIDE" | "ORDER_EXECUTION" | "PROTECTION_EXECUTION" | "PROTECTION_DEFAULTS" | "BULK_PROTECTION_MIGRATION" | "CONNECTION_MANAGEMENT" | "RBAC" | "RISK_VERDICT" | "PORTFOLIO_VALUATION" | "MARKET_DATA" | "STRATEGY" | "DECISION" | "MACHINE_LEARNING" | "RESEARCH" | "AGGREGATE_ACCOUNTS" | "MULTI_PROVIDER" | "NON_LIVE_TRADING_MODE";
 
@@ -73,6 +99,15 @@ export type CurrencyBalanceDto = {
 /** Exact decimal value, serialized as a string (`"272.55"`, `"-3140.70"`). */
 export type Decimal = string;
 
+/** One level of the book. */
+export type DepthLevelDto = {
+  price: Decimal;
+  /** Size at this level, in instrument units. */
+  size_units: number;
+  /** Cumulative size from the top of book down to this level. */
+  cumulative_units: number;
+};
+
 /** The class of failure, which decides what the operator can do about it. */
 export type ErrorCategory = "VALIDATION" | "AUTHENTICATION" | "PERMISSION" | "NOT_FOUND" | "CONFLICT" | "STALE" | "UNRESOLVED_UNKNOWN" | "CAPABILITY_UNAVAILABLE" | "TRANSIENT" | "INTERNAL";
 
@@ -101,8 +136,45 @@ export type FieldError = {
   message: string;
 };
 
+/** The canonical instrument identity, as the domain defines it. Identity is `provider` + `uid`. Everything else is an alias for humans and for lookup. */
+export type InstrumentIdentityDto = {
+  /** Provider whose namespace `uid` belongs to. */
+  provider: string;
+  /** The provider's stable instrument identifier. Diagnostics only in normal UI. */
+  uid: string;
+  /** FIGI where the provider supplies one. An alias, never the identity. */
+  figi?: string | null;
+  /** Exchange ticker. Shown to operators; not unique across venues or over time. */
+  ticker: string;
+  /** Venue or board code that qualifies the ticker. */
+  class_code: string;
+};
+
+/** A catalogue entry: the canonical identity plus what the ticket needs to validate an order. Lot size and price step are metadata, not UI rules: without them a quantity field would be guessing, and this API refuses to make the browser guess. */
+export type InstrumentSummaryDto = {
+  identity: InstrumentIdentityDto;
+  /** Instrument units in one lot. */
+  lot_size: number;
+  /** Minimum price increment. */
+  min_price_increment: Decimal;
+  /** Settlement currency code. */
+  currency: string;
+  /** Whether the provider currently lists the instrument as tradable. */
+  tradable: boolean;
+};
+
 /** Where a dispatched command stands. `UNKNOWN_AFTER_DISPATCH` is an unfinished answer. */
 export type JournalStateDto = "NOT_DISPATCHED" | "DISPATCHING" | "ACKNOWLEDGED" | "REJECTED" | "UNKNOWN_AFTER_DISPATCH" | "RECONCILED";
+
+/** How current a market-data record is. Freshness is a property of the feed, not of the instrument, and it is never folded into the price: a stale quote stays visible with its age rather than disappearing or pretending. */
+export type MarketFreshness = {
+  /** Connectivity of the feed that produced this record. */
+  stream: StreamStateDto;
+  /** Event time of the record itself, milliseconds since the Unix epoch, UTC. */
+  observed_at_unix_ms: number;
+  /** Age of the record at the moment the API answered. */
+  age_ms: number;
+};
 
 /** Whether the client may submit, must reconcile first, or must not submit at all. Decided by the backend; the browser never derives it. */
 export type MutationDecisionDto = "SUBMIT" | "RECONCILE" | "DO_NOT_SUBMIT";
@@ -144,6 +216,19 @@ export type OperationDto = {
 export type OperationsPageDto = {
   items: Array<OperationDto>;
   next_cursor?: string | null;
+};
+
+/** A book snapshot at one depth. */
+export type OrderBookDto = {
+  instrument_uid: string;
+  /** Number of levels the provider returned per side. */
+  depth: number;
+  /** Best ask first. */
+  asks: Array<DepthLevelDto>;
+  /** Best bid first. */
+  bids: Array<DepthLevelDto>;
+  spread_absolute?: unknown | Decimal;
+  freshness: MarketFreshness;
 };
 
 /** An order identity and its liveness. Price and quantity are not in the read model yet. */
@@ -204,6 +289,21 @@ export type ProtectionStateDto = "AWAITING_ENTRY" | {
 
 /** Providers with a registered adapter. A provider appears here only once it is real. */
 export type ProviderDto = "T_INVEST";
+
+/** Last price and the top of book, with the day's range. Absent fields mean the provider did not supply them for this instrument, which is a different thing from a zero and must not be rendered as one. */
+export type QuoteDto = {
+  instrument_uid: string;
+  last?: unknown | Decimal;
+  bid?: unknown | Decimal;
+  ask?: unknown | Decimal;
+  change_absolute?: unknown | Decimal;
+  change_percent?: unknown | Decimal;
+  day_high?: unknown | Decimal;
+  day_low?: unknown | Decimal;
+  /** Traded volume in instrument units. */
+  volume_units?: number | null;
+  freshness: MarketFreshness;
+};
 
 /** Why the runtime is in its current state. The only reason vocabulary that exists. */
 export type ReasonCodeDto = "STARTUP" | "CONNECTING" | "RECONCILIATION_STARTED" | "RECONCILIATION_COMPLETE" | "RECONCILIATION_INCOMPLETE" | "UNKNOWN_MUTATION" | "BROKER_POSITION_CONFLICT" | "BROKER_ORDER_CONFLICT" | "BROKER_STOP_CONFLICT" | "REQUIRED_READ_UNAVAILABLE" | "ACCOUNT_UNAVAILABLE" | "CREDENTIAL_REJECTED" | "EXECUTION_UNAUTHORIZED" | "STREAM_DISCONNECTED" | "STREAM_GAP" | "STREAM_QUEUE_OVERFLOW" | "OPTIONAL_CAPABILITY_UNAVAILABLE" | "CHECKPOINT_REBUILD" | "PERSISTENCE_FAILURE" | "OWNERSHIP_FAILURE" | "STALE_EPOCH" | "CORRUPT_MUTATION_EVIDENCE" | "SHUTDOWN_REQUESTED" | "SHUTDOWN_COMPLETE";
@@ -299,6 +399,17 @@ export type ServerEvent = {
   type: "HEARTBEAT";
 };
 
+/** The current session for one instrument. */
+export type SessionDto = {
+  instrument_uid: string;
+  status: TradingStatusDto;
+  /** Whether the venue accepts limit orders right now, when the provider says so. */
+  limit_orders_available?: boolean | null;
+  /** Whether the venue accepts market orders right now, when the provider says so. */
+  market_orders_available?: boolean | null;
+  freshness: MarketFreshness;
+};
+
 /** A stop order identity and its liveness. Trigger levels are not in the read model yet. */
 export type StopOrderDto = {
   account_id: string;
@@ -356,10 +467,28 @@ export type SystemHealthDto = {
 export type TimeInForceDto = "DAY" | "FILL_AND_KILL" | "FILL_OR_KILL";
 
 /** Topics a client may subscribe to. A topic exists only when its read model does. */
-export type Topic = "RUNTIME_HEALTH" | "POSITIONS" | "ORDERS" | "STOPS" | "OPERATIONS" | "PORTFOLIO";
+export type Topic = "RUNTIME_HEALTH" | "POSITIONS" | "ORDERS" | "STOPS" | "OPERATIONS" | "PORTFOLIO" | "QUOTES" | "ORDER_BOOK" | "TRADES";
+
+/** Which side initiated a public trade, where the provider reports it. */
+export type TradeDirectionDto = "BUY" | "SELL" | "UNKNOWN";
+
+/** One public trade on the tape. */
+export type TradeTickDto = {
+  instrument_uid: string;
+  price: Decimal;
+  size_units: number;
+  direction: TradeDirectionDto;
+  /** Exchange time of the trade, milliseconds since the Unix epoch, UTC. */
+  traded_at_unix_ms: number;
+  /** True when this trade is one of the operator's own, matched by broker fill identity. */
+  own: boolean;
+};
 
 /** How Vox executes, which is not where the broker lives. Only `LIVE` exists: orders go to the broker connection named by the scope. `PAPER` and `BACKTEST` are owned by #23 and #29 and will be added here when those runtimes exist, not before. */
 export type TradingMode = "LIVE";
+
+/** Whether the venue is currently accepting orders for an instrument. This is the venue's session state, not a Vox permission: execution authorization is a separate fact carried by runtime health. */
+export type TradingStatusDto = "CLOSED" | "AUCTION" | "OPEN" | "SUSPENDED" | "UNKNOWN";
 
 /** A trailing distance: an exact value plus the mode it is measured in. */
 export type TrailingDistanceDto = {

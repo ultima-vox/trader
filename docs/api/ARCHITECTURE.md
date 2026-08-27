@@ -56,6 +56,36 @@ system forbids one: there is no numeric money type in the public schema.
 runtimes exist; the server refuses to start in `Environment::Paper` rather than serve a
 scope the contracts cannot express.
 
+**Instrument identity is the domain's, not a new one.** Before adding market data I
+audited the accepted identity model rather than minting a Vox identifier. `vox-domain` already
+defines `InstrumentIdentity` as the "provider-normalized instrument identity retained beside
+runtime projections", carrying `provider`, `uid`, optional `figi`, `ticker` and `class_code`;
+#7 required those be retained *separately* rather than folded into one synthetic key, and the
+accepted T-Invest reference layer keeps a typed `InstrumentUid` distinct from other uid kinds
+(`consensus_record_uid_never_becomes_instrument_uid`). So `InstrumentIdentityDto` publishes
+that identity unchanged. Identity is `provider` + `uid`: the uid is meaningful inside a
+provider namespace, which is why every market route takes both, and `figi`/`ticker`/
+`class_code` are aliases for display and lookup, never the identity. A Vox-minted
+`instrument_id` would be a second identity to keep in sync and buys nothing today — one
+adapter is registered, and the domain already normalizes across providers by carrying the
+provider in the identity. It becomes justified only when two providers list the same economic
+instrument and Vox must assert they are one thing, and it would then belong to the domain, not
+to this transport. A schema test fails the build if any published schema grows an
+`instrument_id` property.
+
+**Market data is a projection, not a second broker client.** `MarketDataQueries` reads what
+the accepted #8 adapter layer already acquired and republishes it provider-neutrally: quote,
+order book, tape, candles, session and the instrument catalogue. Three facts are contract, not
+decoration. Every record carries `MarketFreshness` (`stream`, `observed_at_unix_ms`, `age_ms`),
+because a price without an age is a claim the operator cannot check, and a stale quote stays
+visible with its age instead of vanishing. Every optional price is absent when the provider did
+not supply it, which is a different thing from zero and must never render as one. A candle
+states `closed`, so a still-forming bar is never read as settled. `InstrumentSummaryDto`
+carries `lot_size` and `min_price_increment` so the order ticket validates against provider
+metadata instead of guessing. No projection is attached in this slice: the six routes and the
+`QUOTES`/`ORDER_BOOK`/`TRADES` stream topics answer `CAPABILITY_UNAVAILABLE` naming their
+owner.
+
 **One document, generated.** `docs/api/openapi.json` is produced by
 `cargo run -p vox-api --bin openapi -- docs/api/openapi.json` and served at
 `/api/v1/openapi.json`. The TypeScript client is generated from that file by
@@ -80,7 +110,8 @@ schema: a test fails the build if one does.
 ## What this slice does not do
 
 No risk verdicts (#21), no valuation or P&L (#22), no strategy (#23), analytics (#24/#25),
-models (#26), decisions (#27), backtests (#29), market data read model (#38, next slice),
+models (#26), decisions (#27), backtests (#29), the live market-data projection that feeds
+the read model published here (#38, next slice),
 connection or credential lifecycle (#17), bulk protection migration (#10). Each is listed in
 the capability set with its owner, and `docs/design/BACKEND_CONTRACTS.md` tracks the same
 dependencies for the design side.

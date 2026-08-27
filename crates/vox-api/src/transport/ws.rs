@@ -170,6 +170,19 @@ async fn subscribe(
     }
     match topic {
         Topic::RuntimeHealth => {}
+        Topic::Quotes | Topic::OrderBook | Topic::Trades => {
+            if state.market_data.is_none() {
+                return vec![unavailable(
+                    subscription_id,
+                    "no market-data projection is attached to this process",
+                )];
+            }
+            // The read model exists but nothing pushes it yet.
+            return vec![unavailable(
+                subscription_id,
+                "live market data needs the streaming projection over the #8 provider layer",
+            )];
+        }
         Topic::Positions | Topic::Orders | Topic::Stops | Topic::Operations | Topic::Portfolio => {
             if state.accounts.is_none() {
                 return vec![unavailable(subscription_id, "no account read side is attached to this process")];
@@ -279,6 +292,26 @@ mod tests {
         let mut subs = HashMap::new();
         let events = handle_client_message("{\"type\":\"NONSENSE\"}", &state, &mut subs).await;
         assert!(matches!(events.as_slice(), [ServerEvent::Error { code, .. }] if code == "MALFORMED_MESSAGE"));
+    }
+
+    #[tokio::test]
+    async fn a_market_topic_without_a_projection_is_refused_with_its_reason() {
+        let state = AppState::detached(ProviderDto::TInvest, BrokerEnvironment::Sandbox);
+        let mut subs = HashMap::new();
+        let events = handle_client_message(
+            "{\"type\":\"SUBSCRIBE\",\"subscription_id\":\"m-1\",\"topic\":\"QUOTES\"}",
+            &state,
+            &mut subs,
+        )
+        .await;
+        let [ServerEvent::Status { status, detail, .. }] = events.as_slice() else {
+            panic!("expected a single status event, got {events:?}");
+        };
+        assert_eq!(*status, SubscriptionStatus::Unavailable);
+        assert!(
+            detail.as_deref().is_some_and(|d| d.contains("market-data")),
+            "the refusal must name what is missing: {detail:?}"
+        );
     }
 
     #[tokio::test]

@@ -14,6 +14,10 @@ use crate::contract::account::{
 };
 use crate::contract::capability::CapabilitySet;
 use crate::contract::execution::{CancelOrderRequest, MutationReceiptDto, SubmitOrderRequest};
+use crate::contract::market::{
+    CandleIntervalDto, CandlesDto, InstrumentSummaryDto, OrderBookDto, QuoteDto, SessionDto,
+    TradeTickDto,
+};
 use crate::contract::runtime::RuntimeHealthDto;
 use crate::contract::scope::{BrokerEnvironment, ExecutionScope, ProviderDto};
 use crate::error::ApiError;
@@ -53,6 +57,43 @@ pub trait ExecutionCommands: Send + Sync {
     ) -> Result<MutationReceiptDto, ApiError>;
 }
 
+/// The Vox-side market-data projection over the accepted #8 adapter layer.
+///
+/// This is a projection, not a second broker client: an implementation reads what #8 already
+/// acquired and republishes it provider-neutrally. Nothing here talks to a provider.
+#[async_trait]
+pub trait MarketDataQueries: Send + Sync {
+    /// Catalogue entries for the instruments the operator may pick, searched by ticker or name.
+    async fn search_instruments(
+        &self,
+        provider: ProviderDto,
+        query: &str,
+        limit: u16,
+    ) -> Result<Vec<InstrumentSummaryDto>, ApiError>;
+    async fn quote(&self, provider: ProviderDto, instrument_uid: &str) -> Result<QuoteDto, ApiError>;
+    async fn order_book(
+        &self,
+        provider: ProviderDto,
+        instrument_uid: &str,
+        depth: u16,
+    ) -> Result<OrderBookDto, ApiError>;
+    async fn trades(
+        &self,
+        provider: ProviderDto,
+        instrument_uid: &str,
+        limit: u16,
+    ) -> Result<Vec<TradeTickDto>, ApiError>;
+    async fn candles(
+        &self,
+        provider: ProviderDto,
+        instrument_uid: &str,
+        interval: CandleIntervalDto,
+        from_unix_ms: i64,
+        to_unix_ms: i64,
+    ) -> Result<CandlesDto, ApiError>;
+    async fn session(&self, provider: ProviderDto, instrument_uid: &str) -> Result<SessionDto, ApiError>;
+}
+
 /// What the process serves. A `None` port is a capability this deployment does not have.
 #[derive(Clone)]
 pub struct AppState {
@@ -61,13 +102,14 @@ pub struct AppState {
     pub runtime: Option<Arc<dyn RuntimeQueries>>,
     pub accounts: Option<Arc<dyn AccountQueries>>,
     pub execution: Option<Arc<dyn ExecutionCommands>>,
+    pub market_data: Option<Arc<dyn MarketDataQueries>>,
 }
 
 impl AppState {
     /// A process with no broker runtime attached: it can describe itself and nothing else.
     #[must_use]
     pub fn detached(provider: ProviderDto, environment: BrokerEnvironment) -> Self {
-        Self { provider, environment, runtime: None, accounts: None, execution: None }
+        Self { provider, environment, runtime: None, accounts: None, execution: None, market_data: None }
     }
 
     #[must_use]
@@ -90,13 +132,26 @@ impl AppState {
 
     /// What this deployment can actually do.
     #[must_use]
+    pub fn with_market_data(mut self, market_data: Arc<dyn MarketDataQueries>) -> Self {
+        self.market_data = Some(market_data);
+        self
+    }
+
+    #[must_use]
     pub fn capabilities(&self, account_id: Option<String>) -> CapabilitySet {
         CapabilitySet::without_backend_owners(
             self.provider,
             self.environment,
             account_id,
             self.accounts.is_some(),
+            self.market_data.is_some(),
         )
+    }
+
+    pub(crate) fn market_data_port(&self) -> Result<&Arc<dyn MarketDataQueries>, ApiError> {
+        self.market_data
+            .as_ref()
+            .ok_or_else(|| ApiError::capability_unavailable("MARKET_DATA", "#38 projection over #8"))
     }
 
     pub(crate) fn runtime_port(&self) -> Result<&Arc<dyn RuntimeQueries>, ApiError> {
@@ -130,5 +185,19 @@ mod tests {
         assert_eq!(error.category, ErrorCategory::CapabilityUnavailable);
         assert_eq!(error.code, "CAPABILITY_UNAVAILABLE");
         assert!(!error.retryable, "a missing contract is not a transient failure");
+    }
+
+    #[test]
+    fn a_market_read_without_a_projection_names_its_owner() {
+        let state = AppState::detached(ProviderDto::TInvest, BrokerEnvironment::Sandbox);
+        let error = state
+            .market_data_port()
+            .err()
+            .expect("a detached process has no market-data projection");
+        assert_eq!(error.category, ErrorCategory::CapabilityUnavailable);
+        assert!(
+            error.details.as_ref().and_then(|d| d.get("owner")).is_some(),
+            "an unavailable capability must name who owns it"
+        );
     }
 }

@@ -242,6 +242,418 @@
         }
       }
     },
+    "/api/v1/market/candles": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Candles for one interval and window.",
+        "operationId": "candles",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "instrument_uid",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/CandleIntervalDto"
+            }
+          },
+          {
+            "name": "from_unix_ms",
+            "in": "query",
+            "description": "Window start, milliseconds since the Unix epoch, UTC.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to_unix_ms",
+            "in": "query",
+            "description": "Window end, milliseconds since the Unix epoch, UTC.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandlesDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/market/instruments": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Search the instrument catalogue.",
+        "operationId": "instruments",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "description": "Ticker or name fragment.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size; the server caps it.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InstrumentSummaryDto"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No market-data projection is attached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/market/order-book": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "A book snapshot.",
+        "operationId": "order_book",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "instrument_uid",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "description": "Levels per side; the server caps it at what the provider serves.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderBookDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/market/quote": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Last price and top of book, with the age of the record.",
+        "operationId": "quote",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "instrument_uid",
+            "in": "query",
+            "description": "The provider's stable instrument identifier.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/market/session": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Venue session state for one instrument.",
+        "operationId": "session",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "instrument_uid",
+            "in": "query",
+            "description": "The provider's stable instrument identifier.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/market/trades": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "The public tape.",
+        "operationId": "trades",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "instrument_uid",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TradeTickDto"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/operations": {
       "get": {
         "tags": [
@@ -840,6 +1252,92 @@
           }
         }
       },
+      "CandleDto": {
+        "type": "object",
+        "description": "One candle. `closed` distinguishes a settled bar from the one still forming.",
+        "required": [
+          "instrument_uid",
+          "interval",
+          "opened_at_unix_ms",
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume_units",
+          "closed"
+        ],
+        "properties": {
+          "instrument_uid": {
+            "type": "string"
+          },
+          "interval": {
+            "$ref": "#/components/schemas/CandleIntervalDto"
+          },
+          "opened_at_unix_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Opening time of the bar, milliseconds since the Unix epoch, UTC."
+          },
+          "open": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "high": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "low": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "close": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "volume_units": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "closed": {
+            "type": "boolean",
+            "description": "False while the bar is still forming. An open bar may be revised."
+          }
+        }
+      },
+      "CandleIntervalDto": {
+        "type": "string",
+        "description": "Candle interval. Only intervals the provider actually serves appear here.",
+        "enum": [
+          "ONE_MINUTE",
+          "FIVE_MINUTES",
+          "FIFTEEN_MINUTES",
+          "ONE_HOUR",
+          "ONE_DAY"
+        ]
+      },
+      "CandlesDto": {
+        "type": "object",
+        "description": "A page of candles for one instrument and interval.",
+        "required": [
+          "instrument_uid",
+          "interval",
+          "candles",
+          "freshness"
+        ],
+        "properties": {
+          "instrument_uid": {
+            "type": "string"
+          },
+          "interval": {
+            "$ref": "#/components/schemas/CandleIntervalDto"
+          },
+          "candles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandleDto"
+            }
+          },
+          "freshness": {
+            "$ref": "#/components/schemas/MarketFreshness"
+          }
+        }
+      },
       "Capability": {
         "type": "string",
         "description": "A capability the frontend may gate on.",
@@ -1000,6 +1498,30 @@
         "description": "Exact decimal value, serialized as a string (`\"272.55\"`, `\"-3140.70\"`).",
         "example": "272.550000000"
       },
+      "DepthLevelDto": {
+        "type": "object",
+        "description": "One level of the book.",
+        "required": [
+          "price",
+          "size_units",
+          "cumulative_units"
+        ],
+        "properties": {
+          "price": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "size_units": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Size at this level, in instrument units."
+          },
+          "cumulative_units": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cumulative size from the top of book down to this level."
+          }
+        }
+      },
       "ErrorCategory": {
         "type": "string",
         "description": "The class of failure, which decides what the operator can do about it.",
@@ -1090,6 +1612,80 @@
           }
         }
       },
+      "InstrumentIdentityDto": {
+        "type": "object",
+        "description": "The canonical instrument identity, as the domain defines it.\n\nIdentity is `provider` + `uid`. Everything else is an alias for humans and for lookup.",
+        "required": [
+          "provider",
+          "uid",
+          "ticker",
+          "class_code"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "Provider whose namespace `uid` belongs to.",
+            "example": "tinvest"
+          },
+          "uid": {
+            "type": "string",
+            "description": "The provider's stable instrument identifier. Diagnostics only in normal UI.",
+            "example": "e6123145-9665-43e0-8413-cd61b8aa9b13"
+          },
+          "figi": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "FIGI where the provider supplies one. An alias, never the identity.",
+            "example": "BBG004730N88"
+          },
+          "ticker": {
+            "type": "string",
+            "description": "Exchange ticker. Shown to operators; not unique across venues or over time.",
+            "example": "SBER"
+          },
+          "class_code": {
+            "type": "string",
+            "description": "Venue or board code that qualifies the ticker.",
+            "example": "TQBR"
+          }
+        }
+      },
+      "InstrumentSummaryDto": {
+        "type": "object",
+        "description": "A catalogue entry: the canonical identity plus what the ticket needs to validate an order.\n\nLot size and price step are metadata, not UI rules: without them a quantity field would be\nguessing, and this API refuses to make the browser guess.",
+        "required": [
+          "identity",
+          "lot_size",
+          "min_price_increment",
+          "currency",
+          "tradable"
+        ],
+        "properties": {
+          "identity": {
+            "$ref": "#/components/schemas/InstrumentIdentityDto"
+          },
+          "lot_size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Instrument units in one lot."
+          },
+          "min_price_increment": {
+            "$ref": "#/components/schemas/Decimal",
+            "description": "Minimum price increment."
+          },
+          "currency": {
+            "type": "string",
+            "description": "Settlement currency code.",
+            "example": "rub"
+          },
+          "tradable": {
+            "type": "boolean",
+            "description": "Whether the provider currently lists the instrument as tradable."
+          }
+        }
+      },
       "JournalStateDto": {
         "type": "string",
         "description": "Where a dispatched command stands. `UNKNOWN_AFTER_DISPATCH` is an unfinished answer.",
@@ -1101,6 +1697,31 @@
           "UNKNOWN_AFTER_DISPATCH",
           "RECONCILED"
         ]
+      },
+      "MarketFreshness": {
+        "type": "object",
+        "description": "How current a market-data record is.\n\nFreshness is a property of the feed, not of the instrument, and it is never folded into\nthe price: a stale quote stays visible with its age rather than disappearing or pretending.",
+        "required": [
+          "stream",
+          "observed_at_unix_ms",
+          "age_ms"
+        ],
+        "properties": {
+          "stream": {
+            "$ref": "#/components/schemas/StreamStateDto",
+            "description": "Connectivity of the feed that produced this record."
+          },
+          "observed_at_unix_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Event time of the record itself, milliseconds since the Unix epoch, UTC."
+          },
+          "age_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Age of the record at the moment the API answered."
+          }
+        }
       },
       "MutationDecisionDto": {
         "type": "string",
@@ -1253,6 +1874,56 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "OrderBookDto": {
+        "type": "object",
+        "description": "A book snapshot at one depth.",
+        "required": [
+          "instrument_uid",
+          "depth",
+          "asks",
+          "bids",
+          "freshness"
+        ],
+        "properties": {
+          "instrument_uid": {
+            "type": "string"
+          },
+          "depth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of levels the provider returned per side.",
+            "minimum": 0
+          },
+          "asks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DepthLevelDto"
+            },
+            "description": "Best ask first."
+          },
+          "bids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DepthLevelDto"
+            },
+            "description": "Best bid first."
+          },
+          "spread_absolute": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal",
+                "description": "Absolute spread between best bid and best ask, when both sides exist."
+              }
+            ]
+          },
+          "freshness": {
+            "$ref": "#/components/schemas/MarketFreshness"
           }
         }
       },
@@ -1522,6 +2193,102 @@
         "enum": [
           "T_INVEST"
         ]
+      },
+      "QuoteDto": {
+        "type": "object",
+        "description": "Last price and the top of book, with the day's range.\n\nAbsent fields mean the provider did not supply them for this instrument, which is a\ndifferent thing from a zero and must not be rendered as one.",
+        "required": [
+          "instrument_uid",
+          "freshness"
+        ],
+        "properties": {
+          "instrument_uid": {
+            "type": "string"
+          },
+          "last": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          },
+          "bid": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          },
+          "ask": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          },
+          "change_absolute": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal",
+                "description": "Absolute change against the previous close."
+              }
+            ]
+          },
+          "change_percent": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal",
+                "description": "Relative change against the previous close, as an exact percentage value."
+              }
+            ]
+          },
+          "day_high": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          },
+          "day_low": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          },
+          "volume_units": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Traded volume in instrument units."
+          },
+          "freshness": {
+            "$ref": "#/components/schemas/MarketFreshness"
+          }
+        }
       },
       "ReasonCodeDto": {
         "type": "string",
@@ -1974,6 +2741,40 @@
         ],
         "description": "What the server sends."
       },
+      "SessionDto": {
+        "type": "object",
+        "description": "The current session for one instrument.",
+        "required": [
+          "instrument_uid",
+          "status",
+          "freshness"
+        ],
+        "properties": {
+          "instrument_uid": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TradingStatusDto"
+          },
+          "limit_orders_available": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the venue accepts limit orders right now, when the provider says so."
+          },
+          "market_orders_available": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the venue accepts market orders right now, when the provider says so."
+          },
+          "freshness": {
+            "$ref": "#/components/schemas/MarketFreshness"
+          }
+        }
+      },
       "StopOrderDto": {
         "type": "object",
         "description": "A stop order identity and its liveness. Trigger levels are not in the read model yet.",
@@ -2177,14 +2978,73 @@
           "ORDERS",
           "STOPS",
           "OPERATIONS",
-          "PORTFOLIO"
+          "PORTFOLIO",
+          "QUOTES",
+          "ORDER_BOOK",
+          "TRADES"
         ]
+      },
+      "TradeDirectionDto": {
+        "type": "string",
+        "description": "Which side initiated a public trade, where the provider reports it.",
+        "enum": [
+          "BUY",
+          "SELL",
+          "UNKNOWN"
+        ]
+      },
+      "TradeTickDto": {
+        "type": "object",
+        "description": "One public trade on the tape.",
+        "required": [
+          "instrument_uid",
+          "price",
+          "size_units",
+          "direction",
+          "traded_at_unix_ms",
+          "own"
+        ],
+        "properties": {
+          "instrument_uid": {
+            "type": "string"
+          },
+          "price": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "size_units": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/TradeDirectionDto"
+          },
+          "traded_at_unix_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Exchange time of the trade, milliseconds since the Unix epoch, UTC."
+          },
+          "own": {
+            "type": "boolean",
+            "description": "True when this trade is one of the operator's own, matched by broker fill identity."
+          }
+        }
       },
       "TradingMode": {
         "type": "string",
         "description": "How Vox executes, which is not where the broker lives.\n\nOnly `LIVE` exists: orders go to the broker connection named by the scope. `PAPER` and\n`BACKTEST` are owned by #23 and #29 and will be added here when those runtimes exist,\nnot before.",
         "enum": [
           "LIVE"
+        ]
+      },
+      "TradingStatusDto": {
+        "type": "string",
+        "description": "Whether the venue is currently accepting orders for an instrument.\n\nThis is the venue's session state, not a Vox permission: execution authorization is a\nseparate fact carried by runtime health.",
+        "enum": [
+          "CLOSED",
+          "AUCTION",
+          "OPEN",
+          "SUSPENDED",
+          "UNKNOWN"
         ]
       },
       "TrailingDistanceDto": {
@@ -2251,6 +3111,10 @@
     {
       "name": "execution",
       "description": "Capital-affecting commands"
+    },
+    {
+      "name": "market",
+      "description": "Provider-neutral market data, projected over the #8 adapter layer"
     }
   ]
 }

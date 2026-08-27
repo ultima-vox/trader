@@ -86,6 +86,7 @@ impl CapabilitySet {
         environment: BrokerEnvironment,
         account_id: Option<String>,
         runtime_attached: bool,
+        market_data_attached: bool,
     ) -> Self {
         let mut supported = vec![Capability::RuntimeHealth];
         let mut unavailable = Vec::new();
@@ -106,6 +107,15 @@ impl CapabilitySet {
                 });
             }
         }
+        if market_data_attached {
+            supported.push(Capability::MarketData);
+        } else {
+            unavailable.push(UnavailableCapability {
+                capability: Capability::MarketData,
+                reason: "no market-data projection is attached to this process".to_owned(),
+                owner: "#38 projection over the accepted #8 layer".to_owned(),
+            });
+        }
         for (capability, reason, owner) in [
             (Capability::ProtectionDefaults, "account-scoped default protection policy has no contract", "#10"),
             (Capability::BulkProtectionMigration, "no bulk mutation contract exists; single mutations only", "#10"),
@@ -113,7 +123,6 @@ impl CapabilitySet {
             (Capability::Rbac, "role and permission read model has no contract", "#17"),
             (Capability::RiskVerdict, "no risk engine contract exists; new_exposure_allowed is the only safety fact", "#21"),
             (Capability::PortfolioValuation, "valuation, P&L, exposure and margin have no contract", "#22"),
-            (Capability::MarketData, "no Vox market-data read model exists yet", "#38"),
             (Capability::Strategy, "strategy runtime has no contract", "#23"),
             (Capability::Decision, "decision aggregation has no contract", "#27"),
             (Capability::MachineLearning, "model registry and training have no contract", "#26"),
@@ -142,6 +151,7 @@ mod tests {
             ProviderDto::TInvest,
             BrokerEnvironment::Sandbox,
             None,
+            false,
             false,
         );
         for capability in [
@@ -172,6 +182,7 @@ mod tests {
             BrokerEnvironment::Production,
             Some("2000000001".to_owned()),
             true,
+            false,
         );
         assert!(set.supported.contains(&Capability::AccountReadSide));
         assert!(set.supported.contains(&Capability::OrderExecution));

@@ -18,6 +18,11 @@ use crate::contract::execution::{
     OrderSideDto, OrderTypeDto, PriceConventionDto, ProtectionPlanDto, ProtectionStateDto,
     SubmitOrderRequest, TimeInForceDto, TrailingDistanceDto, TrailingModeDto,
 };
+use crate::contract::instrument::InstrumentIdentityDto;
+use crate::contract::market::{
+    CandleDto, CandleIntervalDto, CandlesDto, DepthLevelDto, InstrumentSummaryDto, MarketFreshness,
+    OrderBookDto, QuoteDto, SessionDto, TradeDirectionDto, TradeTickDto, TradingStatusDto,
+};
 use crate::contract::money::Decimal;
 use crate::contract::runtime::{
     ReasonCodeDto, RuntimeHealthDto, RuntimeStateDto, SafetyConditionDto, StreamHealthDto,
@@ -50,6 +55,12 @@ use crate::transport::http;
         http::operations,
         http::submit_order,
         http::cancel_order,
+        http::instruments,
+        http::quote,
+        http::order_book,
+        http::trades,
+        http::candles,
+        http::session,
     ),
     components(schemas(
         ApiError, ErrorCategory, FieldError,
@@ -63,6 +74,9 @@ use crate::transport::http;
         PriceConventionDto, ProtectionPlanDto, ProtectionStateDto, TrailingDistanceDto,
         TrailingModeDto, Decimal,
         Capability, CapabilitySet, UnavailableCapability,
+        InstrumentIdentityDto, InstrumentSummaryDto, MarketFreshness, TradingStatusDto, SessionDto,
+        QuoteDto, DepthLevelDto, OrderBookDto, TradeDirectionDto, TradeTickDto, CandleIntervalDto,
+        CandleDto, CandlesDto,
         ClientMessage, ServerEvent, EventPayload, Topic, SubscriptionStatus,
     )),
     tags(
@@ -70,6 +84,7 @@ use crate::transport::http;
         (name = "runtime", description = "Runtime state, readiness and reconciliation"),
         (name = "accounts", description = "Account-scoped read side"),
         (name = "execution", description = "Capital-affecting commands"),
+        (name = "market", description = "Provider-neutral market data, projected over the #8 adapter layer"),
     )
 )]
 pub struct ApiDoc;
@@ -133,6 +148,47 @@ mod tests {
         for forbidden in ["\"token\"", "\"secret\"", "\"password\"", "\"authorization\""] {
             assert!(!json.contains(forbidden), "a secret-shaped field is in the public schema: {forbidden}");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn the_market_read_model_is_published_under_the_versioned_surface() {
+        let doc = openapi();
+        for path in [
+            "/api/v1/market/instruments",
+            "/api/v1/market/quote",
+            "/api/v1/market/order-book",
+            "/api/v1/market/trades",
+            "/api/v1/market/candles",
+            "/api/v1/market/session",
+        ] {
+            assert!(doc.paths.paths.contains_key(path), "missing market route: {path}");
+        }
+    }
+
+    #[test]
+    fn no_second_instrument_identifier_is_published() -> Result<(), serde_json::Error> {
+        let doc: serde_json::Value = serde_json::from_str(&openapi_json()?)?;
+        let schemas = doc["components"]["schemas"]
+            .as_object()
+            .expect("the document has component schemas");
+        for (name, schema) in schemas {
+            if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+                assert!(
+                    !properties.contains_key("instrument_id"),
+                    "{name} mints a second instrument identity; the domain uid is the identity"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_market_price_crosses_as_a_string() -> Result<(), serde_json::Error> {
+        let doc: serde_json::Value = serde_json::from_str(&openapi_json()?)?;
+        let last = &doc["components"]["schemas"]["QuoteDto"]["properties"]["last"];
+        let rendered = serde_json::to_string(last)?;
+        assert!(rendered.contains("Decimal"), "a quoted price must be the exact Decimal type: {rendered}");
         Ok(())
     }
 }

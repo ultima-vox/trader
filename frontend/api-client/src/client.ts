@@ -65,6 +65,36 @@ export class VoxClient {
     return this.request("POST", "/api/v1/commands/order", undefined, body);
   }
 
+  /** Candles for one interval and window. */
+  marketCandles(query: { from_unix_ms: number; instrument_uid: string; interval: T.CandleIntervalDto; provider: T.ProviderDto; to_unix_ms: number }): Promise<T.CandlesDto> {
+    return this.request("GET", "/api/v1/market/candles", query);
+  }
+
+  /** Search the instrument catalogue. */
+  marketInstruments(query: { limit?: number | null; provider: T.ProviderDto; query: string }): Promise<Array<T.InstrumentSummaryDto>> {
+    return this.request("GET", "/api/v1/market/instruments", query);
+  }
+
+  /** A book snapshot. */
+  marketOrderBook(query: { depth?: number | null; instrument_uid: string; provider: T.ProviderDto }): Promise<T.OrderBookDto> {
+    return this.request("GET", "/api/v1/market/order-book", query);
+  }
+
+  /** Last price and top of book, with the age of the record. */
+  marketQuote(query: { instrument_uid: string; provider: T.ProviderDto }): Promise<T.QuoteDto> {
+    return this.request("GET", "/api/v1/market/quote", query);
+  }
+
+  /** Venue session state for one instrument. */
+  marketSession(query: { instrument_uid: string; provider: T.ProviderDto }): Promise<T.SessionDto> {
+    return this.request("GET", "/api/v1/market/session", query);
+  }
+
+  /** The public tape. */
+  marketTrades(query: { instrument_uid: string; limit?: number | null; provider: T.ProviderDto }): Promise<Array<T.TradeTickDto>> {
+    return this.request("GET", "/api/v1/market/trades", query);
+  }
+
   /** Operations history, paged by cursor. */
   operations(query: { broker_account_id: string; connection_ref: string; cursor?: string | null; environment: T.BrokerEnvironment; limit?: number | null; provider: T.ProviderDto }): Promise<T.OperationsPageDto> {
     return this.request("GET", "/api/v1/operations", query);

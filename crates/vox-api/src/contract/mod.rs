@@ -7,6 +7,8 @@
 pub mod account;
 pub mod capability;
 pub mod execution;
+pub mod instrument;
+pub mod market;
 pub mod money;
 pub mod runtime;
 pub mod scope;

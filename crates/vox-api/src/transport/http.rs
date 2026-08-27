@@ -16,6 +16,10 @@ use crate::contract::account::{
 };
 use crate::contract::capability::CapabilitySet;
 use crate::contract::execution::{CancelOrderRequest, MutationReceiptDto, SubmitOrderRequest};
+use crate::contract::market::{
+    CandleIntervalDto, CandlesDto, InstrumentSummaryDto, OrderBookDto, QuoteDto, SessionDto,
+    TradeTickDto,
+};
 use crate::contract::runtime::{RuntimeHealthDto, SystemHealthDto};
 use crate::contract::scope::{BrokerEnvironment, ExecutionScope, ProviderDto, TradingMode};
 use crate::error::{ApiError, ErrorCategory, FieldError};
@@ -307,6 +311,190 @@ fn validate_submit(request: &SubmitOrderRequest) -> Result<(), ApiError> {
     }
 }
 
+/// Which instrument, in whose namespace.
+///
+/// A uid is only an identity beside its provider, so both are required. There is no
+/// Vox-minted instrument id: the domain identity is the identity.
+#[derive(Clone, Debug, Deserialize, IntoParams, ToSchema)]
+pub struct InstrumentQuery {
+    pub provider: ProviderDto,
+    /// The provider's stable instrument identifier.
+    pub instrument_uid: String,
+}
+
+impl InstrumentQuery {
+    fn validated(&self) -> Result<(), ApiError> {
+        if self.instrument_uid.trim().is_empty() {
+            return Err(ApiError::validation(
+                "a market-data read needs the instrument it reads",
+                vec![FieldError {
+                    field: "instrument_uid".to_owned(),
+                    message: "must not be empty".to_owned(),
+                }],
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Instrument catalogue search.
+#[derive(Clone, Debug, Deserialize, IntoParams, ToSchema)]
+pub struct InstrumentSearchQuery {
+    pub provider: ProviderDto,
+    /// Ticker or name fragment.
+    pub query: String,
+    /// Page size; the server caps it.
+    pub limit: Option<u16>,
+}
+
+/// Book depth request.
+#[derive(Clone, Debug, Deserialize, IntoParams, ToSchema)]
+pub struct OrderBookQuery {
+    pub provider: ProviderDto,
+    pub instrument_uid: String,
+    /// Levels per side; the server caps it at what the provider serves.
+    pub depth: Option<u16>,
+}
+
+/// Tape request.
+#[derive(Clone, Debug, Deserialize, IntoParams, ToSchema)]
+pub struct TradesQuery {
+    pub provider: ProviderDto,
+    pub instrument_uid: String,
+    pub limit: Option<u16>,
+}
+
+/// Candle request. The window is explicit: a chart never asks for "recent".
+#[derive(Clone, Debug, Deserialize, IntoParams, ToSchema)]
+pub struct CandlesQuery {
+    pub provider: ProviderDto,
+    pub instrument_uid: String,
+    pub interval: CandleIntervalDto,
+    /// Window start, milliseconds since the Unix epoch, UTC.
+    pub from_unix_ms: i64,
+    /// Window end, milliseconds since the Unix epoch, UTC.
+    pub to_unix_ms: i64,
+}
+
+/// Search the instrument catalogue.
+#[utoipa::path(
+    get, path = "/api/v1/market/instruments", tag = "market", params(InstrumentSearchQuery),
+    responses(
+        (status = 200, body = Vec<InstrumentSummaryDto>),
+        (status = 503, description = "No market-data projection is attached", body = ApiError),
+    )
+)]
+pub async fn instruments(
+    State(state): State<AppState>,
+    Query(query): Query<InstrumentSearchQuery>,
+) -> Result<Json<Vec<InstrumentSummaryDto>>, ApiError> {
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    Ok(Json(
+        state
+            .market_data_port()?
+            .search_instruments(query.provider, &query.query, limit)
+            .await?,
+    ))
+}
+
+/// Last price and top of book, with the age of the record.
+#[utoipa::path(
+    get, path = "/api/v1/market/quote", tag = "market", params(InstrumentQuery),
+    responses((status = 200, body = QuoteDto), (status = 400, body = ApiError), (status = 503, body = ApiError))
+)]
+pub async fn quote(
+    State(state): State<AppState>,
+    Query(query): Query<InstrumentQuery>,
+) -> Result<Json<QuoteDto>, ApiError> {
+    query.validated()?;
+    Ok(Json(
+        state.market_data_port()?.quote(query.provider, &query.instrument_uid).await?,
+    ))
+}
+
+/// A book snapshot.
+#[utoipa::path(
+    get, path = "/api/v1/market/order-book", tag = "market", params(OrderBookQuery),
+    responses((status = 200, body = OrderBookDto), (status = 400, body = ApiError), (status = 503, body = ApiError))
+)]
+pub async fn order_book(
+    State(state): State<AppState>,
+    Query(query): Query<OrderBookQuery>,
+) -> Result<Json<OrderBookDto>, ApiError> {
+    let depth = query.depth.unwrap_or(20).clamp(1, 50);
+    Ok(Json(
+        state
+            .market_data_port()?
+            .order_book(query.provider, &query.instrument_uid, depth)
+            .await?,
+    ))
+}
+
+/// The public tape.
+#[utoipa::path(
+    get, path = "/api/v1/market/trades", tag = "market", params(TradesQuery),
+    responses((status = 200, body = Vec<TradeTickDto>), (status = 503, body = ApiError))
+)]
+pub async fn trades(
+    State(state): State<AppState>,
+    Query(query): Query<TradesQuery>,
+) -> Result<Json<Vec<TradeTickDto>>, ApiError> {
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    Ok(Json(
+        state
+            .market_data_port()?
+            .trades(query.provider, &query.instrument_uid, limit)
+            .await?,
+    ))
+}
+
+/// Candles for one interval and window.
+#[utoipa::path(
+    get, path = "/api/v1/market/candles", tag = "market", params(CandlesQuery),
+    responses((status = 200, body = CandlesDto), (status = 400, body = ApiError), (status = 503, body = ApiError))
+)]
+pub async fn candles(
+    State(state): State<AppState>,
+    Query(query): Query<CandlesQuery>,
+) -> Result<Json<CandlesDto>, ApiError> {
+    if query.to_unix_ms <= query.from_unix_ms {
+        return Err(ApiError::validation(
+            "the candle window is empty",
+            vec![FieldError {
+                field: "to_unix_ms".to_owned(),
+                message: "must be later than from_unix_ms".to_owned(),
+            }],
+        ));
+    }
+    Ok(Json(
+        state
+            .market_data_port()?
+            .candles(
+                query.provider,
+                &query.instrument_uid,
+                query.interval,
+                query.from_unix_ms,
+                query.to_unix_ms,
+            )
+            .await?,
+    ))
+}
+
+/// Venue session state for one instrument.
+#[utoipa::path(
+    get, path = "/api/v1/market/session", tag = "market", params(InstrumentQuery),
+    responses((status = 200, body = SessionDto), (status = 400, body = ApiError), (status = 503, body = ApiError))
+)]
+pub async fn session(
+    State(state): State<AppState>,
+    Query(query): Query<InstrumentQuery>,
+) -> Result<Json<SessionDto>, ApiError> {
+    query.validated()?;
+    Ok(Json(
+        state.market_data_port()?.session(query.provider, &query.instrument_uid).await?,
+    ))
+}
+
 /// Anything outside the versioned surface.
 pub async fn not_found() -> ApiError {
     ApiError::new(
@@ -331,6 +519,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/operations", get(operations))
         .route("/api/v1/commands/order", post(submit_order))
         .route("/api/v1/commands/cancel-order", post(cancel_order))
+        .route("/api/v1/market/instruments", get(instruments))
+        .route("/api/v1/market/quote", get(quote))
+        .route("/api/v1/market/order-book", get(order_book))
+        .route("/api/v1/market/trades", get(trades))
+        .route("/api/v1/market/candles", get(candles))
+        .route("/api/v1/market/session", get(session))
         .with_state(state)
 }
 

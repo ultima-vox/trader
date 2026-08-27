@@ -113,6 +113,11 @@ jobs:
           test "$code" = "503" || { echo "expected 503, got $code"; cat /tmp/runtime.json; exit 1; }
           python -c "import json; d=json.load(open('/tmp/runtime.json')); assert d['code']=='CAPABILITY_UNAVAILABLE', d; assert d['details']['owner'], d; print(' ', d['code'], d['details']['owner'])"
 
+          echo "market data refuses instead of inventing a price:"
+          code=$(curl -s -o /tmp/quote.json -w '%{http_code}' 'http://127.0.0.1:18099/api/v1/market/quote?provider=T_INVEST&instrument_uid=probe')
+          test "$code" = "503" || { echo "expected 503, got $code"; cat /tmp/quote.json; exit 1; }
+          python -c "import json; d=json.load(open('/tmp/quote.json')); assert d['details']['capability']=='MARKET_DATA', d; assert d['details']['owner'], d; print(' ', d['details']['capability'], d['details']['owner'])"
+
           echo "the served document matches the committed one:"
           curl -sf http://127.0.0.1:18099/api/v1/openapi.json -o /tmp/served.json
           python -c "import json; a=json.load(open('/tmp/served.json')); b=json.load(open('docs/api/openapi.json')); assert a==b, 'the served OpenAPI differs from the committed artefact'; print('  identical')"

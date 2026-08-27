@@ -175,7 +175,7 @@ must be corrected or shown as an explicitly deferred capability — not simulate
 | C6 | Protection runtime states `ACTIVE/STALE/RECONCILING/TRIGGERED/CANCELLED` | `ProtectionEstablishmentState` = `AWAITING_ENTRY/ESTABLISHING/ACTIVE/UNKNOWN_AFTER_DISPATCH/RECONCILIATION_REQUIRED/CLOSING_POSITION/ORPHANED/TERMINAL` | Adopt the contract enum; `STALE` becomes an age on the last broker response, not a state |
 | C7 | Connection vocabulary `VALIDATING/RECONNECTING/REVOKED/ROTATE/PROVIDER_UNAVAILABLE/DISABLED` | `BrokerResultClass` + `SafetyCondition` (`CREDENTIAL_INVALID`, `EXECUTION_AUTHORIZATION_DISABLED`, `ACCOUNT_UNAVAILABLE`), `StreamState` | Map each chip to a contract value; drop the ones with no backing (`REVOKED`, `ROTATE` as distinct states) |
 | C8 | Portfolio value, P&L, free funds, margin | `PortfolioFact.currencies: Map<code,string>` only | Render currency balances; P&L/margin become a deferred analytics dependency |
-| C9 | Quotes, order book, tape, chart data | No market-data read model in `vox-runtime` | Deferred market-data dependency; the widgets keep their empty/deferred state |
+| C9 | Quotes, order book, tape, chart data | Market-data read model now published by `vox-api` (`QuoteDto`, `OrderBookDto`, `TradeTickDto`, `CandleDto`, `SessionDto`, `InstrumentSummaryDto`), each record carrying `MarketFreshness`; no projection feeds it yet | Widgets bind to these types and keep their deferred state while `MARKET_DATA` is unavailable; a stale record renders with its age, never as a fresh price |
 | C10 | Strategy, Decision Center, Research, ML screens with live data | No contracts of any kind | Screens exist as operator workplaces but every data region is explicitly deferred |
 | C11 | Bulk protection migration result | No bulk mutation contract; only per-mutation `MutationRecord` | Design stays; the action is gated on a tracked backend capability |
 | C12 | `Все счета` aggregate | No aggregate read model | Already deferred — keep |
@@ -186,7 +186,7 @@ must be corrected or shown as an explicitly deferred capability — not simulate
 | --- | --- | --- | --- |
 | BD-1 | every screen | Vox-side transport exposing the read models above | **#38 — the first slice is implemented**, see below |
 | BD-2 | shell, ticket | risk verdict / guardrail read model (exposure, day loss, concentration, resize) | #21 |
-| BD-3 | Markets, chart, book, tape, ticket price | market-data read model (quote, depth, trades, candles) as a Vox projection over the accepted #8 adapter layer | #38 |
+| BD-3 | Markets, chart, book, tape, ticket price | market-data read model (quote, depth, trades, candles, session, catalogue) as a Vox projection over the accepted #8 adapter layer | **#38 — the read model and its routes are implemented**; the projection that fills them is not attached, so `MARKET_DATA` answers `CAPABILITY_UNAVAILABLE` |
 | BD-4 | Portfolio | P&L, margin and valuation analytics, operation amounts | #22 |
 | BD-5 | Settings → Brokers | credential rotation/revocation lifecycle beyond `CredentialResolution` | #17 |
 | BD-6 | Strategy, Decision | strategy binding, signal and approval contracts | #23, #27 |

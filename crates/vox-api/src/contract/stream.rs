@@ -30,6 +30,12 @@ pub enum Topic {
     Operations,
     /// Currency balances.
     Portfolio,
+    /// Last price and top of book for the subscribed instrument.
+    Quotes,
+    /// Book depth for the subscribed instrument.
+    OrderBook,
+    /// The public tape for the subscribed instrument.
+    Trades,
 }
 
 /// What a client may send.
