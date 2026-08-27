@@ -37,6 +37,7 @@
   --vox-positive-base: #27B07D;
   --vox-positive-strong: #159466;
   --vox-positive-hover: #34C08B;
+  --vox-positive-pressed: #0F7D55;
   --vox-positive-surface: rgba(39, 176, 125, 0.10);
   /* Text/icon colour on filled positive & negative fills (AA on the base fill). */
   --vox-on-positive: #08120E;
@@ -45,6 +46,7 @@
   --vox-negative-base: #E45858;
   --vox-negative-strong: #CA3F3F;
   --vox-negative-hover: #EC6C6C;
+  --vox-negative-pressed: #A93333;
   --vox-negative-surface: rgba(228, 88, 88, 0.10);
   --vox-on-negative: #1A0A0A;
   --vox-negative-surface-hover: rgba(228, 88, 88, 0.14);
@@ -123,6 +125,7 @@
   --vox-weight-regular: 400;
   --vox-weight-medium: 500;
   --vox-weight-semibold: 600;
+  --vox-weight-bold: 700;   /* rare: only where the canon uses it */
 
   /* ---------- Spacing (base unit 4px) ---------- */
   --vox-space-0: 0px;

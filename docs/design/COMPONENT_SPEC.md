@@ -19,6 +19,16 @@ Every market number uses `.vox-num` (+ `--positive` / `--negative` / `--neutral`
 `--unknown`): tabular figures, right-aligned, no wrap. Units are a separate
 `.vox-unit` span so the figure keeps alignment.
 
+### Timestamp — `.vox-timestamp`
+Mono, tabular, millisecond precision (`11:42:06.312`) with `__ms` in the disabled tone.
+Two prints inside one second are ordinary in a tape, so the canon works to the
+millisecond and every column that holds a timestamp is sized for it.
+
+### Sparkline — `.vox-sparkline`
+60×20 inline SVG, `--positive` / `--negative`, 1.5px stroke in `currentColor`. It carries a
+direction only: it never replaces a number, never carries a precise value and is never the
+only carrier of state.
+
 ### Icon — `.vox-icon`
 One family (Lucide) behind the class. Sizes 12/14/16/18/20; stroke 1.75 up to 16px,
 1.5 at 18–20px. Never mix stroke widths in one row. `currentColor` only.
@@ -40,6 +50,8 @@ limit), never repeats the label. Popover hosts menus and diagnostics.
 ## Controls
 
 ### Button — `.vox-btn`
+Pressed BUY and SELL use their own tints (`--vox-positive-pressed`, `--vox-negative-pressed`),
+which are the only two canonical colours that are not part of the semantic ramps.
 Anatomy: `[icon?] label [count?]`. Height `--vox-control-height` (28), padding 8–12px,
 radius 4, 12px medium.
 Variants: `--primary`, `--secondary`, `--ghost`, `--danger`, `--buy`, `--sell`.
@@ -103,7 +115,7 @@ the bottom after a separator. Order: contextual → navigational → destructive
 22px, semibold, tracked. `--live` (red-outlined), `--sandbox` (blue), `--paper`
 (violet), `--backtest` (neutral). Permanently visible in the top bar; also inlined in
 the order ticket header. `.vox-live-action` adds the inset red hairline to irreversible
-controls in `LIVE`.
+controls in `PRODUCTION`.
 
 ### RuntimeStatus — `.vox-runtime`
 Clickable chip, opens diagnostics. Renders any of the eight `RuntimeState` values;
@@ -149,6 +161,11 @@ Anatomy: sticky `__header` (28px) → `__row` (26px) → optional `__footer` (24
 Row states: hover, `.is-selected` (accent left border 2px + tinted bg), `.is-unknown`
 (violet left border, violet-tinted bg), flash on value change (`.vox-flash-up` /
 `.vox-flash-down`, 480 ms, background only).
+Row anatomy from the canon: optional `.vox-table__select` checkbox cell, the data cells,
+and a trailing `.vox-table__menu` (⋮) that holds the row's actions instead of scattering
+buttons across the grid. A `.vox-table__caption` under the table states the component's
+capabilities in one line. Units inside a numeric cell use `.vox-unit` so the figure keeps
+its alignment.
 Rules: column widths declared by the caller via `grid-template-columns` so header and
 rows stay aligned; sorting on the header cell (`.vox-table__sort`); streaming updates
 must not reflow; no zebra striping; no per-row action buttons — row context menu instead.
@@ -207,7 +224,8 @@ from the workspace selection) → instrument strip → type Select → quantity
 NumericInput (+ lot hint) → price Input → `__preview` (сумма / комиссия / маржа
 после) → `.vox-protect` (independent Stop Loss / Take Profit) → RiskIndicator →
 `__actions` → mono shortcut hint.
-`__target` states: default · `.is-live` (inset LIVE hairline) · `.is-mismatch` (amber,
+`__target` states: default · `.is-live` (inset PRODUCTION hairline; the class name is a
+token identifier, not an environment value) · `.is-mismatch` (amber,
 names the workspace account it disagrees with, offers to move the ticket or keep it) ·
 `.is-frozen` (elevated surface, non-interactive, `__target-lock` = `ЗАФИКСИРОВАНО`). A
 frozen target belongs to a constructed or submitted command: switching the active
@@ -217,7 +235,7 @@ The ticket also renders the effective protection and its source
 (`Плавающий стоп 1,00 % · Источник: заявка`) via `.vox-inherited`, never the plan alone.
 `__actions`: two 34px buttons, `--buy` = `Купить`, `--sell` = `Продать`, each with its
 own executable price. Both always present; **no mode toggle exists**. Blocked side:
-`.is-blocked` + `__action-note` + reason. In `LIVE` both actions carry
+`.is-blocked` + `__action-note` + reason. In `PRODUCTION` both actions carry
 `.vox-live-action`. Submission requires a non-blocked risk verdict; `RECONCILING` and
 `DEGRADED` allow submission with the caveat displayed; `HALTED` blocks new orders and
 leaves cancel available.
@@ -300,7 +318,7 @@ content and the row may scroll, but the human account name never collapses. In t
 Order Ticket target row the account name wraps instead of truncating — ellipsis is
 allowed on decoration, never on the execution target.
 Always visible in the shell. Anatomy: broker · separator · human account label ·
-environment badge / connection health · disclosure. Modifiers `.is-live` (inset LIVE
+environment badge / connection health · disclosure. Modifiers `.is-live` (inset PRODUCTION
 marker), `.is-degraded`, `.is-unknown`. The popover lists `.vox-account-row`
 (name + masked identifier meta · environment · health · value). A raw identifier
 appears only as masked meta; full identifiers live in diagnostics.

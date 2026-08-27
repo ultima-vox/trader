@@ -18,8 +18,9 @@ start frontend\design-system\reference\index.html                        # Windo
 # or serve the tree (any static server works)
 python3 -m http.server 8080
 # → http://localhost:8080/frontend/design-system/reference/index.html
-# → http://localhost:8080/frontend/design-system/reference/vox-trader-design-system.reference.html
 ```
+
+Published: <https://ultima-vox.github.io/trader/>
 
 Both files open directly from `file://`. All paths are relative; nothing is fetched
 from a CDN, and no Claude Design runtime or account is needed.
@@ -28,15 +29,15 @@ from a CDN, and no Claude Design runtime or account is needed.
 
 | File | Role |
 | --- | --- |
-| `reference/index.html` | **The rendered reference.** Hand-maintained, built on the CSS layers below, and extended whenever a component or a state is added. |
-| `reference/vox-trader-design-system.reference.html` | Stable local viewing entry point for `reference/index.html`. Not a separate design authority and not a source of truth. |
-| `reference/source/vox-trader-design-system.dc.html` | Provenance only: the Claude Design document this system was first drawn in, kept for traceability. `support.js` next to it is its runtime. Frozen, not a build input and not an authority. |
+| `reference/index.html` | **The one rendered reference.** Hand-maintained, built on the CSS layers below, and extended whenever a component or a state is added. Published by GitHub Pages. |
+| `../../docs/design/source/Vox-Trader-Design-System-canonical.html` | **Visual and component authority.** Restored from the committed source with `restore-canonical-design.sh`; immutable provenance, never a runtime dependency and never imported. |
 | `tokens/`, `primitives/`, `components/`, `patterns/` | **Source of truth for implementation.** Hand-maintained CSS layers. |
 | `../../docs/design/*.md` | **Source of truth for rules.** Documentation beats any rendering. |
 
-Conflict resolution: normative docs > CSS layers > `reference/index.html` > viewing
-wrapper. `reference/index.html` is the rendered reference that is extended when a
-component or a state is added; the docs fix the *rules*.
+Conflict resolution for **semantics**: normative docs > CSS layers > `reference/index.html`.
+For **visual language and geometry** the canonical source in `docs/design/source/` wins, per
+`docs/design/CANONICAL_DESIGN.md`. There is exactly one executable design system and one
+rendered reference; no second entry point exists.
 
 ## Layers
 
@@ -69,7 +70,7 @@ Change it in the same commit as `tokens.css`.
 
 - Dense professional terminal. **Compact is the production default density.**
 - **Russian primary UI language**; Latin only for tickers, technical states
-  (`LIVE`, `READY`, `HALTED`), reason codes and marker letters.
+  (`PRODUCTION`, `READY`, `HALTED`), reason codes and marker letters.
 - Order ticket has **permanent dual actions** `Купить` / `Продать`. **No buy/sell mode
   toggle exists.** A forbidden side stays visible and states its reason.
 - Chart/tape/journal markers are exactly **B / S / F / SL / TP / D / E**.
