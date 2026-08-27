@@ -88,11 +88,25 @@ readback. Authoritative discovery resolves persisted UNKNOWN to accepted broker 
 qualify the row; exhausted reconciliation reports unresolved UNKNOWN with quota evidence.
 
 TradesStream sends generated `TradesStreamRequest { accounts, ping_delay_ms: Some(5000) }` to the
-sandbox endpoint. Connection evidence records redacted account count, ping value, client request ID,
-provider tracking ID and pre-ACK event counts. Valid events/pings do not replace mandatory ACK. If
-the RPC connects but sandbox omits ACK within the existing 15-second qualification bound, runner
-reports `BLOCKED/PROVIDER`: current provider contract advertises TradesStream in sandbox, request
-round-trip is contract-tested, and timeout is not increased to mask missing ACK.
+sandbox endpoint. Full runner and targeted credentialed test use one acceptance path. Evidence
+records request shape, client request ID, provider tracking ID, bounded stream liveness, pings,
+stream errors, exact account/instrument/order identities, matching broker order IDs, and
+authoritative BUY/SELL fill readback. Sandbox currently keeps the stream alive and emits matching
+trade events plus pings, but omits the formal subscription ACK. This exact case is
+`QUALIFIED_WITH_PROVIDER_DEVIATION` only after a qualification trade executes, its broker order ID
+matches a stream event, broker readback confirms both BUY and SELL fills, and cleanup succeeds.
+Missing matching event is `BLOCKED/PROVIDER`; stream, identity, readback, or cleanup failure is
+`FAILED`. Missing ACK is recorded, never fabricated. Runtime TradesStream ACK semantics remain
+strict for production supervision. OrderStateStream qualification remains strict because sandbox
+returns its valid exact-account ACK.
+
+Observed 2026-08-27 sandbox evidence: targeted request
+`47c2eca4-22e7-478b-8757-1e2da04a3a65` / tracking
+`a2f218b4b71d699fb9f0cc436cf354a5`; full-runner request
+`d246e2b0-fcae-41fe-a09f-b407ac374ec7` / tracking
+`5f9e2a86dc0ab361c8cea9abd0bcf5d8`. Both observed five pings, matching BUY/SELL
+trade events and authoritative fill readback, no stream errors, and qualified cleanup; only
+subscription ACK was absent.
 
 PowerShell command:
 
@@ -105,7 +119,9 @@ Runner reads no production-token variable and rejects any non-sandbox client. It
 sandbox account plus API-tradeable instrument from generated contracts, exercises unary order,
 async order, replacement, cancellation, broker idempotency, controlled ambiguous-dispatch guard,
 all supported stop/protection shapes, and both execution streams. Every row is printed as
-`QUALIFIED`, `GATED/UNAVAILABLE`, `BLOCKED/PROVIDER`, or `FAILED`. Provider-blocked completion returns
-a distinct qualification error, never an implementation-failure result. Cleanup always runs last,
-cancels qualification-created active orders/stops once, flattens observed test exposure, and fails
-unless authoritative readback confirms baseline resources plus zero net test lots.
+`QUALIFIED`, `QUALIFIED_WITH_PROVIDER_DEVIATION`, `GATED/UNAVAILABLE`, `BLOCKED/PROVIDER`, or
+`FAILED`. Provider-blocked completion returns a distinct qualification error, never an
+implementation-failure result. TradesStream acceptance performs and verifies cleanup before
+recording its row; final cleanup runs again after OrderStateStream, cancels any remaining
+qualification-created active orders/stops, flattens observed test exposure, and fails unless
+authoritative readback confirms baseline resources plus zero net test lots.

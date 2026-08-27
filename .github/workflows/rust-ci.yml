@@ -8,7 +8,9 @@ on:
       - "rust-toolchain.toml"
       - "rustfmt.toml"
       - "crates/**"
-      - "docs/rust-foundation.md"
+      - "docs/**"
+      - "architecture/**"
+      - "qualification/**"
       - "ARCHITECTURE.md"
       - "RUST_MIGRATION_PLAN.md"
       - ".github/workflows/rust-ci.yml"
@@ -70,7 +72,7 @@ jobs:
           rustup default 1.97.1
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --locked --workspace
+      - run: cargo test --locked --workspace --all-targets --all-features
       - name: Smoke Vox Core composition
         run: cargo run --locked -p vox-core --bin vox-core
       - name: Remove current Vox CI artifacts

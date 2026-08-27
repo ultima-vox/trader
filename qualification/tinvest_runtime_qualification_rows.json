@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "issue": 11,
+  "runner": "cargo test --locked -p vox-runtime --test runtime_live complete_runtime_qualification_in_sandbox -- --ignored --nocapture",
+  "rows": [
+    "runtime_startup_ownership",
+    "connecting",
+    "initial_authoritative_reconciliation",
+    "ready_gate",
+    "durable_mutation_broker_execution_identity_link",
+    "restart_with_broker_visible_open_state",
+    "unknown_restart_authoritative_resolution_no_replay",
+    "position_snapshot_reconciliation",
+    "regular_order_reconciliation",
+    "stop_protection_reconciliation",
+    "duplicate_event_readback_dedupe",
+    "stream_gap_reconciliation_recovery",
+    "graceful_shutdown_restart",
+    "cleanup_readback",
+    "zero_unresolved_unknown",
+    "resource_queue_summary"
+  ],
+  "classifications": [
+    "QUALIFIED",
+    "QUALIFIED_WITH_PROVIDER_DEVIATION",
+    "GATED_UNAVAILABLE",
+    "FAILED"
+  ],
+  "provider_deviations": {
+    "TradesStream_missing_subscription_ack": "Allowed only under #10 exact evidence; production ACK semantics unchanged"
+  }
+}
