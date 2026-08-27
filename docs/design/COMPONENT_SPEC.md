@@ -106,9 +106,12 @@ the order ticket header. `.vox-live-action` adds the inset red hairline to irrev
 controls in `LIVE`.
 
 ### RuntimeStatus — `.vox-runtime`
-Clickable chip, opens diagnostics. `--ready` (green dot), `--reconciling` (blue pulsing
-dot), `--degraded` (amber surface), `--halted` (red surface, semibold). Label is the
-Latin state word; the human explanation lives in the diagnostics popover.
+Clickable chip, opens diagnostics. Renders any of the eight `RuntimeState` values;
+`--ready` (green dot), `--reconciling` (blue pulsing dot), `--degraded` (amber surface),
+`--halted` (red surface, semibold), and the neutral base for `STARTING`, `CONNECTING`,
+`STOPPING`, `STOPPED`. Label is the Latin state word; the human explanation comes from
+`RuntimeHealth.reason_code` and lives in the diagnostics popover. New exposure is allowed
+in `READY` only.
 
 ### RiskIndicator — `.vox-risk`
 Anatomy: dot/icon + verdict sentence + `.vox-risk__reason` + `.vox-reason-code`.
@@ -338,6 +341,15 @@ One picker for the whole product: search by ticker or name, rows showing ticker 
 · venue/type, keyboard navigation, recents and favourites. Normal UI never shows
 UID/FIGI or other provider identifiers — they belong to diagnostics. Selection returns
 a stable internal instrument id. Feature screens may not build their own picker.
+
+### Deferred — `.vox-deferred`, `.vox-dep`
+A region whose data or action has no backend contract yet. Anatomy: `__head` (title +
+`.vox-dep` dependency id) → `__body` (what is missing, in words) → optional
+`__actions` holding the real controls in a disabled state. Dashed border, violet unknown
+tint, never the negative semantic — deferred is not an error. `.vox-dep` is a mono chip
+carrying the tracked id (`BD-3`) from `docs/design/BACKEND_CONTRACTS.md`. Simulating the
+missing data is prohibited; so is quietly removing the region, because the design decision
+must stay reviewable.
 
 ### PortfolioSummary — `.vox-metrics`, `.vox-limit`
 4-column bordered metric grid (10px label + 16px tabular value) — the explicit

@@ -31,7 +31,7 @@
   .ref__swatch { border: 1px solid var(--vox-border-subtle); border-radius: var(--vox-radius-sm); overflow: hidden; }
   .ref__swatch-chip { height: 34px; }
   .ref__swatch-meta { padding: 5px 7px; background: var(--vox-bg-surface); }
-  .ref__code { font-family: var(--vox-font-mono); font-size: 10px; color: var(--vox-text-tertiary); }
+  .ref__code { font-family: var(--vox-font-mono); font-size: 10px; color: var(--vox-text-tertiary); line-height: 1.35; }
   .ref__nav { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 0 0; }
   .ref__nav a { text-decoration: none; }
   a { color: var(--vox-blue-300); }
@@ -268,10 +268,11 @@
       <div class="ref__spec vox-surface">
         <div class="ref__spec-title">Среда — всегда видна</div>
         <div class="ref__demo">
-          <span class="vox-env vox-env--live"><span class="vox-dot"></span>LIVE</span>
+          <span class="vox-env vox-env--live"><span class="vox-dot"></span>PRODUCTION</span>
           <span class="vox-env vox-env--sandbox"><span class="vox-dot"></span>SANDBOX</span>
-          <span class="vox-env vox-env--paper"><span class="vox-dot"></span>PAPER</span>
-          <span class="vox-env vox-env--backtest"><span class="vox-dot"></span>BACKTEST</span>
+          <span class="vox-env vox-env--paper" aria-disabled="true"><span class="vox-dot"></span>PAPER</span>
+          <span class="vox-env vox-env--backtest" aria-disabled="true"><span class="vox-dot"></span>BACKTEST</span>
+          <span class="vox-dep">BD-13 · не в RuntimeEnvironment</span>
         </div>
         <div class="ref__demo" style="margin-top:10px">
           <button class="vox-btn vox-btn--buy vox-live-action" type="button">Купить · LIVE</button>
@@ -279,23 +280,28 @@
         </div>
       </div>
       <div class="ref__spec vox-surface">
-        <div class="ref__spec-title">Рантайм — кликабельно, открывает диагностику</div>
+        <div class="ref__spec-title">Рантайм — <code class="ref__code">RuntimeState</code>, восемь значений</div>
         <div class="ref__demo">
           <span class="vox-runtime vox-runtime--ready"><span class="vox-dot"></span><span class="vox-runtime__label">READY</span></span>
           <span class="vox-runtime vox-runtime--reconciling"><span class="vox-dot"></span><span class="vox-runtime__label">RECONCILING</span></span>
           <span class="vox-runtime vox-runtime--degraded"><span class="vox-dot"></span><span class="vox-runtime__label">DEGRADED</span></span>
           <span class="vox-runtime vox-runtime--halted"><span class="vox-dot"></span><span class="vox-runtime__label">HALTED</span></span>
+          <span class="vox-runtime"><span class="vox-dot"></span><span class="vox-runtime__label">STARTING</span></span>
+          <span class="vox-runtime"><span class="vox-dot"></span><span class="vox-runtime__label">CONNECTING</span></span>
+          <span class="vox-runtime"><span class="vox-dot"></span><span class="vox-runtime__label">STOPPING</span></span>
+          <span class="vox-runtime"><span class="vox-dot"></span><span class="vox-runtime__label">STOPPED</span></span>
         </div>
         <div class="ref__note" style="margin-top:10px">DEGRADED — торговля возможна с оговоркой; HALTED — новые заявки запрещены, снятие остаётся доступным.</div>
       </div>
       <div class="ref__spec vox-surface">
         <div class="ref__spec-title">Риск-предпроверка</div>
+        <div class="vox-deferred" style="margin-bottom:10px"><div class="vox-deferred__head"><span class="vox-deferred__title">Источник вердикта</span><span class="vox-dep">BD-2</span></div><div class="vox-deferred__body">Словарь состояний обязателен по задаче #18 и остаётся каноническим. Самого риск-контракта в репозитории нет: ни один тип в <code class="ref__code">vox-domain</code> или <code class="ref__code">vox-runtime</code> не возвращает вердикт, лимит или скорректированный объём. Пока его нет, вердикт не показывается на рабочих экранах, а коды причин здесь не приводятся.</div></div>
         <div class="vox-stack vox-gap-2">
           <div class="vox-risk vox-risk--safe"><span class="vox-dot"></span><div><div>Проверки пройдены</div><div class="vox-risk__reason">Лимит на инструмент: использовано 42 %</div></div></div>
-          <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Близко к лимиту концентрации</div><div class="vox-risk__reason">Доля позиции 18 % из 20 % <span class="vox-reason-code">RISK_CONC_NEAR</span></div></div></div>
-          <div class="vox-risk vox-risk--blocked"><span class="vox-dot"></span><div><div>Заявка заблокирована</div><div class="vox-risk__reason">Превышен дневной лимит убытка <span class="vox-reason-code">RISK_DAY_LOSS</span></div></div></div>
-          <div class="vox-risk vox-risk--unknown"><span class="vox-dot"></span><div><div>Состояние неизвестно</div><div class="vox-risk__reason">Нет ответа от риск-сервиса 8 c. Это не отказ — решение отложено. <span class="vox-reason-code">RISK_UNKNOWN</span></div></div></div>
-          <div class="vox-risk vox-risk--resize"><span class="vox-dot"></span><div><div>Объём будет уменьшен</div><div class="vox-risk__reason">120 → 80 по лимиту на инструмент <span class="vox-reason-code">RISK_RESIZE</span></div></div></div>
+          <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Близко к лимиту концентрации</div><div class="vox-risk__reason">Доля позиции 18 % из 20 %</div></div></div>
+          <div class="vox-risk vox-risk--blocked"><span class="vox-dot"></span><div><div>Заявка заблокирована</div><div class="vox-risk__reason">Превышен дневной лимит убытка</div></div></div>
+          <div class="vox-risk vox-risk--unknown"><span class="vox-dot"></span><div><div>Состояние неизвестно</div><div class="vox-risk__reason">Нет ответа от риск-сервиса 8 c. Это не отказ — решение отложено.</div></div></div>
+          <div class="vox-risk vox-risk--resize"><span class="vox-dot"></span><div><div>Объём будет уменьшен</div><div class="vox-risk__reason">120 → 80 по лимиту на инструмент</div></div></div>
         </div>
       </div>
     </div>
@@ -391,6 +397,12 @@
     <div class="ref__sec-head"><span class="ref__num">09</span><h2 class="vox-text--title">Рабочее пространство «Торговля»</h2>
       <span class="ref__note">Канонический производственный экран, а не набор отдельных демонстраций. Контекст брокера и счёта, цель исполнения заявки, защита и её источник, авторизация исполнения и сетка виджетов присутствуют одновременно, потому что оператор принимает решение по ним одновременно.</span></div>
 
+    <div class="vox-deferred" style="margin-bottom:12px">
+      <div class="vox-deferred__head"><span class="vox-deferred__title">Что на этом экране подкреплено контрактом</span><span class="vox-dep">BD-3 · BD-4 · BD-2</span></div>
+      <div class="vox-deferred__body">Подкреплено: цель исполнения (<code class="ref__code">RuntimeScope</code>), состояние рантайма и разрешение экспозиции (<code class="ref__code">RuntimeHealth</code>), сам факт позиции и её количество (<code class="ref__code">PositionFact.quantity_units</code>), активные заявки и стоп-заявки как идентичности (<code class="ref__code">OrderFact</code>, <code class="ref__code">StopFact</code>), план защиты и её возможности.</div>
+      <div class="vox-deferred__body">Не подкреплено: котировка, стакан, лента и график (BD-3); средняя цена, текущая цена, P&amp;L и маржа (BD-4); вердикт риска (BD-2). Эти области размечены, но данных не показывают.</div>
+    </div>
+
     <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden;margin-bottom:12px">
       <div class="vox-topbar">
         <div class="vox-topbar__group vox-topbar__brand">VOX TRADER</div>
@@ -484,7 +496,7 @@
           </div>
 
           <div class="vox-widget vox-ticket vox-workspace__col-3">
-            <div class="vox-widget__header"><span class="vox-widget__title">Заявка<span class="vox-widget__context vox-widget__context--instrument">SBER</span></span><span class="vox-env vox-env--live" style="height:18px"><span class="vox-dot"></span>LIVE</span></div>
+            <div class="vox-widget__header"><span class="vox-widget__title">Заявка<span class="vox-widget__context vox-widget__context--instrument">SBER</span></span><span class="vox-env vox-env--live" style="height:18px"><span class="vox-dot"></span>PRODUCTION</span></div>
             <div class="vox-ticket__body">
               <div class="vox-ticket__target is-live">
                 <span class="vox-ticket__target-account">
@@ -507,7 +519,7 @@
                 <div class="vox-ticket__preview-row"><span class="vox-text--caption">Источник</span><span class="vox-inherited vox-inherited--override">заявка</span></div>
                 <div class="vox-ticket__preview-row"><span class="vox-text--caption">Тейк-профит</span><span class="vox-inherited">из настройки счёта: выкл.</span></div>
               </div>
-              <div class="vox-risk vox-risk--safe"><span class="vox-dot"></span><div><div>Проверка риска пройдена</div><div class="vox-risk__reason">экспозиция 14,2 % из 20 % <span class="vox-reason-code">RISK_OK</span></div></div></div>
+              <div class="vox-risk vox-risk--safe"><span class="vox-dot"></span><div><div>Новая экспозиция разрешена</div><div class="vox-risk__reason">рантайм <code class="ref__code">READY</code> · <code class="ref__code">new_exposure_allowed = true</code> · исполнение Vox разрешено для этого счёта</div><div class="vox-risk__reason"><span class="vox-dep">BD-2 · нет контракта риска</span> вердикт риска по заявке (экспозиция, концентрация, дневной лимит) появится, когда риск-модель будет в контракте</div></div></div>
               <div class="vox-ticket__actions">
                 <button class="vox-ticket__action vox-ticket__action--buy vox-live-action" type="button"><span class="vox-ticket__action-label">Купить 10 лотов</span><span class="vox-ticket__action-value">31 840 ₽ · 318,40</span></button>
                 <button class="vox-ticket__action vox-ticket__action--sell vox-live-action" type="button"><span class="vox-ticket__action-label">Продать 10 лотов</span><span class="vox-ticket__action-value">31 836 ₽ · 318,36</span></button>
@@ -648,7 +660,7 @@
               </span>
               <span class="vox-env vox-env--live" style="height:18px">PRODUCTION</span>
             </div>
-            <div class="vox-field-error" style="margin-top:4px"><span class="vox-dot"></span><span>Тикет собран на счёте «ИИС», активный счёт рабочего пространства — «Основной брокерский». Заявка уйдёт на «ИИС» <span class="vox-reason-code">EXEC_TARGET_MISMATCH</span></span></div>
+            <div class="vox-field-error" style="margin-top:4px"><span class="vox-dot"></span><span>Тикет собран на счёте «ИИС», активный счёт рабочего пространства — «Основной брокерский». Заявка уйдёт на «ИИС»</span></div>
             <div class="ref__demo" style="margin-top:6px"><button class="vox-btn vox-btn--secondary" type="button">Перевести тикет на активный счёт</button><button class="vox-btn vox-btn--ghost" type="button">Оставить как есть</button></div>
           </div>
 
@@ -704,7 +716,7 @@
             <span class="vox-env vox-env--sandbox" style="height:18px"><span class="vox-dot"></span>SANDBOX</span>
           </div>
           <div class="vox-ticket__instrument"><span>GAZP · Газпром</span><span class="vox-num">148,02</span></div>
-          <div class="vox-risk vox-risk--blocked"><span class="vox-dot"></span><div><div>Продажа недоступна</div><div class="vox-risk__reason">Нет позиции, короткие сделки по счёту запрещены <span class="vox-reason-code">RISK_NO_SHORT</span></div></div></div>
+          <div class="vox-risk vox-risk--blocked"><span class="vox-dot"></span><div><div>Продажа недоступна</div><div class="vox-risk__reason">Исполнение по этому счёту не разрешено: <code class="ref__code">execution_authorized = false</code> <span class="vox-reason-code">EXECUTION_UNAUTHORIZED</span></div><div class="vox-risk__reason"><span class="vox-dep">BD-2 · нет контракта риска</span> запрет короткой продажи по инструменту — свойство риск-модели, не контракта исполнения</div></div></div>
           <div class="vox-ticket__actions">
             <button class="vox-ticket__action vox-ticket__action--buy" type="button"><span class="vox-ticket__action-label">Купить 5 лотов</span><span class="vox-ticket__action-value">7 403 ₽ · 148,06</span></button>
             <button class="vox-ticket__action vox-ticket__action--sell is-blocked" type="button" aria-disabled="true"><span class="vox-ticket__action-label">Продать</span><span class="vox-ticket__action-note">запрещено по счёту</span></button>
@@ -733,7 +745,7 @@
         <div class="ref__spec-title">Безопасность числового ввода</div>
         <div class="ref__demo" style="flex-direction:column;align-items:stretch;gap:6px">
           <span class="vox-numeric is-invalid"><button class="vox-numeric__step vox-numeric__step--dec" type="button">−</button><span class="vox-numeric__value">13</span><button class="vox-numeric__step vox-numeric__step--inc" type="button">+</button></span>
-          <div class="vox-field-error"><span class="vox-dot"></span><span>Объём кратен лоту 10. Ближайшие допустимые значения — 10 или 20 <span class="vox-reason-code">ORD_LOT_STEP</span></span></div>
+          <div class="vox-field-error"><span class="vox-dot"></span><span>Объём кратен лоту 10. Ближайшие допустимые значения — 10 или 20</span></div>
         </div>
         <div class="ref__note" style="margin-top:10px">Шаг, минимум, максимум и лот приходят из метаданных инструмента. Клавиши ↑/↓ и степперы работают, колесо мыши критичное значение не меняет никогда.</div>
       </div>
@@ -814,7 +826,7 @@
               <span class="vox-badge">режим недоступен</span>
             </div>
             <div class="vox-protect__body">
-              <div class="vox-trailing__unsupported"><span class="vox-dot"></span><div>Провайдер поддерживает трейлинг только в процентах. Абсолютный отступ не отправляется и не эмулируется на клиенте <span class="vox-reason-code">BRK_TRAIL_ABS_UNSUPPORTED</span></div></div>
+              <div class="vox-trailing__unsupported"><span class="vox-dot"></span><div>Провайдер поддерживает трейлинг только в процентах. Абсолютный отступ не отправляется и не эмулируется на клиенте <span class="vox-reason-code">NATIVE_ABSOLUTE_TRAILING_UNSUPPORTED</span></div></div>
               <div class="vox-protect__hint">Неподдерживаемый режим называется прямо. Клиентская эмуляция брокерской защиты запрещена: защита должна выживать при закрытом терминале.</div>
             </div>
           </div>
@@ -875,7 +887,14 @@
       <div class="vox-widget vox-ticket">
         <div class="vox-widget__header"><span class="vox-widget__title">Трейлинг · состояние у брокера</span><span class="vox-trailing__badge">брокерский</span></div>
         <div class="vox-ticket__body">
-          <div class="ref__note">Пять состояний защитной заявки, и все пять приходят от брокера. Терминал не вычисляет уровень, не сдвигает его сам и не переводит заявку из одного состояния в другое по собственной инициативе.</div>
+          <div class="ref__note">Состояние защитной заявки приходит от брокера. Терминал не вычисляет уровень, не сдвигает его сам и не переводит заявку из одного состояния в другое по собственной инициативе.</div>
+          <div class="vox-table" style="margin-bottom:8px"><div class="vox-table__header" style="grid-template-columns:150px 210px minmax(0,1fr)"><span>Операторское слово</span><span>ProtectionEstablishmentState</span><span>Что это значит</span></div>
+          <div class="vox-table__row" style="grid-template-columns:150px 210px minmax(0,1fr)"><span class="vox-row vox-gap-1"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>ACTIVE</span></span><span><code class="ref__code">ACTIVE</code></span><span class="vox-text--dense">заявка живёт у брокера, ответ свежий</span></div>
+          <div class="vox-table__row" style="grid-template-columns:150px 210px minmax(0,1fr)"><span class="vox-row vox-gap-1"><span class="vox-badge vox-badge--warning"><span class="vox-dot"></span>STALE</span></span><span><code class="ref__code">ACTIVE</code></span><span class="vox-text--dense">то же состояние, но ответ брокера старше бюджета свежести — возраст называется явно</span></div>
+          <div class="vox-table__row" style="grid-template-columns:150px 210px minmax(0,1fr)"><span class="vox-row vox-gap-1"><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>RECONCILING</span></span><span><code class="ref__code">UNKNOWN_AFTER_DISPATCH</code></span><span class="vox-text--dense">постановка или замена отправлена, подтверждения нет; далее RECONCILIATION_REQUIRED</span></div>
+          <div class="vox-table__row" style="grid-template-columns:150px 210px minmax(0,1fr)"><span class="vox-row vox-gap-1"><span class="vox-badge vox-badge--info"><span class="vox-dot"></span>TRIGGERED</span></span><span><code class="ref__code">CLOSING_POSITION</code></span><span class="vox-text--dense">стоп сработал и позиция закрывается; затем TERMINAL</span></div>
+          <div class="vox-table__row" style="grid-template-columns:150px 210px minmax(0,1fr)"><span class="vox-row vox-gap-1"><span class="vox-badge vox-badge"><span class="vox-dot"></span>CANCELLED</span></span><span><code class="ref__code">TERMINAL</code></span><span class="vox-text--dense">заявка снята оператором, брокером или закрытием позиции</span></div><div class="vox-table__footer"><span>операторская формулировка слева, значение контракта справа</span><span class="vox-num">5 из 8</span></div></div>
+          <div class="ref__note">Ещё три значения контракта не имеют отдельного операторского слова и показываются как есть: <code class="ref__code">AWAITING_ENTRY</code>, <code class="ref__code">ESTABLISHING</code>, <code class="ref__code">ORPHANED</code>. «Устарело» — не состояние, а возраст последнего ответа брокера (<code class="ref__code">broker_observed_at_unix_ms</code>).</div>
 
           <div class="vox-protect__block vox-protect__block--sl">
             <div class="vox-protect__head">
@@ -908,7 +927,7 @@
                 <div><div class="vox-trailing__state-label">Активация</div><div class="vox-trailing__state-value">при 146,50 ₽</div></div>
                 <div><div class="vox-trailing__state-label">Ответ брокера</div><div class="vox-trailing__state-value">11:38:12 · 3 мин 54 c назад</div></div>
               </div>
-              <div class="vox-stale-bar"><span class="vox-dot"></span>Показан последний известный уровень возрастом 3 мин 54 c. Заявка, вероятно, жива, но текущее значение не подтверждено <span class="vox-reason-code">BRK_PROTECT_STALE</span></div>
+              <div class="vox-stale-bar"><span class="vox-dot"></span>Показан последний известный уровень возрастом 3 мин 54 c. Заявка, вероятно, жива, но текущее значение не подтверждено</div>
               <div class="vox-protect__hint">STALE — это возраст ответа, а не отказ. Уровень не экстраполируется вперёд и не пересчитывается по текущей цене.</div>
             </div>
           </div>
@@ -961,7 +980,7 @@
             </div>
           </div>
           <div class="vox-protect__result"><span class="vox-text--caption">Причина снятия</span><span class="vox-protect__result-value">оператор · 11:58:02</span></div>
-          <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Позиция осталась без защиты</div><div class="vox-risk__reason">Снятие стоп-заявки не закрывает позицию и не восстанавливается само <span class="vox-reason-code">PROTECT_CANCELLED_UNPROTECTED</span></div></div></div>
+          <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Позиция осталась без защиты</div><div class="vox-risk__reason">Снятие стоп-заявки не закрывает позицию и не восстанавливается само</div></div></div>
           <div class="ref__note">CANCELLED охватывает снятие оператором, снятие брокером и снятие при закрытии позиции — причина называется всегда. Отсутствие защиты после снятия — факт, который экран обязан показать, а не молчаливое состояние.</div>
         </div>
       </div>
@@ -982,14 +1001,15 @@
               <span class="ref__note">политика риска · отдельный экран и свои коды причин</span>
             </div>
           </div>
-          <div class="vox-risk vox-risk--blocked"><span class="vox-dot"></span><div><div>Запрошено 12,0 % — превышает ограничение риска</div><div class="vox-risk__reason">Максимально допустимая дистанция трейлинга 8,0 % <span class="vox-reason-code">RISK_TRAIL_MAX</span></div></div></div>
-          <div class="vox-risk vox-risk--resize"><span class="vox-dot"></span><div><div>Бэкенд вернул скорректированное значение: 12,0 % → 8,0 %</div><div class="vox-risk__reason">Показывается решение бэкенда, а не тихое обрезание в браузере <span class="vox-reason-code">RISK_TRAIL_RESIZE</span></div></div></div>
+          <div class="vox-deferred"><div class="vox-deferred__head"><span class="vox-deferred__title">Вердикт ограничителя риска</span><span class="vox-dep">BD-2</span></div><div class="vox-deferred__body">Экран ограничителя описан и остаётся в системе, но решения <code class="ref__code">BLOCKED</code> и <code class="ref__code">RESIZE</code> должен возвращать бэкенд. В репозитории нет ни одного типа риск-модели, поэтому здесь ничего не вычисляется и не показывается как результат проверки.</div><div class="vox-deferred__actions"><button class="vox-btn vox-btn--secondary" type="button" aria-disabled="true">Проверить значение</button></div></div>
+          
           <div class="ref__note">Значение по умолчанию — это не жёсткий лимит. Ограничитель живёт в политике риска, и решение по нему всегда приходит с бэкенда: BLOCKED или RESIZE с явной причиной.</div>
         </div>
       </div>
 
       <div class="ref__spec vox-surface">
         <div class="ref__spec-title">Допустимые сочетания защиты</div>
+        <div class="vox-deferred" style="margin-bottom:8px"><div class="vox-deferred__head"><span class="vox-deferred__title">Значение по умолчанию для счёта</span><span class="vox-dep">BD-9</span></div><div class="vox-deferred__body">Сочетания и возможности провайдера подкреплены (<code class="ref__code">ProtectionPlan</code>, <code class="ref__code">ProtectionCapability</code>). Хранения значения по умолчанию на уровне счёта в контракте нет — форма остаётся отключённой.</div></div>
         <div class="ref__demo" style="flex-direction:column;align-items:stretch;gap:4px">
           <span class="vox-badge">без защиты — если это разрешает политика риска</span>
           <span class="vox-badge"><span class="vox-marker vox-marker--sl">SL</span>только фиксированный стоп</span>
@@ -1069,9 +1089,9 @@
       <div class="ref__spec vox-surface">
         <div class="ref__spec-title">Чем заканчивается сверка</div>
         <div class="ref__demo" style="flex-direction:column;align-items:stretch;gap:6px">
-          <div class="vox-risk vox-risk--safe"><span class="vox-dot"></span><div><div>Заявка подтверждена брокером</div><div class="vox-risk__reason">исполнена 10 лотов по 318,40 ₽ · позиция обновлена <span class="vox-reason-code">RECON_CONFIRMED</span></div></div></div>
-          <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Заявка у брокера не найдена</div><div class="vox-risk__reason">команда не была принята, позиция не изменилась, повтор теперь разрешён <span class="vox-reason-code">RECON_NOT_FOUND</span></div></div></div>
-          <div class="vox-risk vox-risk--unknown"><span class="vox-dot"></span><div><div>Ответа по-прежнему нет</div><div class="vox-risk__reason">сверка продолжается, счёт помечен как несверенный, автоматическое исполнение по нему приостановлено <span class="vox-reason-code">RECON_PENDING</span></div></div></div>
+          <div class="vox-risk vox-risk--safe"><span class="vox-dot"></span><div><div>Заявка подтверждена брокером</div><div class="vox-risk__reason">исполнена 10 лотов по 318,40 ₽ · позиция обновлена <span class="vox-reason-code">RECONCILIATION_COMPLETE</span></div></div></div>
+          <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Заявка у брокера не найдена</div><div class="vox-risk__reason">команда не была принята, позиция не изменилась, повтор теперь разрешён <span class="vox-reason-code">RECONCILIATION_COMPLETE</span></div></div></div>
+          <div class="vox-risk vox-risk--unknown"><span class="vox-dot"></span><div><div>Ответа по-прежнему нет</div><div class="vox-risk__reason">сверка продолжается, счёт помечен как несверенный, автоматическое исполнение по нему приостановлено <span class="vox-reason-code">RECONCILIATION_INCOMPLETE</span></div></div></div>
         </div>
         <div class="ref__note" style="margin-top:10px">Ни одно из этих состояний не окрашивается как отказ. «Нет ответа» и «отказано» — разные факты и разные действия оператора.</div>
       </div>
@@ -1165,7 +1185,7 @@
               <span>SBER</span><span class="vox-text--dense">старая заявка снята, TRAILING_STOP 5,00 % принят</span><span style="padding-left:8px"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>ПРИМЕНЕНО</span></span>
             </div>
             <div class="vox-table__row" style="grid-template-columns:120px 1fr 148px">
-              <span>GAZP</span><span class="vox-text--dense">брокер отклонил: трейлинг недоступен для короткой позиции по этому инструменту <span class="vox-reason-code">BRK_TRAIL_SHORT_UNSUPPORTED</span></span><span style="padding-left:8px"><span class="vox-badge vox-badge--negative"><span class="vox-dot"></span>ОТКЛОНЕНО</span></span>
+              <span>GAZP</span><span class="vox-text--dense">брокер отклонил: трейлинг недоступен для короткой позиции по этому инструменту</span><span style="padding-left:8px"><span class="vox-badge vox-badge--negative"><span class="vox-dot"></span>ОТКЛОНЕНО</span></span>
             </div>
             <div class="vox-table__row is-unknown" style="grid-template-columns:120px 1fr 148px">
               <span>MOEX</span><span class="vox-text--dense">старая заявка снята, подтверждение новой не получено <span class="vox-reason-code">UNKNOWN_AFTER_DISPATCH</span></span><span style="padding-left:8px"><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>СВЕРКА</span></span>
@@ -1178,6 +1198,7 @@
 
       <div class="ref__spec vox-surface">
         <div class="ref__spec-title">Обязательные части действия</div>
+        <div class="vox-deferred" style="margin-bottom:8px"><div class="vox-deferred__head"><span class="vox-deferred__title">Массовое применение</span><span class="vox-dep">BD-10</span></div><div class="vox-deferred__body">В контракте есть только одиночная мутация (<code class="ref__code">MutationKind</code>, <code class="ref__code">MutationRecord</code>). Массовая переустановка защиты — отдельная операция бэкенда, и до неё действие остаётся отключённым.</div></div>
         <div class="ref__rule"><b>Предпросмотр</b> до отправки: ни одной заявки у брокера не изменено.</div>
         <div class="ref__rule" style="margin-top:6px"><b>Количество</b> затронутых позиций и разбивка по типу изменения.</div>
         <div class="ref__rule" style="margin-top:6px"><b>«Было → станет»</b> для каждой позиции в терминах заявок брокера, а не процентов «вообще».</div>
@@ -1275,10 +1296,10 @@
       <div class="ref__spec vox-surface">
         <div class="ref__spec-title">AccountSelector · всегда виден в шелле</div>
         <div class="ref__demo" style="align-items:flex-start;flex-direction:column;gap:8px">
-          <span class="vox-account is-live"><span class="vox-account__broker">Альфа</span><span class="vox-account__sep">/</span><span class="vox-account__label">Основной</span><span class="vox-env vox-env--live" style="height:16px">LIVE</span><span class="ref__code">▾</span></span>
+          <span class="vox-account is-live"><span class="vox-account__broker">Т-Инвест</span><span class="vox-account__sep">/</span><span class="vox-account__label">Основной</span><span class="vox-env vox-env--live" style="height:16px">PRODUCTION</span><span class="ref__code">▾</span></span>
           <span class="vox-account"><span class="vox-account__broker">Т-Инвест</span><span class="vox-account__sep">/</span><span class="vox-account__label">Песочница</span><span class="vox-env vox-env--sandbox" style="height:16px">SANDBOX</span><span class="ref__code">▾</span></span>
-          <span class="vox-account is-degraded"><span class="vox-account__broker">Альфа</span><span class="vox-account__sep">/</span><span class="vox-account__label">ИИС</span><span class="vox-conn vox-conn--degraded"><span class="vox-dot"></span>DEGRADED</span><span class="ref__code">▾</span></span>
-          <span class="vox-account is-unknown"><span class="vox-account__broker">Финам</span><span class="vox-account__sep">/</span><span class="vox-account__label">Резервный</span><span class="vox-conn vox-conn--unknown"><span class="vox-dot"></span>UNKNOWN</span><span class="ref__code">▾</span></span>
+          <span class="vox-account is-degraded"><span class="vox-account__broker">Т-Инвест</span><span class="vox-account__sep">/</span><span class="vox-account__label">ИИС</span><span class="vox-conn vox-conn--degraded"><span class="vox-dot"></span>DEGRADED</span><span class="ref__code">▾</span></span>
+          <span class="vox-account is-unknown" aria-disabled="true"><span class="vox-account__broker">Второй провайдер</span><span class="vox-account__sep">/</span><span class="vox-account__label">недоступен</span><span class="vox-dep">BD-13</span><span class="ref__code">▾</span></span>
         </div>
         <div class="ref__note" style="margin-top:10px">Селектор показывает подключение, счёт и среду. Человеческое имя счёта — обязательно; сырой идентификатор — только в диагностике.</div>
       </div>
@@ -1286,8 +1307,8 @@
       <div class="vox-popover" style="width:100%;max-width:420px">
         <div class="vox-brokers__discovered-head"><span>ПОДКЛЮЧЕНИЕ · СЧЁТ</span><span>СРЕДА · СОСТОЯНИЕ</span></div>
         <div class="vox-account-row is-selected">
-          <span class="vox-account-row__name">Основной<span class="vox-account-row__meta">Альфа · ****4417</span></span>
-          <span class="vox-env vox-env--live" style="height:18px">LIVE</span>
+          <span class="vox-account-row__name">Основной<span class="vox-account-row__meta">Т-Инвест · ****4417</span></span>
+          <span class="vox-env vox-env--live" style="height:18px">PRODUCTION</span>
           <span class="vox-conn vox-conn--ok">OK</span>
           <span class="vox-num vox-num--positive">1 284 730 ₽</span>
         </div>
@@ -1298,16 +1319,14 @@
           <span class="vox-num vox-num--neutral">500 000 ₽</span>
         </div>
         <div class="vox-account-row">
-          <span class="vox-account-row__name">ИИС<span class="vox-account-row__meta">Альфа · ****7702</span></span>
-          <span class="vox-env vox-env--live" style="height:18px">LIVE</span>
+          <span class="vox-account-row__name">ИИС<span class="vox-account-row__meta">Т-Инвест · ****7702</span></span>
+          <span class="vox-env vox-env--live" style="height:18px">PRODUCTION</span>
           <span class="vox-conn vox-conn--expiring">ROTATE</span>
           <span class="vox-num vox-num--neutral">312 004 ₽</span>
         </div>
-        <div class="vox-account-row">
-          <span class="vox-account-row__name">Резервный<span class="vox-account-row__meta">Финам · ****3310</span></span>
-          <span class="vox-env vox-env--paper" style="height:18px">PAPER</span>
-          <span class="vox-conn vox-conn--unknown">UNKNOWN</span>
-          <span class="vox-num vox-num--unknown">— ₽</span>
+        <div class="vox-deferred" style="margin:8px 10px">
+          <div class="vox-deferred__head"><span class="vox-deferred__title">Второй провайдер и среда PAPER</span><span class="vox-dep">BD-13</span></div>
+          <div class="vox-deferred__body"><code class="ref__code">RuntimeScope</code> знает один провайдер (<code class="ref__code">Provider::TInvest</code>) и две среды (<code class="ref__code">SANDBOX</code>, <code class="ref__code">PRODUCTION</code>). Счёт другого провайдера и среда PAPER не показываются и не выбираются, пока их нет в контракте.</div>
         </div>
         <div class="vox-precedence__note">Одно подключение может дать несколько счетов. Токен не равен портфелю, поэтому счета перечисляются отдельно от подключения.</div>
       </div>
@@ -1320,16 +1339,16 @@
       <div class="vox-brokers">
         <div class="vox-brokers__list">
           <div class="vox-brokers__item is-selected">
-            <div class="vox-brokers__item-top"><span>Альфа · рабочее</span><span class="vox-conn vox-conn--ok">OK</span></div>
-            <div class="vox-brokers__item-meta"><span class="vox-env vox-env--live" style="height:16px">LIVE</span><span>2 счёта</span></div>
+            <div class="vox-brokers__item-top"><span>Т-Инвест · рабочее</span><span class="vox-conn vox-conn--ok">OK</span></div>
+            <div class="vox-brokers__item-meta"><span class="vox-env vox-env--live" style="height:16px">PRODUCTION</span><span>2 счёта</span></div>
           </div>
           <div class="vox-brokers__item">
             <div class="vox-brokers__item-top"><span>Т-Инвест · тесты</span><span class="vox-conn vox-conn--ok">OK</span></div>
             <div class="vox-brokers__item-meta"><span class="vox-env vox-env--sandbox" style="height:16px">SANDBOX</span><span>1 счёт</span></div>
           </div>
-          <div class="vox-brokers__item">
-            <div class="vox-brokers__item-top"><span>Финам · резерв</span><span class="vox-conn vox-conn--invalid">INVALID</span></div>
-            <div class="vox-brokers__item-meta"><span class="vox-env vox-env--paper" style="height:16px">PAPER</span><span>счета недоступны</span></div>
+          <div class="vox-brokers__item" aria-disabled="true">
+            <div class="vox-brokers__item-top"><span class="vox-text--disabled">Другой провайдер</span><span class="vox-dep">BD-13</span></div>
+            <div class="vox-brokers__item-meta"><span class="vox-text--disabled">добавление недоступно: в контракте один провайдер</span></div>
           </div>
           <div class="vox-brokers__item" style="border-bottom:0">
             <div class="vox-brokers__item-top"><span class="vox-text--secondary">+ Добавить подключение</span></div>
@@ -1339,9 +1358,9 @@
         <div class="vox-brokers__detail">
           <div class="vox-brokers__section">
             <div class="vox-brokers__section-title">Подключение</div>
-            <div class="vox-brokers__field"><span class="vox-brokers__field-label">Брокер</span><span class="vox-select" style="width:200px">Альфа-Инвестиции<span class="ref__code">▾</span></span></div>
+            <div class="vox-brokers__field"><span class="vox-brokers__field-label">Брокер</span><span class="vox-select" style="width:200px">Т-Инвест<span class="ref__code">▾</span></span></div>
             <div class="vox-brokers__field"><span class="vox-brokers__field-label">Среда</span><span class="vox-segmented"><span class="vox-segmented__item is-selected">LIVE</span><span class="vox-segmented__item">SANDBOX</span><span class="vox-segmented__item">PAPER</span></span></div>
-            <div class="vox-brokers__field"><span class="vox-brokers__field-label">Название</span><span class="vox-input" style="width:220px"><input class="vox-input__field" value="Альфа · рабочее"></span></div>
+            <div class="vox-brokers__field"><span class="vox-brokers__field-label">Название</span><span class="vox-input" style="width:220px"><input class="vox-input__field" value="Т-Инвест · рабочее"></span></div>
           </div>
 
           <div class="vox-brokers__section">
@@ -1361,7 +1380,7 @@
             <div class="vox-secret" style="max-width:520px">
               <div class="vox-secret__field" style="border-color:var(--vox-border-strong)"><span class="vox-spinner"></span><span class="vox-secret__note" style="margin:0">Проверка подключения и прав на исполнение…</span></div>
             </div>
-            <div class="vox-field-error"><span class="vox-dot"></span><span>Токен отклонён брокером: нет разрешения на исполнение заявок <span class="vox-reason-code">BRK_TOKEN_NO_TRADE_SCOPE</span></span></div>
+            <div class="vox-field-error"><span class="vox-dot"></span><span>Токен отклонён брокером: нет разрешения на исполнение заявок <span class="vox-reason-code">CREDENTIAL_REJECTED</span></span></div>
           </div>
 
           <div class="vox-brokers__section">
@@ -1370,13 +1389,13 @@
               <div class="vox-brokers__discovered-head"><span>СЧЁТ · ИМЯ ДЛЯ ИНТЕРФЕЙСА</span><span>СРЕДА · ДОСТУП</span></div>
               <div class="vox-account-row">
                 <span class="vox-account-row__name">Основной<span class="vox-account-row__meta">брокерский · ****4417</span></span>
-                <span class="vox-env vox-env--live" style="height:18px">LIVE</span>
+                <span class="vox-env vox-env--live" style="height:18px">PRODUCTION</span>
                 <span class="vox-conn vox-conn--ok">ИСПОЛНЕНИЕ</span>
                 <span class="vox-text--caption">по умолчанию</span>
               </div>
               <div class="vox-account-row">
                 <span class="vox-account-row__name">ИИС<span class="vox-account-row__meta">ИИС · ****7702</span></span>
-                <span class="vox-env vox-env--live" style="height:18px">LIVE</span>
+                <span class="vox-env vox-env--live" style="height:18px">PRODUCTION</span>
                 <span class="vox-conn vox-conn--degraded">ТОЛЬКО ЧТЕНИЕ</span>
                 <span class="vox-text--caption">исполнение выключено</span>
               </div>
@@ -1392,27 +1411,28 @@
         <div class="ref__spec-title">Словарь состояний подключения</div>
         <div class="ref__demo" style="gap:6px">
           <span class="vox-conn vox-conn--ok"><span class="vox-dot"></span>CONNECTED</span>
-          <span class="vox-conn vox-conn--validating"><span class="vox-spinner"></span>VALIDATING</span>
-          <span class="vox-conn vox-conn--reconnecting"><span class="vox-dot"></span>RECONNECTING</span>
+          <span class="vox-conn vox-conn--reconnecting"><span class="vox-dot"></span>CONNECTING</span>
           <span class="vox-conn vox-conn--degraded"><span class="vox-dot"></span>DEGRADED</span>
-          <span class="vox-conn vox-conn--invalid"><span class="vox-dot"></span>INVALID_CREDENTIAL</span>
-          <span class="vox-conn vox-conn--revoked"><span class="vox-dot"></span>REVOKED</span>
-          <span class="vox-conn vox-conn--scope"><span class="vox-dot"></span>PERMISSION_LIMITED</span>
-          <span class="vox-conn vox-conn--expiring"><span class="vox-dot"></span>ROTATE</span>
-          <span class="vox-conn vox-conn--provider"><span class="vox-dot"></span>PROVIDER_UNAVAILABLE</span>
-          <span class="vox-conn vox-conn--disabled"><span class="vox-dot"></span>DISABLED</span>
+          <span class="vox-conn vox-conn--invalid"><span class="vox-dot"></span>CREDENTIAL_REJECTED</span>
+          <span class="vox-conn vox-conn--scope"><span class="vox-dot"></span>EXECUTION_UNAUTHORIZED</span>
+          <span class="vox-conn vox-conn--provider"><span class="vox-dot"></span>REQUIRED_READ_UNAVAILABLE</span>
+          <span class="vox-conn vox-conn--disabled"><span class="vox-dot"></span>ACCOUNT_UNAVAILABLE</span>
           <span class="vox-conn vox-conn--unknown"><span class="vox-dot"></span>UNKNOWN</span>
+          <span class="vox-conn vox-conn--validating" aria-disabled="true"><span class="vox-dot"></span>VALIDATING</span>
+          <span class="vox-conn vox-conn--revoked" aria-disabled="true"><span class="vox-dot"></span>REVOKED</span>
+          <span class="vox-conn vox-conn--expiring" aria-disabled="true"><span class="vox-dot"></span>ROTATE</span>
+          <span class="vox-dep">BD-5 · последние три без контракта</span>
         </div>
-        <div class="ref__note" style="margin-top:10px">Каждое состояние — свой смысл, своё действие и свой код причины. Они не сворачиваются в общую красную «Ошибку»: отозванный токен, урезанные права и недоступность провайдера требуют разных действий оператора.</div>
+        <div class="ref__note" style="margin-top:10px">Первые восемь — значения контракта: <code class="ref__code">ReasonCode</code>, <code class="ref__code">StreamState</code> и <code class="ref__code">BrokerResultClass</code>. Они не сворачиваются в общую красную «Ошибку»: отклонённый токен, запрет исполнения и недоступность чтения требуют разных действий оператора. Отзыв токена, его проверка и ротация — отдельный жизненный цикл учётных данных, которого в контракте пока нет.</div>
       </div>
 
       <div class="ref__spec vox-surface">
         <div class="ref__spec-title">Причина словами, код — вспомогательный</div>
         <div class="ref__demo" style="flex-direction:column;align-items:stretch;gap:6px">
-          <div class="vox-field-error"><span class="vox-dot"></span><span>Токен отозван владельцем в личном кабинете брокера. Нужен новый токен <span class="vox-reason-code">BRK_TOKEN_REVOKED</span></span></div>
-          <div class="vox-field-error"><span class="vox-dot"></span><span>У токена нет права на исполнение заявок: доступно только чтение портфеля <span class="vox-reason-code">BRK_TOKEN_NO_TRADE_SCOPE</span></span></div>
-          <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Провайдер недоступен</div><div class="vox-risk__reason">Сторона брокера не отвечает. Токен и счета не при чём, повторная проверка через 30 c <span class="vox-reason-code">BRK_PROVIDER_UNAVAILABLE</span></div></div></div>
-          <div class="vox-risk vox-risk--unknown"><span class="vox-dot"></span><div><div>Состояние подключения неизвестно</div><div class="vox-risk__reason">Последняя успешная проверка 14 мин назад; счета показаны по последним известным данным <span class="vox-reason-code">BRK_HEALTH_UNKNOWN</span></div></div></div>
+          <div class="vox-field-error"><span class="vox-dot"></span><span>Токен отозван владельцем в личном кабинете брокера. Нужен новый токен <span class="vox-reason-code">CREDENTIAL_REJECTED</span></span></div>
+          <div class="vox-field-error"><span class="vox-dot"></span><span>У токена нет права на исполнение заявок: доступно только чтение портфеля <span class="vox-reason-code">CREDENTIAL_REJECTED</span></span></div>
+          <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Провайдер недоступен</div><div class="vox-risk__reason">Сторона брокера не отвечает. Токен и счета не при чём, повторная проверка через 30 c <span class="vox-reason-code">REQUIRED_READ_UNAVAILABLE</span></div></div></div>
+          <div class="vox-risk vox-risk--unknown"><span class="vox-dot"></span><div><div>Состояние подключения неизвестно</div><div class="vox-risk__reason">Последняя успешная проверка 14 мин назад; счета показаны по последним известным данным <span class="vox-reason-code">REQUIRED_READ_UNAVAILABLE</span></div></div></div>
         </div>
         <div class="ref__note" style="margin-top:10px">Сырой ответ провайдера остаётся в диагностике. В обычном интерфейсе оператор читает предложение на русском и код причины как ссылку на него.</div>
       </div>
@@ -1494,7 +1514,7 @@
             <div class="vox-secret__field"><span class="vox-secret__fingerprint">sha256:1b7d…4a</span><span class="vox-conn vox-conn--ok">CONNECTED</span></div>
             <div class="vox-secret__note">Шаг 3. Токен заменён. Показываются отпечаток, срок действия и действие «Заменить токен». Привязка счетов и защита позиций при замене не сбрасываются.</div>
           </div>
-          <div class="vox-field-error"><span class="vox-dot"></span><span>Вставленное значение не похоже на токен этого брокера. Полный секрет в сообщении не повторяется <span class="vox-reason-code">BRK_TOKEN_MALFORMED</span></span></div>
+          <div class="vox-field-error"><span class="vox-dot"></span><span>Вставленное значение не похоже на токен этого брокера. Полный секрет в сообщении не повторяется <span class="vox-reason-code">CREDENTIAL_REJECTED</span></span></div>
         </div>
       </div>
 
@@ -1519,6 +1539,12 @@
   <section class="ref__sec" id="markets">
     <div class="ref__sec-head"><span class="ref__num">16</span><h2 class="vox-text--title">Рынки</h2>
       <span class="ref__note">Наблюдение и выбор инструмента. Экран не отправляет заявки: отсюда инструмент уходит в контекст рабочего пространства, а не в исполнение.</span></div>
+
+    <div class="vox-deferred" style="margin-bottom:12px">
+      <div class="vox-deferred__head"><span class="vox-deferred__title">Рыночные данные пока без контракта</span><span class="vox-dep">BD-3</span></div>
+      <div class="vox-deferred__body">Подкреплено: выбор инструмента и его идентичность (<code class="ref__code">InstrumentIdentity</code>: ticker, class_code, uid).</div>
+      <div class="vox-deferred__body">Не подкреплено: цена, изменение, спред, объём, статус сессии и поток котировок. В <code class="ref__code">vox-runtime</code> нет ни одной модели чтения рыночных данных.</div>
+    </div>
 
     <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
       <div class="vox-topbar" style="height:32px;flex:0 0 32px">
@@ -1554,7 +1580,7 @@
               <div class="vox-table__footer"><span>12 инструментов · щелчок меняет инструмент связанных виджетов</span><span class="vox-num">обновлено 11:42:06</span></div>
             </div>
           </div>
-          <div class="vox-stale-bar"><span class="vox-dot"></span>Поток котировок по LKOH молчит 42 c. Показаны последние известные значения, статус — UNKNOWN, а не ошибка <span class="vox-reason-code">MD_STREAM_SILENT</span></div>
+          <div class="vox-stale-bar"><span class="vox-dot"></span>Поток котировок по LKOH молчит 42 c. Показаны последние известные значения, статус — UNKNOWN, а не ошибка <span class="vox-reason-code">STREAM_GAP</span></div>
         </div>
 
         <div class="vox-widget vox-workspace__col-4">
@@ -1588,6 +1614,12 @@
   <section class="ref__sec" id="portfolio">
     <div class="ref__sec-head"><span class="ref__num">17</span><h2 class="vox-text--title">Портфель</h2>
       <span class="ref__note">Позиции, экспозиция, лимиты, операции и журнал событий — всё в разрезе одного счёта исполнения. Смена активного счёта меняет весь экран атомарно.</span></div>
+
+    <div class="vox-deferred" style="margin-bottom:12px">
+      <div class="vox-deferred__head"><span class="vox-deferred__title">Портфель показывает только валютные остатки</span><span class="vox-dep">BD-4 · BD-3</span></div>
+      <div class="vox-deferred__body">Подкреплено: <code class="ref__code">PortfolioFact.currencies</code> (код валюты → сумма строкой), позиции и их количество, признаки active/terminal у заявок и стоп-заявок, курсор операций.</div>
+      <div class="vox-deferred__body">Не подкреплено: стоимость портфеля, свободные средства, реализованный и нереализованный P&amp;L, экспозиция, маржа, суммы операций и уровни защиты по позиции. <code class="ref__code">OperationFact</code> хранит идентичность операции, а не её сумму.</div>
+    </div>
 
     <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
       <div class="vox-topbar" style="height:32px;flex:0 0 32px">
@@ -1647,7 +1679,7 @@
               <div class="vox-limit__track"><div class="vox-limit__fill vox-limit__fill--blocked" style="width:92%"></div></div>
               <span class="ref__note">новые позиции по этому счёту будут отклонены риском</span>
             </div>
-            <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Приближение к дневному лимиту</div><div class="vox-risk__reason">осталось 16 000 ₽ до остановки торговли <span class="vox-reason-code">RISK_DAY_LOSS_NEAR</span></div></div></div>
+            <div class="vox-deferred"><div class="vox-deferred__head"><span class="vox-deferred__title">Лимиты и концентрация</span><span class="vox-dep">BD-2</span></div><div class="vox-deferred__body">Дневной лимит убытка, концентрация и маржинальная нагрузка требуют риск-модели. Пока её нет в контракте, портфель показывает только то, что отдаёт <code class="ref__code">PortfolioFact.currencies</code>.</div></div>
           </div>
         </div>
 
@@ -1693,6 +1725,12 @@
     <div class="ref__sec-head"><span class="ref__num">18</span><h2 class="vox-text--title">Стратегии</h2>
       <span class="ref__note">Стратегия привязана к конкретному счёту и среде и не может выдать себе право на исполнение. Её политика защиты — второй уровень приоритета, ниже заявки и выше значения по умолчанию для счёта.</span></div>
 
+    <div class="vox-deferred" style="margin-bottom:12px">
+      <div class="vox-deferred__head"><span class="vox-deferred__title">Контрактов стратегий нет</span><span class="vox-dep">BD-6</span></div>
+      <div class="vox-deferred__body">Подкреплено: привязка счёта и среды как <code class="ref__code">RuntimeScope</code>, разрешение исполнения (<code class="ref__code">execution_authorized</code>).</div>
+      <div class="vox-deferred__body">Не подкреплено: реестр стратегий, режим работы, расписание, сигналы, метрики и журнал стратегии.</div>
+    </div>
+
     <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
       <div class="vox-topbar" style="height:32px;flex:0 0 32px">
         <div class="vox-topbar__group"><span class="vox-text--label">Стратегии</span></div>
@@ -1715,7 +1753,7 @@
                 <span>Возврат к среднему</span><span class="vox-text--caption">Песочница · SANDBOX</span><span class="vox-text--dense">фикс. −3,00 %</span><span style="padding-left:4px"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>АВТОНОМНЫЙ</span></span>
               </div>
               <div class="vox-table__row" style="grid-template-columns:150px 128px minmax(0,1fr) minmax(148px,auto)">
-                <span>Календарный спред</span><span class="vox-text--caption">ИИС · PRODUCTION</span><span class="vox-text--dense vox-text--tertiary">своей нет · берётся счёт</span><span style="padding-left:4px"><span class="vox-badge"><span class="vox-dot"></span>ОСТАНОВЛЕНА</span><span class="vox-reason-code">STR_ACCOUNT_READ_ONLY</span></span>
+                <span>Календарный спред</span><span class="vox-text--caption">ИИС · PRODUCTION</span><span class="vox-text--dense vox-text--tertiary">своей нет · берётся счёт</span><span style="padding-left:4px"><span class="vox-badge"><span class="vox-dot"></span>ОСТАНОВЛЕНА</span><span class="vox-reason-code">ACCOUNT_UNAVAILABLE</span></span>
               </div>
               <div class="vox-table__footer"><span>привязка к счёту явная · «последний использованный счёт» не применяется</span><span class="vox-num">3 стратегии</span></div>
             </div>
@@ -1752,6 +1790,12 @@
     <div class="ref__sec-head"><span class="ref__num">19</span><h2 class="vox-text--title">Центр решений</h2>
       <span class="ref__note">Кандидаты и намерения с доказательствами, риск-вердиктом и состоянием согласования. Пустой экран объясняет, почему кандидатов нет, и не остаётся мёртвой панелью.</span></div>
 
+    <div class="vox-deferred" style="margin-bottom:12px">
+      <div class="vox-deferred__head"><span class="vox-deferred__title">Контрактов очереди решений нет</span><span class="vox-dep">BD-6</span></div>
+      <div class="vox-deferred__body">Подкреплено: цель исполнения кандидата и правило, что согласование — обычная заявка с обычной авторизацией.</div>
+      <div class="vox-deferred__body">Не подкреплено: сами кандидаты, уверенность, обоснование, срок жизни и журнал согласований.</div>
+    </div>
+
     <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
       <div class="vox-topbar" style="height:32px;flex:0 0 32px">
         <div class="vox-topbar__group"><span class="vox-text--label">Решения</span></div>
@@ -1776,7 +1820,7 @@
               <div class="ref__spec-title">Доказательства</div>
               <div class="ref__note">Пробой уровня 316,80 на объёме ×2,4 · подтверждение в стакане · корреляция с индексом 0,74 · последняя проверка модели 11:41:58.</div>
             </div>
-            <div class="vox-risk vox-risk--warning"><span class="vox-dot"></span><div><div>Разрешено с оговоркой</div><div class="vox-risk__reason">концентрация вырастет до 18 % при пределе 20 % <span class="vox-reason-code">RISK_CONC_NEAR</span></div></div></div>
+            <div class="vox-deferred"><div class="vox-deferred__head"><span class="vox-deferred__title">Риск-вердикт кандидата</span><span class="vox-dep">BD-2</span></div><div class="vox-deferred__body">Кандидат не согласуется, пока вердикт риска не приходит с бэкенда. Кнопка согласования остаётся видимой и отключённой.</div></div>
             <div class="vox-ticket__actions">
               <button class="vox-ticket__action vox-ticket__action--buy vox-live-action" type="button"><span class="vox-ticket__action-label">Согласовать и купить</span><span class="vox-ticket__action-value">31 840 ₽ · 318,40</span></button>
               <button class="vox-btn vox-btn--secondary" type="button">Отклонить</button>
@@ -1817,10 +1861,16 @@
     <div class="ref__sec-head"><span class="ref__num">20</span><h2 class="vox-text--title">Исследования</h2>
       <span class="ref__note">Историческое исследование и бэктесты. Экран не отправляет заявки на реальный счёт: среда BACKTEST видна постоянно, чтобы результат прогона нельзя было принять за состояние портфеля.</span></div>
 
+    <div class="vox-deferred" style="margin-bottom:12px">
+      <div class="vox-deferred__head"><span class="vox-deferred__title">Контрактов исследования нет</span><span class="vox-dep">BD-8 · BD-13</span></div>
+      <div class="vox-deferred__body">Подкреплено: модель защиты, которую прогон обязан повторять один в один с боевой.</div>
+      <div class="vox-deferred__body">Не подкреплено: наборы данных, запуск прогона, метрики, сравнение и логи. Среды <code class="ref__code">BACKTEST</code> в <code class="ref__code">RuntimeEnvironment</code> тоже нет.</div>
+    </div>
+
     <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
       <div class="vox-topbar" style="height:32px;flex:0 0 32px">
         <div class="vox-topbar__group"><span class="vox-text--label">Исследования</span></div>
-        <div class="vox-topbar__group"><span class="vox-env vox-env--backtest" style="height:18px"><span class="vox-dot"></span>BACKTEST</span></div>
+        <div class="vox-topbar__group"><span class="vox-env vox-env--backtest" style="height:18px" aria-disabled="true"><span class="vox-dot"></span>BACKTEST</span><span class="vox-dep">BD-8</span></div>
         <div class="vox-topbar__group" style="border-right:0;margin-left:auto"><span class="vox-text--caption">данные: MOEX · 2019-01-01 … 2026-08-01</span></div>
       </div>
       <div class="vox-workspace">
@@ -1859,7 +1909,7 @@
           <div class="vox-widget__header"><span class="vox-widget__title">Прогон прерван</span></div>
           <div class="vox-state-note">
             <span class="vox-state-note__title">Не хватает исторических данных</span>
-            <span>По инструменту SiZ5 нет свечей за 2019–2021. Прогон остановлен на 2022-01-01, частичный результат не показывается как полный <span class="vox-reason-code">RSH_HISTORY_GAP</span>.</span>
+            <span>По инструменту SiZ5 нет свечей за 2019–2021. Прогон остановлен на 2022-01-01, частичный результат не показывается как полный <span class="vox-dep">BD-8</span>.</span>
             <div class="ref__demo"><button class="vox-btn vox-btn--secondary" type="button">Сократить период</button><button class="vox-btn vox-btn--ghost" type="button">Диагностика данных</button></div>
           </div>
         </div>
@@ -1872,6 +1922,12 @@
   <section class="ref__sec" id="ml">
     <div class="ref__sec-head"><span class="ref__num">21</span><h2 class="vox-text--title">ML / Модели</h2>
       <span class="ref__note">Отдельное рабочее пространство, а не раздел настроек: наборы данных, обучение, реестр, валидация и продвижение — операционные процессы. Продвижение в бой не даёт права на исполнение и не обходит авторизацию.</span></div>
+
+    <div class="vox-deferred" style="margin-bottom:12px">
+      <div class="vox-deferred__head"><span class="vox-deferred__title">Контрактов моделей нет</span><span class="vox-dep">BD-7</span></div>
+      <div class="vox-deferred__body">Подкреплено: правило, что продвижение модели не даёт права на исполнение.</div>
+      <div class="vox-deferred__body">Не подкреплено: реестр моделей, версии, обучение, наборы данных, метрики валидации, продвижение и откат.</div>
+    </div>
 
     <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
       <div class="vox-topbar" style="height:32px;flex:0 0 32px">
@@ -1891,7 +1947,7 @@
               <div class="vox-table__row is-selected" style="grid-template-columns:170px 84px 104px 104px 1fr"><span>impulse-classifier</span><span class="vox-num" style="text-align:left">v7</span><span class="vox-num">0,74</span><span class="vox-num vox-num--positive">0,03</span><span style="padding-left:8px"><span class="vox-badge vox-badge--positive"><span class="vox-dot"></span>В БОЮ</span></span></div>
               <div class="vox-table__row" style="grid-template-columns:170px 84px 104px 104px 1fr"><span>impulse-classifier</span><span class="vox-num" style="text-align:left">v8</span><span class="vox-num">0,79</span><span class="vox-num">0,05</span><span style="padding-left:8px"><span class="vox-badge vox-badge--info"><span class="vox-dot"></span>ВАЛИДАЦИЯ</span></span></div>
               <div class="vox-table__row" style="grid-template-columns:170px 84px 104px 104px 1fr"><span>meanrev-regressor</span><span class="vox-num" style="text-align:left">v3</span><span class="vox-num">0,61</span><span class="vox-num vox-num--negative">0,21</span><span style="padding-left:8px"><span class="vox-badge vox-badge--warning"><span class="vox-dot"></span>ДРЕЙФ</span></span></div>
-              <div class="vox-table__row is-unknown" style="grid-template-columns:170px 84px 104px 104px 1fr"><span>vol-forecast</span><span class="vox-num" style="text-align:left">v1</span><span class="vox-num vox-num--unknown">—</span><span class="vox-num vox-num--unknown">—</span><span style="padding-left:8px"><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>МЕТРИК НЕТ</span><span class="vox-reason-code">ML_METRICS_MISSING</span></span></div>
+              <div class="vox-table__row is-unknown" style="grid-template-columns:170px 84px 104px 104px 1fr"><span>vol-forecast</span><span class="vox-num" style="text-align:left">v1</span><span class="vox-num vox-num--unknown">—</span><span class="vox-num vox-num--unknown">—</span><span style="padding-left:8px"><span class="vox-badge vox-badge--unknown"><span class="vox-dot"></span>МЕТРИК НЕТ</span><span class="vox-dep">BD-7</span></span></div>
               <div class="vox-table__footer"><span>«метрик нет» — это UNKNOWN, а не провал валидации</span><span class="vox-num">4 модели</span></div>
             </div>
           </div>
@@ -1934,6 +1990,12 @@
     <div class="ref__sec-head"><span class="ref__num">22</span><h2 class="vox-text--title">Система</h2>
       <span class="ref__note">Диагностика рантайма, аварийная остановка, аудит и права. Здесь живут сырые технические подробности, которых нет в обычном интерфейсе.</span></div>
 
+    <div class="vox-deferred" style="margin-bottom:12px">
+      <div class="vox-deferred__head"><span class="vox-deferred__title">Диагностика частично подкреплена</span><span class="vox-dep">BD-12</span></div>
+      <div class="vox-deferred__body">Подкреплено: состояние рантайма и причина (<code class="ref__code">RuntimeState</code>, <code class="ref__code">ReasonCode</code>), здоровье потоков (<code class="ref__code">StreamHealth</code>), очередь сверки и счётчик нерешённых (<code class="ref__code">unresolved_unknown_count</code>), признак персистентности, аудит (<code class="ref__code">RuntimeAuditRecord</code>).</div>
+      <div class="vox-deferred__body">Не подкреплено: версия и обновления приложения, фоновые задания, роли и права оператора.</div>
+    </div>
+
     <div class="vox-surface vox-surface--flat" style="border-radius:var(--vox-radius-md);overflow:hidden">
       <div class="vox-topbar" style="height:32px;flex:0 0 32px">
         <div class="vox-topbar__group"><span class="vox-text--label">Система</span></div>
@@ -1966,7 +2028,7 @@
             </div>
             <button class="vox-exec-halt" type="button"><span class="vox-dot"></span>Остановить торговлю немедленно (HALTED)</button>
             <div class="ref__note">Одно нажатие, без ввода слова. Останавливаются новые заявки; отмена заявок и выход из позиций остаются доступными. Уже принятые брокером стоп-заявки продолжают жить у брокера — экран говорит об этом прямо.</div>
-            <div class="vox-risk vox-risk--blocked"><span class="vox-dot"></span><div><div>Состояние HALTED</div><div class="vox-risk__reason">новые заявки не принимаются ни вручную, ни стратегиями <span class="vox-reason-code">RUNTIME_HALTED</span></div></div></div>
+            <div class="vox-risk vox-risk--blocked"><span class="vox-dot"></span><div><div>Состояние HALTED</div><div class="vox-risk__reason">новые заявки не принимаются ни вручную, ни стратегиями <span class="vox-reason-code">EXECUTION_UNAUTHORIZED</span></div></div></div>
           </div>
         </div>
 

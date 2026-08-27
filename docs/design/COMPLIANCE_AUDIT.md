@@ -11,6 +11,9 @@ Status values:
 - **Deferred** — the issue itself marks it optional or a non-goal; deliberately absent.
 - **Outside artefact** — belongs to application code or verification, not to a design
   reference.
+- **Deferred (BD-n)** — the capability is designed and rendered, but disabled and tagged
+  with its backend dependency, because no contract backs it. See
+  `BACKEND_CONTRACTS.md` and `BACKEND_DEPENDENCY_SPEC.md`.
 
 Sections of the rendered reference:
 
@@ -51,24 +54,25 @@ Sections of the rendered reference:
 | Widget context model | linked vs pinned, context named in header | §8, §9 (chart linked, tape pinned) | Represented |
 | Workspace model | 12 columns, drag by header, resize step, presets, persistence | §9 (+ widget size catalogue) | Represented |
 | Responsive validation 1280/1440/1920 | | Verified by rendering — see section 5 | Represented |
-| Canonical Order Ticket | instrument, target, type, quantity, price, estimates, protection, risk, dual actions | §9, §10 | Represented |
+| Canonical Order Ticket | instrument, target, type, quantity, price, estimates, protection, risk, dual actions | §9, §10 | Represented; price/estimates **Deferred (BD-3, BD-4)**, risk verdict **Deferred (BD-2)** |
 | Dual actions with size/value; blocked side visible | | §9, §10 | Represented |
 | Keyboard-first, no bypass of confirmations | | §9 hint, §13/§14 typed confirmations | Represented |
 | Protection combinations | none / fixed / trailing / TP / fixed+TP / trailing+TP / stop-limit | §11 combinations matrix | Represented |
 | Stop Loss modes, trailing native only | | §11 | Represented |
-| Trailing runtime state | broker-reported state and levels | §11 `ACTIVE` / `STALE` / `RECONCILING` / `TRIGGERED` / `CANCELLED` | Represented |
+| Protection runtime state | broker-reported state and levels | §11 renders `ProtectionEstablishmentState` with the operator vocabulary mapped onto it; stale is the age of the last broker answer | Represented |
 | High/low-water semantics, never widens | | §11 long and short blocks | Represented |
 | Take Profit independent | | §11 | Represented |
 | Account/portfolio protection defaults | mode, distance, TP, applicability | §11 policy block | Represented |
 | Protection precedence + source | order > strategy > account default, source shown | §11 precedence, §9/§10 source badge, §18 strategy view | Represented |
 | Default ≠ risk guardrail | | §11 guardrail block, `BLOCKED` and `RESIZE` | Represented |
 | Existing positions & bulk updates | preview, count, before/after, consequences, confirmation, result | §13 | Represented |
-| Risk / runtime / connection vocabularies | | §5, §11, §12, §15 | Represented |
+| Runtime / connection vocabularies | | §5, §12, §15 — all eight `RuntimeState` values, contract-only connection states | Represented |
+| Risk vocabulary and verdict | `SAFE/WARNING/BLOCKED/UNKNOWN/RESIZE` | §5 vocabulary kept; verdict, guardrails, day loss and concentration render disabled | **Deferred (BD-2)** — no risk type exists in the repository |
 | Live execution controls | credential ≠ authorization, off by default, high-friction on, fast halt, audit | §14, §22 | Represented |
 | RBAC-aware frontend | disabled-and-explained, 403 leaves screen coherent | §14, §22 | Represented |
 | Chart and event markers | vocabulary, tooltips, grouping, price lines | §6, §9 | Represented |
 | Marker geometry on the candle | below/above/adjacent placement rules | — | Deferred (no chart engine — explicit #18 non-goal) |
-| Tables and streaming data | compact rows, tabular numerics, stable widths, all states | §7, §9, §16–§22 | Represented |
+| Tables and streaming data | compact rows, tabular numerics, stable widths, all states | §7, §9, §16–§22 | Represented; the *economics* in those tables **Deferred (BD-3, BD-4)** — `OrderFact` has no price or quantity, `OperationFact` no amount, `StopFact` no level |
 | Numeric input safety | metadata-driven, wheel never changes value | §4, §10 | Represented |
 | Instrument picker | one shared picker, no raw ids | §10, §16 | Represented |
 | Component inventory | 25 named components/patterns | `COMPONENT_SPEC.md`, all demonstrated in the reference | Represented |
@@ -125,7 +129,19 @@ refused or unknown, and use tabular numerals for money.
 | 18 | Component Design DoD | Represented (`COMPONENT_SPEC.md`) |
 | 19 | Screen/Reference DoD before leaving draft | Represented; the two outstanding items are listed below |
 
-## 4. Outstanding
+## 4. Contract conformance
+
+Every screen now states, at its head, which of its data the contracts back. Nine reason
+codes remain in the reference and all nine are canonical values from `ReasonCode` or
+`ProtectionCapabilityError`. Environments are `SANDBOX`/`PRODUCTION` only; the single
+`Provider` variant is used throughout; the runtime chip carries all eight states.
+
+Deferred regions and their dependencies: BD-2 risk · BD-3 market data · BD-4 valuation and
+P&L · BD-5 credential lifecycle and RBAC · BD-7 models · BD-8 research · BD-9 protection
+defaults · BD-10 bulk migration · BD-11 aggregate accounts · BD-12 updates and jobs ·
+BD-13 second provider and PAPER/BACKTEST.
+
+## 5. Outstanding
 
 1. **On-candle marker geometry** (`B`/`TP` below, `S`/`SL` above, `F` adjacent, `D`/`E`
    offset) cannot be demonstrated while the chart region is a placeholder. The letter
@@ -139,7 +155,7 @@ refused or unknown, and use tabular numerals for money.
 
 Items 1 and 2 are scoped out by issue #18 itself. Item 3 is application code.
 
-## 5. Verification matrix
+## 6. Verification matrix
 
 Rendered in Chromium at each viewport width with `data-density` switched on the app root,
 measuring page overflow, elements past the viewport, clipped content, control geometry and

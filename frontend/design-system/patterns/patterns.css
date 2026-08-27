@@ -388,6 +388,31 @@
 }
 .vox-brokers__actions { display: flex; align-items: center; gap: var(--vox-space-1); }
 
+/* ---------- Deferred capability ----------
+   A region whose data or action has no backend contract yet. It is rendered, named and
+   disabled, and it carries the tracked dependency id from docs/design/BACKEND_CONTRACTS.md.
+   Simulating the missing data in the browser is prohibited: an empty, honest region beats
+   a plausible lie. Deferred is not an error state and never borrows the negative semantic. */
+.vox-deferred {
+  display: flex; flex-direction: column; gap: var(--vox-space-2); padding: 10px;
+  border-radius: var(--vox-radius-sm);
+  background: var(--vox-unknown-surface-subtle);
+  border: 1px dashed var(--vox-border-strong);
+}
+.vox-deferred__head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vox-space-2); }
+.vox-deferred__title { font-size: var(--vox-text-12); font-weight: var(--vox-weight-medium); color: var(--vox-text-secondary); }
+.vox-deferred__body { font-size: var(--vox-text-11); color: var(--vox-text-tertiary); line-height: 1.5; }
+/* The tracked backend dependency. Mono, so it reads as an identifier, not as prose. */
+.vox-dep {
+  height: 18px; display: inline-flex; align-items: center; gap: 4px; padding: 0 6px;
+  border-radius: var(--vox-radius-xs); background: var(--vox-bg-surface-hover);
+  border: 1px solid var(--vox-border-strong);
+  font-family: var(--vox-font-mono); font-size: 10px; letter-spacing: 0.06em;
+  color: var(--vox-text-tertiary); white-space: nowrap;
+}
+/* A control that exists in the design but cannot be executed yet. */
+.vox-deferred__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vox-space-1); }
+
 /* ---------- Live execution authorization ----------
    A broker token that permits trading does NOT enable Vox live execution.
    The two facts are separate objects on screen and separate policy states.

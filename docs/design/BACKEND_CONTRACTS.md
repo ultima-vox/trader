@@ -177,7 +177,35 @@ must be corrected or shown as an explicitly deferred capability — not simulate
 | BD-9 | Protection defaults | account-scoped default protection policy storage | #10 |
 | BD-10 | Bulk migration | bulk re-application mutation | #10 |
 | BD-11 | `Все счета` | aggregate read model | unassigned |
-| BD-12 | Settings → Users | RBAC read model (roles, permissions, actor) | #17 |
+| BD-12 | System, Settings | application version, updates, background jobs | unassigned |
+| BD-13 | shell, settings, research | a second `Provider` and the `PAPER`/`BACKTEST` environments | unassigned |
 
 Rule for every deferred region: render the widget, name the missing capability in words,
-disable the control, and show the tracked dependency id. Never simulate the data.
+disable the control, and show the tracked dependency id. Never simulate the data. The
+pattern is `.vox-deferred` + `.vox-dep`, specified in `COMPONENT_SPEC.md`.
+
+## 4. State of the conformance pass
+
+Every finding in section 2 has been applied to `reference/index.html`:
+
+- Environment labels are `SANDBOX`/`PRODUCTION`; `PAPER` and `BACKTEST` remain in the
+  vocabulary section only, disabled, tagged `BD-13`.
+- The single `Provider` variant is used everywhere; a second provider renders disabled.
+- The runtime chip carries all eight `RuntimeState` values.
+- Every reason code in the reference is now a canonical value:
+  `ACCOUNT_UNAVAILABLE`, `CREDENTIAL_REJECTED`, `EXECUTION_UNAUTHORIZED`,
+  `NATIVE_ABSOLUTE_TRAILING_UNSUPPORTED`, `RECONCILIATION_COMPLETE`,
+  `RECONCILIATION_INCOMPLETE`, `REQUIRED_READ_UNAVAILABLE`, `STREAM_GAP`,
+  `UNKNOWN_AFTER_DISPATCH`. Client-side guards (target mismatch, lot step) keep their
+  sentence and carry no code, because no backend defines one.
+- Protection runtime renders `ProtectionEstablishmentState` with the operator vocabulary
+  mapped onto it; "stale" is the age of the last broker answer, not a state.
+- Risk verdicts, guardrails, day-loss and concentration are deferred to `BD-2`.
+- Each workspace opens with a banner stating exactly which of its data the contracts back
+  and which they do not.
+
+A further finding from that pass, specified in `BACKEND_DEPENDENCY_SPEC.md`: the current
+read models are **identity- and reconciliation-oriented, not display-oriented**.
+`OrderFact` has no price or quantity, `StopFact` no level, `OperationFact` no amount or
+kind, `PositionFact` no average or current price. A trading UI cannot be built on them as
+they stand; BD-3 and BD-4 exist to close exactly that gap.

@@ -393,10 +393,12 @@
    112px and the status columns size to their content: an account row may scroll, but
    the name of the account may never collapse to nothing. */
 .vox-account-row {
-  display: grid; grid-template-columns: minmax(112px, 1fr) auto auto auto; align-items: center; gap: var(--vox-space-2);
-  min-height: var(--vox-row-height); padding: 0 10px; cursor: pointer;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--vox-space-2);
+  min-height: var(--vox-row-height); padding: 4px 10px; cursor: pointer;
   border-left: 2px solid transparent; font-size: var(--vox-text-12);
 }
+.vox-account-row > * { flex: 0 0 auto; }
+.vox-account-row__name { flex: 1 1 112px; }
 .vox-account-row:hover { background: var(--vox-bg-surface-hover); }
 .vox-account-row.is-selected { background: var(--vox-accent-selected-surface); border-left-color: var(--vox-accent-primary); }
 .vox-account-row__name { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }

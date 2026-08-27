@@ -40,7 +40,7 @@ Consequences, applied everywhere:
 | UI language | `Купить`, `Продать`, `Снять заявку`, `Объём` | `Buy`, `Sell`, `Cancel` |
 | Numbers | space thousands separator, comma decimal: `1 284 730,45 ₽` | `1,284,730.45` |
 | Technical states | `LIVE`, `SANDBOX`, `READY`, `RECONCILING`, `DEGRADED`, `HALTED` (Latin, uppercase, never translated) | `Готово`, `Живой` |
-| Reason codes | shown next to human text: `Превышен дневной лимит убытка · RISK_DAY_LOSS` | code alone |
+| Reason codes | a canonical value shown next to human text: `Исполнение по счёту не разрешено · EXECUTION_UNAUTHORIZED` | code alone, or a code that no enum defines |
 | Identifiers | account and instrument by human name: `Счёт «Основной»`, `SBER · Сбербанк` | raw broker/account/order ids in normal UI |
 | Errors | say what happened, what it blocks, what to do next | `Ошибка 500` |
 
@@ -162,19 +162,33 @@ Pictogram icons may not replace the letters.
 
 ### 5.3 Environment
 
-`LIVE` / `SANDBOX` / `PAPER` / `BACKTEST` is always visible in the top bar as a
-labelled badge — never a bare coloured dot. In `LIVE`, irreversible actions carry an
-inset red hairline (`.vox-live-action`); the interface as a whole does not turn red.
-Environment can only be switched deliberately, and never while an order form is dirty.
+The runtime contract knows exactly two environments: `RuntimeEnvironment` =
+`SANDBOX | PRODUCTION`. Both are always visible in the top bar as a labelled badge —
+never a bare coloured dot. In `PRODUCTION`, irreversible actions carry an inset red
+hairline (`.vox-live-action`); the interface as a whole does not turn red. The
+environment can only be switched deliberately, and never while an order form is dirty.
+
+`PAPER` and `BACKTEST` are declared in the visual vocabulary but are **not runtime
+environments**: no `RuntimeScope` can carry them. They render disabled with dependency
+`BD-13` and are never used on a working screen.
 
 ### 5.4 Runtime states
 
-| State | Meaning | Trading |
+`RuntimeState` has eight values, and only one of them permits new exposure —
+`RuntimeState::new_exposure_allowed()` is true in `READY` alone.
+
+| State | Meaning | New exposure |
 | --- | --- | --- |
-| `READY` | streams and broker session healthy | allowed |
-| `RECONCILING` | positions/orders being reconciled | allowed, values may be `UNKNOWN` |
-| `DEGRADED` | partial data or slow broker | allowed with an explicit caveat |
-| `HALTED` | trading stopped by runtime or risk | new orders blocked; cancel stays available |
+| `STARTING` | runtime coming up, nothing reconciled yet | no |
+| `CONNECTING` | broker session being established | no |
+| `RECONCILING` | positions/orders being reconciled | no; values may be `UNKNOWN` |
+| `READY` | streams and broker session healthy | **yes** |
+| `DEGRADED` | partial data or slow broker | no; existing orders still manageable |
+| `HALTED` | trading stopped by runtime, policy or operator | no; cancel stays available |
+| `STOPPING` | shutdown requested | no |
+| `STOPPED` | runtime down | no |
+
+The chip shows the state; `RuntimeHealth.reason_code` and `SafetyCondition` say why.
 
 The runtime chip is clickable and opens diagnostics (last heartbeat, stream lag,
 broker session, reconcile queue). Widget-level health is separate: `loading`, `live`,
@@ -223,20 +237,23 @@ Protection is part of the canonical Order Ticket, not a separate advanced screen
   reference level, activation condition and the time of the broker's answer. The
   terminal never recomputes a level, never smooths a discrepancy and never fills a gap
   with a plausible number.
-- The runtime state of a protection order is one of five, and all five come from the
-  broker:
+- The runtime state of a protection order is `ProtectionEstablishmentState`, and every
+  value comes from the broker:
+  `AWAITING_ENTRY | ESTABLISHING | ACTIVE | UNKNOWN_AFTER_DISPATCH | RECONCILIATION_REQUIRED | CLOSING_POSITION | ORPHANED | TERMINAL`.
 
-  | State | Meaning | Rendering |
+  The operator vocabulary maps onto it and never replaces it:
+
+  | Operator word | Contract value | Rendering |
   | --- | --- | --- |
-  | `ACTIVE` | order lives at the broker, confirmed by a fresh answer | positive |
-  | `STALE` | last confirmation is older than the freshness budget; last known level shown with its age (`BRK_PROTECT_STALE`) | warning + stale bar |
-  | `RECONCILING` | placement or replacement dispatched, outcome not confirmed (`UNKNOWN_AFTER_DISPATCH`); the position counts as unprotected and re-dispatch is blocked | violet unknown |
-  | `TRIGGERED` | the stop fired; trigger price, fill price and slippage are stated separately | info, with `SL`/`TP` and `F` journal events |
-  | `CANCELLED` | removed by the operator, by the broker, or by closing the position; the reason is always named | neutral, plus an explicit "position is unprotected" verdict |
+  | ACTIVE | `ACTIVE` | positive |
+  | STALE | `ACTIVE` with an old broker answer | warning + the age of `broker_observed_at_unix_ms` |
+  | RECONCILING | `UNKNOWN_AFTER_DISPATCH` → `RECONCILIATION_REQUIRED` | violet unknown, re-dispatch blocked, position counts as unprotected |
+  | TRIGGERED | `CLOSING_POSITION` → `TERMINAL` | info, with `SL`/`TP` and `F` journal events |
+  | CANCELLED | `TERMINAL` (or `ORPHANED` when the broker still holds it) | neutral, plus an explicit "position is unprotected" verdict |
 
-  `STALE` is an age, not a refusal. `RECONCILING` is an unfinished answer, not a
-  rejection. `TRIGGERED` is ordinary execution, not an error. `CANCELLED` never
-  restores itself and never silently implies protection is still in place.
+  **Stale is an age, not a state.** `RECONCILING` is an unfinished answer, not a
+  rejection. `TRIGGERED` is ordinary execution, not an error. `CANCELLED` never restores
+  itself and never silently implies protection is still in place.
 - Direction semantics are displayed, not enforced, by the UI: for a long position the
   level follows the favourable high-water mark and never widens downward when price
   falls; for a short it mirrors against the favourable low-water mark. A field the
@@ -384,6 +401,12 @@ leave the screen coherent rather than half-submitted.
     model or Decision Center screen that appears to grant execution authorization.
 14. No connection failure collapsed into a generic red `Ошибка`, and no client-side
     recomputation of a broker-reported trailing level.
+15. **No simulated data for a capability the backend does not expose.** A region without a
+    contract renders as `.vox-deferred`: named, disabled, carrying its `BD-*` dependency
+    from `BACKEND_CONTRACTS.md`. An empty honest region beats a plausible lie.
+16. No state word, reason code or environment on a working screen that does not exist in
+    `vox-domain` or `vox-runtime`. The vocabulary sections may declare a future value, but
+    only as visibly deferred.
 
 ## 8. Governance
 

@@ -73,10 +73,11 @@ Change it in the same commit as `tokens.css`.
 - Order ticket has **permanent dual actions** `Купить` / `Продать`. **No buy/sell mode
   toggle exists.** A forbidden side stays visible and states its reason.
 - Chart/tape/journal markers are exactly **B / S / F / SL / TP / D / E**.
-- Environment (`LIVE` / `SANDBOX` / `PAPER` / `BACKTEST`), runtime
-  (`READY` / `RECONCILING` / `DEGRADED` / `HALTED`) and risk
-  (`SAFE` / `WARNING` / `BLOCKED` / `UNKNOWN` / `RESIZE`) are always explicit.
-  `UNKNOWN` is never rendered as an error.
+- Environment is `SANDBOX` or `PRODUCTION` — the only two values `RuntimeEnvironment`
+  has. Runtime is one of the eight `RuntimeState` values, and new exposure is allowed in
+  `READY` alone. Risk keeps the `SAFE / WARNING / BLOCKED / UNKNOWN / RESIZE` vocabulary
+  required by #18, but no risk contract exists yet, so the verdict renders deferred
+  (`BD-2`). `UNKNOWN` is never rendered as an error.
 - Widgets are draggable by the header, resizable in 8px steps, and carry a linked or
   pinned instrument context chip.
 - No oversized generic SaaS cards. No raw broker identifiers in normal UI.
@@ -96,10 +97,14 @@ Change it in the same commit as `tokens.css`.
   execution is off by default (`.vox-exec-auth`): enabling is a high-friction flow
   (account · broker · environment · scope · consequences · typed confirmation), halting is
   one step. Strategy, ML and Decision Center can never bypass this authorization.
-- Connection state vocabulary: `CONNECTED`, `VALIDATING`, `RECONNECTING`, `DEGRADED`,
-  `INVALID_CREDENTIAL`, `REVOKED`, `PERMISSION_LIMITED`, `ROTATE`, `PROVIDER_UNAVAILABLE`,
-  `DISABLED`, `UNKNOWN` — each with its own reason code and action. Failures are never
-  collapsed into one generic red state.
+- Connection state uses contract values only: `CONNECTED`, `CONNECTING`, `DEGRADED`,
+  `CREDENTIAL_REJECTED`, `EXECUTION_UNAUTHORIZED`, `REQUIRED_READ_UNAVAILABLE`,
+  `ACCOUNT_UNAVAILABLE`, `UNKNOWN`. Failures are never collapsed into one generic red
+  state. Credential validation, revocation and rotation are a lifecycle the contract does
+  not have yet and render deferred (`BD-5`).
+- **A capability without a contract renders deferred, never simulated**: `.vox-deferred`
+  names it, disables it and carries its `BD-*` id. See `docs/design/BACKEND_CONTRACTS.md`
+  and `docs/design/BACKEND_DEPENDENCY_SPEC.md`.
 - **AccountSelector is always visible** in the shell, and the order ticket states its
   execution target (broker · account · environment) as its first row. A token is not an
   account and not a portfolio; a stored token is never revealed in normal UI
