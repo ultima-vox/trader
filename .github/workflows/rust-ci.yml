@@ -63,15 +63,13 @@ jobs:
         run: |
           set -euo pipefail
           if [[ ! -x "$CARGO_HOME/bin/rustup" ]]; then
-            for attempt in 1 2 3; do
-              if curl --proto '=https' --tlsv1.2 --retry 5 \
-                --retry-all-errors --retry-delay 2 -sSf https://sh.rustup.rs \
-                | sh -s -- -y --profile minimal --default-toolchain none; then
-                break
-              fi
-              [[ "$attempt" -lt 3 ]] || exit 1
-              sleep "$((attempt * 2))"
-            done
+            rustup_init="$RUNNER_TEMP/rustup-init"
+            curl -4 --proto '=https' --tlsv1.2 --retry 5 \
+              --retry-all-errors --retry-delay 2 -sSfL \
+              https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init \
+              -o "$rustup_init"
+            chmod +x "$rustup_init"
+            "$rustup_init" -y --profile minimal --default-toolchain none
           fi
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
           export PATH="$CARGO_HOME/bin:$PATH"
