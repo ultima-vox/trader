@@ -27,7 +27,7 @@ Consequences, applied everywhere:
 2. **Compact is the production default density.** Standard and Comfortable exist as
    an accessibility preference, never as the shipped default.
 3. **Russian is the primary UI language** (`ru-RU`). Latin script survives only for
-   tickers (`SBER`), technical states (`LIVE`, `READY`, `HALTED`), reason codes
+   tickers (`SBER`), technical states (`PRODUCTION`, `READY`, `HALTED`), reason codes
    (`RISK_DAY_LOSS`) and event marker letters.
 4. **Nothing money-related is implicit.** Environment, runtime health, risk verdict
    and staleness are always on screen, in words, not inferred from a colour.
@@ -40,7 +40,7 @@ Consequences, applied everywhere:
 | --- | --- | --- |
 | UI language | `Купить`, `Продать`, `Снять заявку`, `Объём` | `Buy`, `Sell`, `Cancel` |
 | Numbers | space thousands separator, comma decimal: `1 284 730,45 ₽` | `1,284,730.45` |
-| Technical states | `LIVE`, `SANDBOX`, `READY`, `RECONCILING`, `DEGRADED`, `HALTED` (Latin, uppercase, never translated) | `Готово`, `Живой` |
+| Technical states | `PRODUCTION`, `SANDBOX`, `READY`, `RECONCILING`, `DEGRADED`, `HALTED` (Latin, uppercase, never translated) | `Готово`, `Живой`, or `LIVE` as an environment |
 | Reason codes | a canonical value shown next to human text: `Исполнение по счёту не разрешено · EXECUTION_UNAUTHORIZED` | code alone, or a code that no enum defines |
 | Identifiers | account and instrument by human name: `Счёт «Основной»`, `SBER · Сбербанк` | raw broker/account/order ids in normal UI |
 | Errors | say what happened, what it blocks, what to do next | `Ошибка 500` |

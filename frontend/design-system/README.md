@@ -70,7 +70,7 @@ Change it in the same commit as `tokens.css`.
 
 - Dense professional terminal. **Compact is the production default density.**
 - **Russian primary UI language**; Latin only for tickers, technical states
-  (`LIVE`, `READY`, `HALTED`), reason codes and marker letters.
+  (`PRODUCTION`, `READY`, `HALTED`), reason codes and marker letters.
 - Order ticket has **permanent dual actions** `Купить` / `Продать`. **No buy/sell mode
   toggle exists.** A forbidden side stays visible and states its reason.
 - Chart/tape/journal markers are exactly **B / S / F / SL / TP / D / E**.

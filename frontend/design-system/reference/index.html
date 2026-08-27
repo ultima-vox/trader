@@ -415,8 +415,8 @@
           <span class="vox-dep">BD-13 · не в RuntimeEnvironment</span>
         </div>
         <div class="ref__demo" style="margin-top:10px">
-          <button class="vox-btn vox-btn--buy vox-live-action" type="button">Купить · LIVE</button>
-          <span class="ref__note">В LIVE необратимое действие получает внутреннюю рамку. Интерфейс целиком не краснеет.</span>
+          <button class="vox-btn vox-btn--buy vox-live-action" type="button">Купить · PRODUCTION</button>
+          <span class="ref__note">В PRODUCTION необратимое действие получает внутреннюю рамку. Интерфейс целиком не краснеет.</span>
         </div>
       </div>
       <div class="ref__spec vox-surface">
@@ -1534,7 +1534,7 @@
           <div class="vox-brokers__section">
             <div class="vox-brokers__section-title">Подключение</div>
             <div class="vox-brokers__field"><span class="vox-brokers__field-label">Брокер</span><span class="vox-select" style="width:200px">Т-Инвест<span class="ref__code">▾</span></span></div>
-            <div class="vox-brokers__field"><span class="vox-brokers__field-label">Среда</span><span class="vox-segmented"><span class="vox-segmented__item is-selected">LIVE</span><span class="vox-segmented__item">SANDBOX</span><span class="vox-segmented__item">PAPER</span></span></div>
+            <div class="vox-brokers__field"><span class="vox-brokers__field-label">Среда</span><span class="vox-segmented"><span class="vox-segmented__item is-selected">PRODUCTION</span><span class="vox-segmented__item">SANDBOX</span></span><span class="vox-dep">BD-13 · PAPER вне RuntimeEnvironment</span></div>
             <div class="vox-brokers__field"><span class="vox-brokers__field-label">Название</span><span class="vox-input" style="width:220px"><input class="vox-input__field" value="Т-Инвест · рабочее"></span></div>
           </div>
 
@@ -2253,7 +2253,7 @@
       <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> переключателя режима «Купить/Продать» — обе кнопки постоянны.</div></div>
       <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> сырых идентификаторов брокера, счёта и заявки в обычном UI — только в диагностике и копировании по требованию.</div></div>
       <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> UNKNOWN, окрашенного как ошибка: отсутствие ответа ≠ отказ.</div></div>
-      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> английского в основном UI: язык интерфейса — русский; латиницей остаются тикеры, коды причин и технические статусы (LIVE, READY).</div></div>
+      <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> английского в основном UI: язык интерфейса — русский; латиницей остаются тикеры, коды причин и технические статусы (PRODUCTION, READY).</div></div>
       <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> раскрытия сохранённого токена в обычном UI и <b>нет</b> знака равенства между токеном и портфелем.</div></div>
       <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> молчаливой перезаписи существующих стоп-заявок у брокера при смене значения по умолчанию, и <b>нет</b> клиентской эмуляции брокерской защиты.</div></div>
       <div class="ref__spec vox-surface"><div class="ref__rule"><b>Нет</b> заявки без явного счёта исполнения: значение по умолчанию — не жёсткий риск-лимит, а счёт — не «последний использованный».</div></div>

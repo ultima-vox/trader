@@ -115,7 +115,7 @@ the bottom after a separator. Order: contextual → navigational → destructive
 22px, semibold, tracked. `--live` (red-outlined), `--sandbox` (blue), `--paper`
 (violet), `--backtest` (neutral). Permanently visible in the top bar; also inlined in
 the order ticket header. `.vox-live-action` adds the inset red hairline to irreversible
-controls in `LIVE`.
+controls in `PRODUCTION`.
 
 ### RuntimeStatus — `.vox-runtime`
 Clickable chip, opens diagnostics. Renders any of the eight `RuntimeState` values;
@@ -224,7 +224,8 @@ from the workspace selection) → instrument strip → type Select → quantity
 NumericInput (+ lot hint) → price Input → `__preview` (сумма / комиссия / маржа
 после) → `.vox-protect` (independent Stop Loss / Take Profit) → RiskIndicator →
 `__actions` → mono shortcut hint.
-`__target` states: default · `.is-live` (inset LIVE hairline) · `.is-mismatch` (amber,
+`__target` states: default · `.is-live` (inset PRODUCTION hairline; the class name is a
+token identifier, not an environment value) · `.is-mismatch` (amber,
 names the workspace account it disagrees with, offers to move the ticket or keep it) ·
 `.is-frozen` (elevated surface, non-interactive, `__target-lock` = `ЗАФИКСИРОВАНО`). A
 frozen target belongs to a constructed or submitted command: switching the active
@@ -234,7 +235,7 @@ The ticket also renders the effective protection and its source
 (`Плавающий стоп 1,00 % · Источник: заявка`) via `.vox-inherited`, never the plan alone.
 `__actions`: two 34px buttons, `--buy` = `Купить`, `--sell` = `Продать`, each with its
 own executable price. Both always present; **no mode toggle exists**. Blocked side:
-`.is-blocked` + `__action-note` + reason. In `LIVE` both actions carry
+`.is-blocked` + `__action-note` + reason. In `PRODUCTION` both actions carry
 `.vox-live-action`. Submission requires a non-blocked risk verdict; `RECONCILING` and
 `DEGRADED` allow submission with the caveat displayed; `HALTED` blocks new orders and
 leaves cancel available.
@@ -317,7 +318,7 @@ content and the row may scroll, but the human account name never collapses. In t
 Order Ticket target row the account name wraps instead of truncating — ellipsis is
 allowed on decoration, never on the execution target.
 Always visible in the shell. Anatomy: broker · separator · human account label ·
-environment badge / connection health · disclosure. Modifiers `.is-live` (inset LIVE
+environment badge / connection health · disclosure. Modifiers `.is-live` (inset PRODUCTION
 marker), `.is-degraded`, `.is-unknown`. The popover lists `.vox-account-row`
 (name + masked identifier meta · environment · health · value). A raw identifier
 appears only as masked meta; full identifiers live in diagnostics.
