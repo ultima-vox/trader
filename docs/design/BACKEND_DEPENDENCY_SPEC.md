@@ -111,7 +111,9 @@ Required:
 Acceptance: the Markets watchlist and the Trade quote strip render from Vox alone, and the
 ticket's lot/step validation is metadata-driven.
 
-Owner: **#8** (T-Invest market data) extended into a Vox read model and surfaced through #38.
+Owner: **#38** — this is a Vox projection/API over the **already accepted** #8 provider
+layer. #8 is not reopened: its adapter contracts stand as qualified, and the work here is a
+Vox-side read model plus its endpoint and stream, assembled from that layer.
 
 ## BD-4 · Portfolio valuation and P&L — **P1** (Portfolio, Trade)
 
@@ -292,7 +294,7 @@ Owner: unassigned; requires extending `Provider` and `RuntimeEnvironment` in
 | --- | --- |
 | BD-1 transport, generated client | **#38** |
 | BD-2 risk | #21 |
-| BD-3 market data | #8 → #38 |
+| BD-3 market data | **#38** (Vox projection over the accepted #8 provider layer; #8 not reopened) |
 | BD-4 valuation, P&L, operation amounts | #22 |
 | BD-5 accounts, credentials, RBAC | #17 |
 | BD-6 strategy, decision | #23, #27 |
@@ -304,8 +306,21 @@ Owner: unassigned; requires extending `Provider` and `RuntimeEnvironment` in
 | BD-12 version, updates, jobs | #30 |
 | BD-13 second provider, PAPER/BACKTEST | — |
 
-Note for the Head of Development: **#30 (Operator Workspace)** overlaps #18 in scope. One
-of the two should own the terminal screens, or #30 should be scoped to what #18 defers.
+## Ownership split (decided)
+
+- **#18 — Frontend Foundation** owns frontend infrastructure only: the design system, the
+  application shell, account/instrument context, typed state and the generated Vox client,
+  atomic context switching, stale-response suppression, frozen command targets and the
+  shared widget/table/ticket components. It ships reusable infrastructure, not product
+  screens.
+- **#30 — Operator Workspace** owns the production operator workspaces and screen
+  composition — Markets, Trade, Portfolio, Strategy, Decision, Research, ML/Models, System
+  and the Settings tabs — built **on top of** #18's infrastructure and over stable backend
+  contracts. It is blocked on its backend owners (#21–#29).
+
+The canonical workspace designs in `frontend/design-system/reference/index.html` §9 and
+§16–§22 remain the authoritative visual specification for those screens; implementing them
+belongs to #30, and #18 supplies the shell, context and components they compose.
 
 ---
 
@@ -325,3 +340,40 @@ BD-11, BD-12, BD-13 — after the workspaces they belong to.
 Frontend application code cannot begin before **BD-1**, because there is no transport to
 generate a typed client from. Everything after BD-1 unblocks a specific workspace, and the
 frontend can proceed workspace by workspace in the order above.
+
+---
+
+## Definition of done for #18 (frontend infrastructure)
+
+#18 stays open until all of the following exist and are tested. None of them is a product
+screen; every one is infrastructure that #30 consumes.
+
+1. **Generated Vox client integrated.** TypeScript types and client generated from the
+   schema artefact produced by #38 — never hand-written, regenerated in CI, and failing the
+   build when the schema drifts. No provider wire type reaches UI state.
+2. **Typed context.** Broker connection, account, environment and provider modelled as one
+   `RuntimeScope`-shaped value; human labels are derived for display and never substituted
+   for identity.
+3. **Atomic account-context switching.** One transition updates every account-scoped view
+   together — portfolio, positions, orders, operations, protection, strategy binding — with
+   no intermediate state in which two accounts are visible at once.
+4. **Stale-response suppression.** A response belonging to a previous scope or a previous
+   `runtime_epoch` can never overwrite current state. Enforced at the client layer, not per
+   screen, and covered by a test that replays a late response.
+5. **Frozen command target.** Once a command is constructed or submitted it carries its
+   `provider`, `environment`, `broker_account_id` and `connection_ref` to a terminal state;
+   switching the shell cannot retarget it, and the frozen target stays visible through
+   `UNKNOWN_AFTER_DISPATCH` and reconciliation.
+6. **Instrument context independent of account context**, with linked and pinned widget
+   propagation.
+7. **Capability gating** driven by backend data (`ProtectionCapability`,
+   `execution_authorized`, `new_exposure_allowed`), never by a hardcoded assumption.
+8. **Exact decimal handling** end to end: parse to integer nanos, format for display, never
+   `Number` arithmetic on a capital-affecting value.
+9. **Shared state semantics** for loading, empty, stale, reconnecting, degraded, error,
+   permission-denied and `UNKNOWN`, exposed as one mechanism the screens reuse.
+10. **No secret persistence**: nothing credential-shaped in URL, storage, logs or telemetry;
+    connections addressed by `OpaqueRef` only.
+
+Work on 1–10 starts when #38 publishes its first generated client. Until then #18 has no
+application code to write, and the design system plus this specification are its output.
