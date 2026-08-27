@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/vox-api",
     "crates/vox-core",
     "crates/vox-domain",
     "crates/vox-nautilus",
@@ -16,6 +17,9 @@ repository = "https://github.com/ultima-vox/trader"
 
 [workspace.dependencies]
 anyhow = "1.0"
+axum = { version = "0.8", features = ["ws", "macros"] }
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+utoipa = { version = "5.5", features = ["axum_extras", "preserve_order"] }
 async-trait = "0.1"
 futures-util = "0.3"
 prost = "0.13"

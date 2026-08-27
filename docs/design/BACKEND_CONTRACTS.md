@@ -122,7 +122,25 @@ high-water/low-water rule is a backend concept, and the browser only renders it.
 with `ProtectionCapabilityError` = `FIXED_STOP_UNSUPPORTED | STOP_LIMIT_UNSUPPORTED | TAKE_PROFIT_UNSUPPORTED | NATIVE_RELATIVE_TRAILING_UNSUPPORTED | NATIVE_ABSOLUTE_TRAILING_UNSUPPORTED`
 — this is the capability gate the UI must obey.
 
-`ProtectionEstablishmentState` = `AWAITING_ENTRY | ESTABLISHING | ACTIVE | UNKNOWN_AFTER_DISPATCH | RECONCILIATION_REQUIRED | CLOSING_POSITION | ORPHANED | TERMINAL`.
+`ProtectionEstablishmentState` has **ten** variants, and two of them carry data:
+
+```rust
+AWAITING_ENTRY
+ENTRY_PARTIALLY_FILLED { filled_lots: i64, protected_lots: i64 }
+ESTABLISHING
+ACTIVE
+FAILED_AFTER_ENTRY { reason: String }
+UNKNOWN_AFTER_DISPATCH
+RECONCILIATION_REQUIRED
+CLOSING_POSITION
+ORPHANED
+TERMINAL
+```
+
+The two data-carrying states are the two an operator most needs to see, and an earlier
+reading of this contract missed both: `ENTRY_PARTIALLY_FILLED` means the entry filled in
+part so only part of the position is protected, and `FAILED_AFTER_ENTRY` means the position
+is open and its protection did not establish. Neither may be collapsed into "protected".
 `ProtectionLifecycle { broker_stop_order_id, broker_child_order_id, provider_status, provider_trailing_status, broker_reported_extreme, broker_reported_execution_price }`.
 
 ### 1.6 Money — exact, never floating point
@@ -166,19 +184,19 @@ must be corrected or shown as an explicitly deferred capability — not simulate
 
 | ID | Needed by | Missing contract | Owner |
 | --- | --- | --- | --- |
-| BD-1 | every screen | Vox-side transport (HTTP/gRPC) exposing the read models above | #11 |
-| BD-2 | shell, ticket | risk verdict / guardrail read model (exposure, day loss, concentration, resize) | risk engine, unassigned |
-| BD-3 | Markets, chart, book, tape, ticket price | market-data read model (quote, depth, trades, candles) | #8 |
-| BD-4 | Portfolio | P&L, margin and valuation analytics | unassigned |
+| BD-1 | every screen | Vox-side transport exposing the read models above | **#38 — the first slice is implemented**, see below |
+| BD-2 | shell, ticket | risk verdict / guardrail read model (exposure, day loss, concentration, resize) | #21 |
+| BD-3 | Markets, chart, book, tape, ticket price | market-data read model (quote, depth, trades, candles) as a Vox projection over the accepted #8 adapter layer | #38 |
+| BD-4 | Portfolio | P&L, margin and valuation analytics, operation amounts | #22 |
 | BD-5 | Settings → Brokers | credential rotation/revocation lifecycle beyond `CredentialResolution` | #17 |
-| BD-6 | Strategy, Decision | strategy binding, signal and approval contracts | unassigned |
-| BD-7 | ML / Models | dataset, training, registry, promotion contracts | unassigned |
-| BD-8 | Research | backtest run contracts | unassigned |
+| BD-6 | Strategy, Decision | strategy binding, signal and approval contracts | #23, #27 |
+| BD-7 | ML / Models | dataset, training, registry, promotion contracts | #26 |
+| BD-8 | Research | backtest run contracts | #29 |
 | BD-9 | Protection defaults | account-scoped default protection policy storage | #10 |
 | BD-10 | Bulk migration | bulk re-application mutation | #10 |
-| BD-11 | `Все счета` | aggregate read model | unassigned |
-| BD-12 | System, Settings | application version, updates, background jobs | unassigned |
-| BD-13 | shell, settings, research | a second `Provider` and the `PAPER`/`BACKTEST` environments | unassigned |
+| BD-11 | `Все счета` | aggregate read model | #22 |
+| BD-12 | System, Settings | application version, updates, background jobs | #30 |
+| BD-13 | shell, settings, research | a second `Provider`; `PAPER`/`BACKTEST` as **trading modes**, not broker environments | #17; modes owned by #23/#29 |
 
 Rule for every deferred region: render the widget, name the missing capability in words,
 disable the control, and show the tracked dependency id. Never simulate the data. The
@@ -209,3 +227,24 @@ read models are **identity- and reconciliation-oriented, not display-oriented**.
 `OrderFact` has no price or quantity, `StopFact` no level, `OperationFact` no amount or
 kind, `PositionFact` no average or current price. A trading UI cannot be built on them as
 they stand; BD-3 and BD-4 exist to close exactly that gap.
+
+---
+
+## 5. What #38 implemented, and what it proved
+
+`crates/vox-api` now serves `/api/v1` with an OpenAPI 3.1 document generated from the Rust
+contracts (`docs/api/openapi.json`) and a TypeScript client generated from that document
+(`frontend/api-client`). `vox-core` starts it. See `docs/api/ARCHITECTURE.md`.
+
+Two facts this work established that the earlier map did not record:
+
+1. **`vox-runtime` is not on `main`.** It lands with #11. The API therefore defines its
+   application ports as traits and attaches nothing: `/api/v1/runtime` and every
+   account-scoped route answer `503 CAPABILITY_UNAVAILABLE` naming `#11`. Nothing is
+   simulated, and the capability set lists seventeen unavailable capabilities with owners.
+2. **The protection lifecycle has ten states, not eight** (section 1.5). The design system
+   documents eight; the two missing ones are the partially-filled entry and the protection
+   that failed after entry.
+
+The design reference must gain those two states before it can claim to render the canonical
+lifecycle.

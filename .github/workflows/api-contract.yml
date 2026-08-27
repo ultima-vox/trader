@@ -1,0 +1,122 @@
+# Proves the application API contract on the exact commit under review.
+#
+# The OpenAPI document and the TypeScript client are generated artefacts. This workflow
+# regenerates both and fails on any diff, so a hand-edited DTO cannot reach main, and it
+# typechecks the client so the frontend cannot be handed something that does not compile.
+name: API Contract
+
+on:
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'docs/api/**'
+      - 'frontend/api-client/**'
+      - 'tools/api-client/**'
+      - '.github/workflows/api-contract.yml'
+  push:
+    branches: ["main"]
+    paths:
+      - 'crates/**'
+      - 'docs/api/**'
+      - 'frontend/api-client/**'
+      - 'tools/api-client/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the commit under review
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Report the verified commit
+        run: echo "verifying $(git rev-parse HEAD)"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the workspace
+        run: cargo build --workspace --locked
+
+      - name: Test the API crate
+        run: cargo test -p vox-api --locked
+
+      - name: Lint the API crate
+        run: cargo clippy -p vox-api --all-targets --locked -- -D warnings
+
+      - name: Regenerate the OpenAPI document
+        run: cargo run -p vox-api --bin openapi --locked -- docs/api/openapi.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Regenerate the TypeScript client
+        run: python tools/api-client/generate.py
+
+      - name: Fail on generated-artefact drift
+        run: |
+          if ! git diff --quiet -- docs/api/openapi.json frontend/api-client/src; then
+            echo "::error::the committed OpenAPI document or TypeScript client is stale"
+            echo "run: cargo run -p vox-api --bin openapi -- docs/api/openapi.json && python tools/api-client/generate.py"
+            git --no-pager diff --stat -- docs/api/openapi.json frontend/api-client/src
+            git --no-pager diff -- docs/api/openapi.json frontend/api-client/src | head -200
+            exit 1
+          fi
+          echo "generated artefacts are current"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Typecheck the generated client
+        working-directory: frontend/api-client
+        run: |
+          npm install --no-audit --no-fund
+          npx tsc --noEmit
+
+      - name: Prove the API answers on a real socket
+        run: |
+          set -euo pipefail
+          VOX_API_BIND=127.0.0.1:18099 VOX_ENV=sandbox ./target/debug/vox-server &
+          server=$!
+          trap 'kill $server' EXIT
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:18099/api/v1/system/health >/dev/null; then break; fi
+            sleep 1
+          done
+
+          echo "health:"
+          curl -sf http://127.0.0.1:18099/api/v1/system/health
+
+          echo "capabilities name their owners:"
+          curl -sf http://127.0.0.1:18099/api/v1/capabilities |
+            python -c "import json,sys; d=json.load(sys.stdin); assert d['unavailable'], 'nothing is reported unavailable'; assert all(u['owner'] for u in d['unavailable']), 'an unavailable capability has no owner'; print(' ', len(d['supported']), 'supported,', len(d['unavailable']), 'unavailable')"
+
+          echo "an unattached capability refuses instead of pretending:"
+          code=$(curl -s -o /tmp/runtime.json -w '%{http_code}' http://127.0.0.1:18099/api/v1/runtime)
+          test "$code" = "503" || { echo "expected 503, got $code"; cat /tmp/runtime.json; exit 1; }
+          python -c "import json; d=json.load(open('/tmp/runtime.json')); assert d['code']=='CAPABILITY_UNAVAILABLE', d; assert d['details']['owner'], d; print(' ', d['code'], d['details']['owner'])"
+
+          echo "the served document matches the committed one:"
+          curl -sf http://127.0.0.1:18099/api/v1/openapi.json -o /tmp/served.json
+          python -c "import json; a=json.load(open('/tmp/served.json')); b=json.load(open('docs/api/openapi.json')); assert a==b, 'the served OpenAPI differs from the committed artefact'; print('  identical')"
+
+          echo "an unknown route is a typed 404:"
+          curl -s -o /tmp/nf.json -w '  %{http_code}\n' http://127.0.0.1:18099/api/v2/whatever
+          python -c "import json; d=json.load(open('/tmp/nf.json')); assert d['category']=='NOT_FOUND', d; print('  typed error envelope')"
