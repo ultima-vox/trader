@@ -119,7 +119,9 @@ pub async fn system_health() -> Json<SystemHealthDto> {
         (status = 503, description = "No runtime is attached to this process", body = ApiError),
     )
 )]
-pub async fn runtime_health(State(state): State<AppState>) -> Result<Json<RuntimeHealthDto>, ApiError> {
+pub async fn runtime_health(
+    State(state): State<AppState>,
+) -> Result<Json<RuntimeHealthDto>, ApiError> {
     Ok(Json(state.runtime_port()?.health().await?))
 }
 
@@ -307,7 +309,10 @@ fn validate_submit(request: &SubmitOrderRequest) -> Result<(), ApiError> {
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(ApiError::validation("the order command is not valid", errors))
+        Err(ApiError::validation(
+            "the order command is not valid",
+            errors,
+        ))
     }
 }
 
@@ -408,7 +413,10 @@ pub async fn quote(
 ) -> Result<Json<QuoteDto>, ApiError> {
     query.validated()?;
     Ok(Json(
-        state.market_data_port()?.quote(query.provider, &query.instrument_uid).await?,
+        state
+            .market_data_port()?
+            .quote(query.provider, &query.instrument_uid)
+            .await?,
     ))
 }
 
@@ -491,7 +499,10 @@ pub async fn session(
 ) -> Result<Json<SessionDto>, ApiError> {
     query.validated()?;
     Ok(Json(
-        state.market_data_port()?.session(query.provider, &query.instrument_uid).await?,
+        state
+            .market_data_port()?
+            .session(query.provider, &query.instrument_uid)
+            .await?,
     ))
 }
 

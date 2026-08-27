@@ -8,8 +8,8 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use vox_domain::{
-    ExecutionPriceConvention, OrderSide, ProtectionEstablishmentState, RegularOrderType, TimeInForce,
-    TrailingDistanceMode,
+    ExecutionPriceConvention, OrderSide, ProtectionEstablishmentState, RegularOrderType,
+    TimeInForce, TrailingDistanceMode,
 };
 
 use super::money::Decimal;
@@ -141,12 +141,18 @@ impl From<ProtectionEstablishmentState> for ProtectionStateDto {
     fn from(value: ProtectionEstablishmentState) -> Self {
         match value {
             ProtectionEstablishmentState::AwaitingEntry => Self::AwaitingEntry,
-            ProtectionEstablishmentState::EntryPartiallyFilled { filled_lots, protected_lots } => {
-                Self::EntryPartiallyFilled { filled_lots, protected_lots }
-            }
+            ProtectionEstablishmentState::EntryPartiallyFilled {
+                filled_lots,
+                protected_lots,
+            } => Self::EntryPartiallyFilled {
+                filled_lots,
+                protected_lots,
+            },
             ProtectionEstablishmentState::Establishing => Self::Establishing,
             ProtectionEstablishmentState::Active => Self::Active,
-            ProtectionEstablishmentState::FailedAfterEntry { reason } => Self::FailedAfterEntry { reason },
+            ProtectionEstablishmentState::FailedAfterEntry { reason } => {
+                Self::FailedAfterEntry { reason }
+            }
             ProtectionEstablishmentState::UnknownAfterDispatch => Self::UnknownAfterDispatch,
             ProtectionEstablishmentState::ReconciliationRequired => Self::ReconciliationRequired,
             ProtectionEstablishmentState::ClosingPosition => Self::ClosingPosition,
@@ -273,10 +279,11 @@ mod tests {
     #[test]
     fn protection_lifecycle_has_no_stale_state() -> Result<(), serde_json::Error> {
         assert!(serde_json::from_str::<ProtectionStateDto>("\"STALE\"").is_err());
-        let partial = ProtectionStateDto::from(ProtectionEstablishmentState::EntryPartiallyFilled {
-            filled_lots: 6,
-            protected_lots: 4,
-        });
+        let partial =
+            ProtectionStateDto::from(ProtectionEstablishmentState::EntryPartiallyFilled {
+                filled_lots: 6,
+                protected_lots: 4,
+            });
         let json = serde_json::to_value(&partial)?;
         assert_eq!(json["ENTRY_PARTIALLY_FILLED"]["filled_lots"], 6);
         assert_eq!(json["ENTRY_PARTIALLY_FILLED"]["protected_lots"], 4);
@@ -300,7 +307,10 @@ mod tests {
             "UNKNOWN_AFTER_DISPATCH",
             "RECONCILED",
         ] {
-            assert!(map.contains(spelling), "{spelling} is not in the recorded contract map");
+            assert!(
+                map.contains(spelling),
+                "{spelling} is not in the recorded contract map"
+            );
         }
     }
 }

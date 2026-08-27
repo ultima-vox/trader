@@ -5,8 +5,8 @@
 
 use axum::routing::get;
 use axum::{Json, Router};
-use utoipa::openapi::OpenApi as OpenApiDoc;
 use utoipa::OpenApi;
+use utoipa::openapi::OpenApi as OpenApiDoc;
 
 use crate::contract::account::{
     BrokerAccountDto, CurrencyBalanceDto, OperationDto, OperationsPageDto, OrderDto, PortfolioDto,
@@ -29,7 +29,9 @@ use crate::contract::runtime::{
     StreamKindDto, StreamStateDto, SystemHealthDto,
 };
 use crate::contract::scope::{BrokerEnvironment, ExecutionScope, ProviderDto, TradingMode};
-use crate::contract::stream::{ClientMessage, EventPayload, ServerEvent, SubscriptionStatus, Topic};
+use crate::contract::stream::{
+    ClientMessage, EventPayload, ServerEvent, SubscriptionStatus, Topic,
+};
 use crate::error::{ApiError, ErrorCategory, FieldError};
 use crate::transport::http;
 
@@ -129,7 +131,10 @@ mod tests {
     fn no_provider_wire_type_reaches_the_public_schema() -> Result<(), serde_json::Error> {
         let json = openapi_json()?.to_lowercase();
         for forbidden in ["protobuf", "prost", "tinkoff", "grpc"] {
-            assert!(!json.contains(forbidden), "provider wire vocabulary leaked: {forbidden}");
+            assert!(
+                !json.contains(forbidden),
+                "provider wire vocabulary leaked: {forbidden}"
+            );
         }
         Ok(())
     }
@@ -138,15 +143,26 @@ mod tests {
     fn money_is_a_string_schema_not_a_number() -> Result<(), serde_json::Error> {
         let doc: serde_json::Value = serde_json::from_str(&openapi_json()?)?;
         let decimal = &doc["components"]["schemas"]["Decimal"];
-        assert_eq!(decimal["type"], "string", "Decimal must be a string schema: {decimal}");
+        assert_eq!(
+            decimal["type"], "string",
+            "Decimal must be a string schema: {decimal}"
+        );
         Ok(())
     }
 
     #[test]
     fn no_secret_shaped_field_is_describable() -> Result<(), serde_json::Error> {
         let json = openapi_json()?.to_lowercase();
-        for forbidden in ["\"token\"", "\"secret\"", "\"password\"", "\"authorization\""] {
-            assert!(!json.contains(forbidden), "a secret-shaped field is in the public schema: {forbidden}");
+        for forbidden in [
+            "\"token\"",
+            "\"secret\"",
+            "\"password\"",
+            "\"authorization\"",
+        ] {
+            assert!(
+                !json.contains(forbidden),
+                "a secret-shaped field is in the public schema: {forbidden}"
+            );
         }
         Ok(())
     }
@@ -162,7 +178,10 @@ mod tests {
             "/api/v1/market/candles",
             "/api/v1/market/session",
         ] {
-            assert!(doc.paths.paths.contains_key(path), "missing market route: {path}");
+            assert!(
+                doc.paths.paths.contains_key(path),
+                "missing market route: {path}"
+            );
         }
     }
 
@@ -188,7 +207,10 @@ mod tests {
         let doc: serde_json::Value = serde_json::from_str(&openapi_json()?)?;
         let last = &doc["components"]["schemas"]["QuoteDto"]["properties"]["last"];
         let rendered = serde_json::to_string(last)?;
-        assert!(rendered.contains("Decimal"), "a quoted price must be the exact Decimal type: {rendered}");
+        assert!(
+            rendered.contains("Decimal"),
+            "a quoted price must be the exact Decimal type: {rendered}"
+        );
         Ok(())
     }
 }

@@ -7,18 +7,18 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
+use axum::Router;
 use axum::extract::State;
+use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use axum::routing::get;
-use axum::Router;
 use tokio::sync::mpsc;
 use tokio::time::interval;
 
 use crate::application::AppState;
 use crate::contract::scope::ExecutionScope;
 use crate::contract::stream::{
-    ClientMessage, EventPayload, ServerEvent, SubscriptionStatus, Topic, STREAM_SCHEMA_VERSION,
+    ClientMessage, EventPayload, STREAM_SCHEMA_VERSION, ServerEvent, SubscriptionStatus, Topic,
 };
 
 use super::http::now_unix_ms;
@@ -34,7 +34,10 @@ pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 /// The scope and the sequence are carried for the live projection that #11 owns: when a
 /// topic starts producing updates, every event must state which scope it belongs to and
 /// carry a gap-detectable sequence. Until that projection exists only the tests drive them.
-#[allow(dead_code, reason = "consumed by the live projection that #11 owns; exercised by tests")]
+#[allow(
+    dead_code,
+    reason = "consumed by the live projection that #11 owns; exercised by tests"
+)]
 struct Subscription {
     topic: Topic,
     scope: Option<ExecutionScope>,
@@ -42,10 +45,18 @@ struct Subscription {
     sequence: u64,
 }
 
-#[allow(dead_code, reason = "consumed by the live projection that #11 owns; exercised by tests")]
+#[allow(
+    dead_code,
+    reason = "consumed by the live projection that #11 owns; exercised by tests"
+)]
 impl Subscription {
     /// Builds the next update for this subscription and advances its sequence.
-    fn next_update(&mut self, runtime_epoch: u64, payload: EventPayload, subscription_id: &str) -> ServerEvent {
+    fn next_update(
+        &mut self,
+        runtime_epoch: u64,
+        payload: EventPayload,
+        subscription_id: &str,
+    ) -> ServerEvent {
         self.sequence = self.sequence.saturating_add(1);
         ServerEvent::Update {
             schema_version: STREAM_SCHEMA_VERSION,
@@ -143,9 +154,11 @@ async fn handle_client_message(
                 detail: None,
             }]
         }
-        ClientMessage::Subscribe { subscription_id, topic, scope } => {
-            subscribe(state, subscriptions, subscription_id, topic, scope).await
-        }
+        ClientMessage::Subscribe {
+            subscription_id,
+            topic,
+            scope,
+        } => subscribe(state, subscriptions, subscription_id, topic, scope).await,
     }
 }
 
@@ -185,7 +198,10 @@ async fn subscribe(
         }
         Topic::Positions | Topic::Orders | Topic::Stops | Topic::Operations | Topic::Portfolio => {
             if state.accounts.is_none() {
-                return vec![unavailable(subscription_id, "no account read side is attached to this process")];
+                return vec![unavailable(
+                    subscription_id,
+                    "no account read side is attached to this process",
+                )];
             }
             if scope.is_none() {
                 return vec![ServerEvent::Error {
@@ -205,7 +221,10 @@ async fn subscribe(
     }
 
     let Ok(runtime) = state.runtime_port() else {
-        return vec![unavailable(subscription_id, "no runtime is attached to this process")];
+        return vec![unavailable(
+            subscription_id,
+            "no runtime is attached to this process",
+        )];
     };
     let health = match runtime.health().await {
         Ok(health) => health,
@@ -220,7 +239,14 @@ async fn subscribe(
         }
     };
     let runtime_epoch = health.runtime_epoch;
-    subscriptions.insert(subscription_id.clone(), Subscription { topic, scope: scope.clone(), sequence: 0 });
+    subscriptions.insert(
+        subscription_id.clone(),
+        Subscription {
+            topic,
+            scope: scope.clone(),
+            sequence: 0,
+        },
+    );
     vec![
         ServerEvent::Status {
             schema_version: STREAM_SCHEMA_VERSION,
@@ -277,13 +303,11 @@ mod tests {
     async fn a_ping_is_answered_with_a_heartbeat() {
         let state = AppState::detached(ProviderDto::TInvest, BrokerEnvironment::Sandbox);
         let mut subs = HashMap::new();
-        let events = handle_client_message(
-            "{\"type\":\"PING\",\"nonce\":\"n-1\"}",
-            &state,
-            &mut subs,
-        )
-        .await;
-        assert!(matches!(events.as_slice(), [ServerEvent::Heartbeat { nonce: Some(n), .. }] if n == "n-1"));
+        let events =
+            handle_client_message("{\"type\":\"PING\",\"nonce\":\"n-1\"}", &state, &mut subs).await;
+        assert!(
+            matches!(events.as_slice(), [ServerEvent::Heartbeat { nonce: Some(n), .. }] if n == "n-1")
+        );
     }
 
     #[tokio::test]
@@ -291,7 +315,9 @@ mod tests {
         let state = AppState::detached(ProviderDto::TInvest, BrokerEnvironment::Sandbox);
         let mut subs = HashMap::new();
         let events = handle_client_message("{\"type\":\"NONSENSE\"}", &state, &mut subs).await;
-        assert!(matches!(events.as_slice(), [ServerEvent::Error { code, .. }] if code == "MALFORMED_MESSAGE"));
+        assert!(
+            matches!(events.as_slice(), [ServerEvent::Error { code, .. }] if code == "MALFORMED_MESSAGE")
+        );
     }
 
     #[tokio::test]
@@ -326,9 +352,15 @@ mod tests {
         .await;
         assert!(matches!(
             events.as_slice(),
-            [ServerEvent::Status { status: SubscriptionStatus::Unavailable, .. }]
+            [ServerEvent::Status {
+                status: SubscriptionStatus::Unavailable,
+                ..
+            }]
         ));
-        assert!(subs.is_empty(), "a refused subscription must not be registered");
+        assert!(
+            subs.is_empty(),
+            "a refused subscription must not be registered"
+        );
     }
 
     #[tokio::test]
@@ -337,7 +369,11 @@ mod tests {
         let mut subs = HashMap::new();
         subs.insert(
             "s-1".to_owned(),
-            Subscription { topic: Topic::RuntimeHealth, scope: None, sequence: 0 },
+            Subscription {
+                topic: Topic::RuntimeHealth,
+                scope: None,
+                sequence: 0,
+            },
         );
         let events = handle_client_message(
             "{\"type\":\"SUBSCRIBE\",\"subscription_id\":\"s-1\",\"topic\":\"RUNTIME_HEALTH\"}",
@@ -345,12 +381,18 @@ mod tests {
             &mut subs,
         )
         .await;
-        assert!(matches!(events.as_slice(), [ServerEvent::Error { code, .. }] if code == "SUBSCRIPTION_ID_IN_USE"));
+        assert!(
+            matches!(events.as_slice(), [ServerEvent::Error { code, .. }] if code == "SUBSCRIPTION_ID_IN_USE")
+        );
     }
 
     #[test]
     fn updates_carry_a_monotonic_sequence() {
-        let mut subscription = Subscription { topic: Topic::RuntimeHealth, scope: None, sequence: 0 };
+        let mut subscription = Subscription {
+            topic: Topic::RuntimeHealth,
+            scope: None,
+            sequence: 0,
+        };
         let payload = || EventPayload::RuntimeHealth(sample_health());
         let first = subscription.next_update(7, payload(), "s-1");
         let second = subscription.next_update(7, payload(), "s-1");

@@ -48,8 +48,14 @@ pub trait AccountQueries: Send + Sync {
 /// Capital-affecting commands, owned by #10 and gated by #17 authorization and #11 readiness.
 #[async_trait]
 pub trait ExecutionCommands: Send + Sync {
-    async fn submit_order(&self, request: SubmitOrderRequest) -> Result<MutationReceiptDto, ApiError>;
-    async fn cancel_order(&self, request: CancelOrderRequest) -> Result<MutationReceiptDto, ApiError>;
+    async fn submit_order(
+        &self,
+        request: SubmitOrderRequest,
+    ) -> Result<MutationReceiptDto, ApiError>;
+    async fn cancel_order(
+        &self,
+        request: CancelOrderRequest,
+    ) -> Result<MutationReceiptDto, ApiError>;
     async fn receipt(
         &self,
         scope: &ExecutionScope,
@@ -70,7 +76,11 @@ pub trait MarketDataQueries: Send + Sync {
         query: &str,
         limit: u16,
     ) -> Result<Vec<InstrumentSummaryDto>, ApiError>;
-    async fn quote(&self, provider: ProviderDto, instrument_uid: &str) -> Result<QuoteDto, ApiError>;
+    async fn quote(
+        &self,
+        provider: ProviderDto,
+        instrument_uid: &str,
+    ) -> Result<QuoteDto, ApiError>;
     async fn order_book(
         &self,
         provider: ProviderDto,
@@ -91,7 +101,11 @@ pub trait MarketDataQueries: Send + Sync {
         from_unix_ms: i64,
         to_unix_ms: i64,
     ) -> Result<CandlesDto, ApiError>;
-    async fn session(&self, provider: ProviderDto, instrument_uid: &str) -> Result<SessionDto, ApiError>;
+    async fn session(
+        &self,
+        provider: ProviderDto,
+        instrument_uid: &str,
+    ) -> Result<SessionDto, ApiError>;
 }
 
 /// What the process serves. A `None` port is a capability this deployment does not have.
@@ -109,7 +123,14 @@ impl AppState {
     /// A process with no broker runtime attached: it can describe itself and nothing else.
     #[must_use]
     pub fn detached(provider: ProviderDto, environment: BrokerEnvironment) -> Self {
-        Self { provider, environment, runtime: None, accounts: None, execution: None, market_data: None }
+        Self {
+            provider,
+            environment,
+            runtime: None,
+            accounts: None,
+            execution: None,
+            market_data: None,
+        }
     }
 
     #[must_use]
@@ -149,9 +170,9 @@ impl AppState {
     }
 
     pub(crate) fn market_data_port(&self) -> Result<&Arc<dyn MarketDataQueries>, ApiError> {
-        self.market_data
-            .as_ref()
-            .ok_or_else(|| ApiError::capability_unavailable("MARKET_DATA", "#38 projection over #8"))
+        self.market_data.as_ref().ok_or_else(|| {
+            ApiError::capability_unavailable("MARKET_DATA", "#38 projection over #8")
+        })
     }
 
     pub(crate) fn runtime_port(&self) -> Result<&Arc<dyn RuntimeQueries>, ApiError> {
@@ -181,10 +202,16 @@ mod tests {
     #[test]
     fn a_detached_process_refuses_instead_of_pretending() {
         let state = AppState::detached(ProviderDto::TInvest, BrokerEnvironment::Sandbox);
-        let error = state.accounts_port().err().expect("a detached process has no account read side");
+        let error = state
+            .accounts_port()
+            .err()
+            .expect("a detached process has no account read side");
         assert_eq!(error.category, ErrorCategory::CapabilityUnavailable);
         assert_eq!(error.code, "CAPABILITY_UNAVAILABLE");
-        assert!(!error.retryable, "a missing contract is not a transient failure");
+        assert!(
+            !error.retryable,
+            "a missing contract is not a transient failure"
+        );
     }
 
     #[test]
@@ -196,7 +223,11 @@ mod tests {
             .expect("a detached process has no market-data projection");
         assert_eq!(error.category, ErrorCategory::CapabilityUnavailable);
         assert!(
-            error.details.as_ref().and_then(|d| d.get("owner")).is_some(),
+            error
+                .details
+                .as_ref()
+                .and_then(|d| d.get("owner"))
+                .is_some(),
             "an unavailable capability must name who owns it"
         );
     }

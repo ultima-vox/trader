@@ -11,18 +11,20 @@
 
 use std::net::SocketAddr;
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
-use vox_api::contract::scope::{BrokerEnvironment, ProviderDto};
 use vox_api::AppState;
+use vox_api::contract::scope::{BrokerEnvironment, ProviderDto};
 use vox_core::{CoreConfig, CoreRuntime};
 use vox_domain::Environment;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .json()
         .try_init()
         .map_err(|error| anyhow!("initialize tracing: {error}"))?;
@@ -50,7 +52,9 @@ async fn main() -> anyhow::Result<()> {
         readiness = ?runtime.readiness().state(),
         "Vox application API listening"
     );
-    axum::serve(listener, app).await.context("serve the Vox application API")
+    axum::serve(listener, app)
+        .await
+        .context("serve the Vox application API")
 }
 
 /// Maps the process environment onto the broker environment the API speaks.

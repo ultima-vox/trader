@@ -216,9 +216,15 @@ mod tests {
             },
         };
         let json = serde_json::to_value(&quote)?;
-        assert_eq!(json["last"], "272.550000000", "price must be an exact string");
+        assert_eq!(
+            json["last"], "272.550000000",
+            "price must be an exact string"
+        );
         assert_eq!(json["freshness"]["age_ms"], 42);
-        assert!(json.get("change_absolute").is_none(), "an absent field is absent, not zero");
+        assert!(
+            json.get("change_absolute").is_none(),
+            "an absent field is absent, not zero"
+        );
         Ok(())
     }
 
@@ -243,7 +249,10 @@ mod tests {
 
     #[test]
     fn unknown_trading_status_is_its_own_value() -> Result<(), serde_json::Error> {
-        assert_eq!(serde_json::to_string(&TradingStatusDto::Unknown)?, "\"UNKNOWN\"");
+        assert_eq!(
+            serde_json::to_string(&TradingStatusDto::Unknown)?,
+            "\"UNKNOWN\""
+        );
         Ok(())
     }
 }

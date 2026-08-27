@@ -5,9 +5,9 @@
 //! conflict, staleness and unresolved-unknown are distinct from a generic failure, because
 //! an operator's next action differs in each case.
 
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -94,7 +94,11 @@ pub struct ApiError {
 
 impl ApiError {
     #[must_use]
-    pub fn new(category: ErrorCategory, code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(
+        category: ErrorCategory,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -158,7 +162,10 @@ mod tests {
             ErrorCategory::Validation.status(),
             "permission must not read as validation"
         );
-        assert_eq!(ErrorCategory::CapabilityUnavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            ErrorCategory::CapabilityUnavailable.status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
         assert_eq!(
             ErrorCategory::UnresolvedUnknown.status(),
             StatusCode::ACCEPTED,
@@ -169,7 +176,8 @@ mod tests {
     }
 
     #[test]
-    fn capability_unavailable_names_the_owner_and_never_pretends_to_succeed() -> Result<(), serde_json::Error> {
+    fn capability_unavailable_names_the_owner_and_never_pretends_to_succeed()
+    -> Result<(), serde_json::Error> {
         let error = ApiError::capability_unavailable("RISK_VERDICT", "#21");
         let json = serde_json::to_value(&error)?;
         assert_eq!(json["code"], "CAPABILITY_UNAVAILABLE");

@@ -15,7 +15,9 @@ use super::scope::ExecutionScope;
 pub const STREAM_SCHEMA_VERSION: u32 = 1;
 
 /// Topics a client may subscribe to. A topic exists only when its read model does.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Topic {
     /// Runtime health and readiness transitions.

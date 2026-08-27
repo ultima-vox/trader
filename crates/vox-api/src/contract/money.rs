@@ -25,7 +25,9 @@ impl Decimal {
     /// Builds the decimal from a provider units/nano pair.
     #[must_use]
     pub fn from_units_nano(units: i64, nano: i32) -> Self {
-        Self(render_nanos(i128::from(units) * NANO_SCALE + i128::from(nano)))
+        Self(render_nanos(
+            i128::from(units) * NANO_SCALE + i128::from(nano),
+        ))
     }
 
     /// Accepts a value the backend already produced as an exact decimal string.
@@ -58,8 +60,14 @@ mod tests {
 
     #[test]
     fn renders_exactly_and_keeps_the_sign() {
-        assert_eq!(Decimal::from_units_nano(272, 550_000_000).as_str(), "272.550000000");
-        assert_eq!(Decimal::from_units_nano(-3140, -700_000_000).as_str(), "-3140.700000000");
+        assert_eq!(
+            Decimal::from_units_nano(272, 550_000_000).as_str(),
+            "272.550000000"
+        );
+        assert_eq!(
+            Decimal::from_units_nano(-3140, -700_000_000).as_str(),
+            "-3140.700000000"
+        );
         assert_eq!(Decimal::from_units_nano(0, 0).as_str(), "0.000000000");
     }
 

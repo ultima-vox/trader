@@ -5,9 +5,9 @@
 //! operation amounts — it is absent here rather than invented, and the capability set says
 //! who owns it. See `docs/design/BACKEND_CONTRACTS.md`.
 
+use super::money::Decimal;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use super::money::Decimal;
 
 /// A broker account discovered through a connection.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
@@ -105,4 +105,3 @@ pub struct ReconciliationDto {
     /// True only when every domain above is complete.
     pub complete: bool,
 }
-

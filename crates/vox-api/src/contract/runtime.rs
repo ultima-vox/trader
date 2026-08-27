@@ -179,7 +179,10 @@ mod tests {
     }
 
     fn serialized<T: Serialize>(value: &T) -> String {
-        serde_json::to_string(value).expect("an enum serializes").trim_matches('"').to_owned()
+        serde_json::to_string(value)
+            .expect("an enum serializes")
+            .trim_matches('"')
+            .to_owned()
     }
 
     #[test]
@@ -196,7 +199,10 @@ mod tests {
             RuntimeStateDto::Stopped,
         ] {
             let spelling = serialized(&state);
-            assert!(map.contains(&spelling), "{spelling} is not in the recorded contract map");
+            assert!(
+                map.contains(&spelling),
+                "{spelling} is not in the recorded contract map"
+            );
         }
     }
 
@@ -217,18 +223,28 @@ mod tests {
             ReasonCodeDto::ShutdownComplete,
         ] {
             let spelling = serialized(&code);
-            assert!(map.contains(&spelling), "{spelling} is not in the recorded contract map");
+            assert!(
+                map.contains(&spelling),
+                "{spelling} is not in the recorded contract map"
+            );
         }
     }
 
     #[test]
     fn domain_readiness_maps_into_the_runtime_vocabulary() {
-        assert_eq!(RuntimeStateDto::from(ReadinessState::Ready), RuntimeStateDto::Ready);
-        assert_eq!(RuntimeStateDto::from(ReadinessState::Halted), RuntimeStateDto::Halted);
+        assert_eq!(
+            RuntimeStateDto::from(ReadinessState::Ready),
+            RuntimeStateDto::Ready
+        );
+        assert_eq!(
+            RuntimeStateDto::from(ReadinessState::Halted),
+            RuntimeStateDto::Halted
+        );
     }
 
     #[test]
-    fn stream_state_stale_is_a_stream_fact_not_a_protection_state() -> Result<(), serde_json::Error> {
+    fn stream_state_stale_is_a_stream_fact_not_a_protection_state() -> Result<(), serde_json::Error>
+    {
         assert_eq!(serde_json::to_string(&StreamStateDto::Stale)?, "\"STALE\"");
         Ok(())
     }

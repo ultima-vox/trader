@@ -8,14 +8,18 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 /// Providers with a registered adapter. A provider appears here only once it is real.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ProviderDto {
     TInvest,
 }
 
 /// The broker-side environment of a connection. Exactly the runtime contract's two values.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum BrokerEnvironment {
     Sandbox,
@@ -27,7 +31,9 @@ pub enum BrokerEnvironment {
 /// Only `LIVE` exists: orders go to the broker connection named by the scope. `PAPER` and
 /// `BACKTEST` are owned by #23 and #29 and will be added here when those runtimes exist,
 /// not before.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TradingMode {
     Live,
@@ -55,7 +61,10 @@ impl ExecutionScope {
     /// Stable key of the scope, matching the runtime's own scope key semantics.
     #[must_use]
     pub fn key(&self) -> String {
-        format!("{:?}:{:?}:{}", self.provider, self.environment, self.broker_account_id)
+        format!(
+            "{:?}:{:?}:{}",
+            self.provider, self.environment, self.broker_account_id
+        )
     }
 }
 
@@ -65,14 +74,24 @@ mod tests {
 
     #[test]
     fn environment_spells_exactly_what_the_contract_spells() -> Result<(), serde_json::Error> {
-        assert_eq!(serde_json::to_string(&BrokerEnvironment::Production)?, "\"PRODUCTION\"");
-        assert_eq!(serde_json::to_string(&BrokerEnvironment::Sandbox)?, "\"SANDBOX\"");
-        assert_eq!(serde_json::to_string(&ProviderDto::TInvest)?, "\"T_INVEST\"");
+        assert_eq!(
+            serde_json::to_string(&BrokerEnvironment::Production)?,
+            "\"PRODUCTION\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BrokerEnvironment::Sandbox)?,
+            "\"SANDBOX\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ProviderDto::TInvest)?,
+            "\"T_INVEST\""
+        );
         Ok(())
     }
 
     #[test]
-    fn trading_mode_is_a_separate_axis_with_only_live_implemented() -> Result<(), serde_json::Error> {
+    fn trading_mode_is_a_separate_axis_with_only_live_implemented() -> Result<(), serde_json::Error>
+    {
         assert_eq!(serde_json::to_string(&TradingMode::Live)?, "\"LIVE\"");
         // PAPER and BACKTEST must not be constructible until #23/#29 land.
         assert!(serde_json::from_str::<TradingMode>("\"PAPER\"").is_err());

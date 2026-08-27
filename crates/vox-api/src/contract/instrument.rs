@@ -99,9 +99,13 @@ mod tests {
     }
 
     #[test]
-    fn identity_carries_its_provider_because_a_uid_alone_is_not_one() -> Result<(), serde_json::Error> {
+    fn identity_carries_its_provider_because_a_uid_alone_is_not_one()
+    -> Result<(), serde_json::Error> {
         let json = serde_json::to_value(InstrumentIdentityDto::from(&identity()))?;
-        assert!(json.get("provider").is_some(), "a uid without its provider is not an identity");
+        assert!(
+            json.get("provider").is_some(),
+            "a uid without its provider is not an identity"
+        );
         assert!(
             json.get("instrument_id").is_none(),
             "no Vox-minted identifier exists: the provider identity is the identity"
@@ -111,6 +115,9 @@ mod tests {
 
     #[test]
     fn operators_read_the_ticker_and_venue() {
-        assert_eq!(InstrumentIdentityDto::from(&identity()).display(), "SBER · TQBR");
+        assert_eq!(
+            InstrumentIdentityDto::from(&identity()).display(),
+            "SBER · TQBR"
+        );
     }
 }

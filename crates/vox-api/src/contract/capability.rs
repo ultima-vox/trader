@@ -11,7 +11,9 @@ use utoipa::ToSchema;
 use super::scope::{BrokerEnvironment, ProviderDto};
 
 /// A capability the frontend may gate on.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Capability {
     /// Runtime health and readiness reads.
@@ -96,9 +98,18 @@ impl CapabilitySet {
             supported.push(Capability::ProtectionExecution);
         } else {
             for (capability, reason) in [
-                (Capability::AccountReadSide, "no broker runtime is attached to this process"),
-                (Capability::OrderExecution, "no broker runtime is attached to this process"),
-                (Capability::ProtectionExecution, "no broker runtime is attached to this process"),
+                (
+                    Capability::AccountReadSide,
+                    "no broker runtime is attached to this process",
+                ),
+                (
+                    Capability::OrderExecution,
+                    "no broker runtime is attached to this process",
+                ),
+                (
+                    Capability::ProtectionExecution,
+                    "no broker runtime is attached to this process",
+                ),
             ] {
                 unavailable.push(UnavailableCapability {
                     capability,
@@ -117,19 +128,71 @@ impl CapabilitySet {
             });
         }
         for (capability, reason, owner) in [
-            (Capability::ProtectionDefaults, "account-scoped default protection policy has no contract", "#10"),
-            (Capability::BulkProtectionMigration, "no bulk mutation contract exists; single mutations only", "#10"),
-            (Capability::ConnectionManagement, "connection and credential lifecycle has no contract", "#17"),
-            (Capability::Rbac, "role and permission read model has no contract", "#17"),
-            (Capability::RiskVerdict, "no risk engine contract exists; new_exposure_allowed is the only safety fact", "#21"),
-            (Capability::PortfolioValuation, "valuation, P&L, exposure and margin have no contract", "#22"),
-            (Capability::Strategy, "strategy runtime has no contract", "#23"),
-            (Capability::Decision, "decision aggregation has no contract", "#27"),
-            (Capability::MachineLearning, "model registry and training have no contract", "#26"),
-            (Capability::Research, "backtest and research runs have no contract", "#29"),
-            (Capability::AggregateAccounts, "no aggregate read model exists; aggregate execution is not defined", "#22"),
-            (Capability::MultiProvider, "only the T-Invest adapter is registered", "#17"),
-            (Capability::NonLiveTradingMode, "PAPER and BACKTEST trading modes have no runtime", "#23/#29"),
+            (
+                Capability::ProtectionDefaults,
+                "account-scoped default protection policy has no contract",
+                "#10",
+            ),
+            (
+                Capability::BulkProtectionMigration,
+                "no bulk mutation contract exists; single mutations only",
+                "#10",
+            ),
+            (
+                Capability::ConnectionManagement,
+                "connection and credential lifecycle has no contract",
+                "#17",
+            ),
+            (
+                Capability::Rbac,
+                "role and permission read model has no contract",
+                "#17",
+            ),
+            (
+                Capability::RiskVerdict,
+                "no risk engine contract exists; new_exposure_allowed is the only safety fact",
+                "#21",
+            ),
+            (
+                Capability::PortfolioValuation,
+                "valuation, P&L, exposure and margin have no contract",
+                "#22",
+            ),
+            (
+                Capability::Strategy,
+                "strategy runtime has no contract",
+                "#23",
+            ),
+            (
+                Capability::Decision,
+                "decision aggregation has no contract",
+                "#27",
+            ),
+            (
+                Capability::MachineLearning,
+                "model registry and training have no contract",
+                "#26",
+            ),
+            (
+                Capability::Research,
+                "backtest and research runs have no contract",
+                "#29",
+            ),
+            (
+                Capability::AggregateAccounts,
+                "no aggregate read model exists; aggregate execution is not defined",
+                "#22",
+            ),
+            (
+                Capability::MultiProvider,
+                "only the T-Invest adapter is registered",
+                "#17",
+            ),
+            (
+                Capability::NonLiveTradingMode,
+                "PAPER and BACKTEST trading modes have no runtime",
+                "#23/#29",
+            ),
         ] {
             unavailable.push(UnavailableCapability {
                 capability,
@@ -137,7 +200,13 @@ impl CapabilitySet {
                 owner: owner.to_owned(),
             });
         }
-        Self { provider, environment, account_id, supported, unavailable }
+        Self {
+            provider,
+            environment,
+            account_id,
+            supported,
+            unavailable,
+        }
     }
 }
 
@@ -167,9 +236,14 @@ mod tests {
             Capability::NonLiveTradingMode,
             Capability::BulkProtectionMigration,
         ] {
-            assert!(!set.supported.contains(&capability), "{capability:?} must not be supported");
             assert!(
-                set.unavailable.iter().any(|u| u.capability == capability && !u.owner.is_empty()),
+                !set.supported.contains(&capability),
+                "{capability:?} must not be supported"
+            );
+            assert!(
+                set.unavailable
+                    .iter()
+                    .any(|u| u.capability == capability && !u.owner.is_empty()),
                 "{capability:?} must be listed as unavailable with an owner"
             );
         }
