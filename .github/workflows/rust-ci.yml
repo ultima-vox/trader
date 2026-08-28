@@ -42,8 +42,10 @@ jobs:
       CARGO_HTTP_LOW_SPEED_LIMIT: 1
       CARGO_HTTP_TIMEOUT: 120
       CARGO_NET_RETRY: 5
-      # The build tree is per-run and disposable; the toolchain is not.
-      CARGO_TARGET_DIR: /tmp/vox-target-${{ github.run_id }}
+      # The build tree is per-run and disposable; the toolchain is not. It
+      # lives on the disk, not on /tmp: that is a 7.8G RAM-backed tmpfs here,
+      # and a debug build of the whole workspace with all targets does not fit.
+      CARGO_TARGET_DIR: /var/tmp/vox-target-${{ github.run_id }}
     defaults:
       run:
         shell: 'bash --noprofile --norc -e -o pipefail "{0}"'
@@ -54,13 +56,13 @@ jobs:
           shopt -s nullglob
           # /tmp/vox-cargo-* and /tmp/vox-rustup-* are throwaway toolchain homes
           # from the old per-run install; sweep them out too.
-          for candidate in /tmp/vox-cargo-* /tmp/vox-rustup-* /tmp/vox-target-*; do
+          for candidate in /tmp/vox-cargo-* /tmp/vox-rustup-* /tmp/vox-target-* /var/tmp/vox-target-*; do
             resolved="$(realpath -e -- "$candidate")"
             if [[ "$resolved" == "$CARGO_TARGET_DIR" ]]; then
               continue
             fi
             case "$resolved" in
-              /tmp/vox-cargo-[0-9]*|/tmp/vox-rustup-[0-9]*|/tmp/vox-target-[0-9]*)
+              /tmp/vox-cargo-[0-9]*|/tmp/vox-rustup-[0-9]*|/tmp/vox-target-[0-9]*|/var/tmp/vox-target-[0-9]*)
                 rm -rf -- "$resolved"
                 ;;
               *)
@@ -162,7 +164,7 @@ jobs:
           [[ -e "$CARGO_TARGET_DIR" ]] || exit 0
           resolved="$(realpath -e -- "$CARGO_TARGET_DIR")"
           case "$resolved" in
-            /tmp/vox-target-[0-9]*)
+            /tmp/vox-target-[0-9]*|/var/tmp/vox-target-[0-9]*)
               rm -rf -- "$resolved"
               ;;
             *)
