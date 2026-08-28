@@ -9,6 +9,7 @@ use crate::application::AppState;
 
 /// The whole public surface: REST, the stream gateway and the OpenAPI document.
 pub fn router(state: AppState) -> Router {
+    state.spawn_runtime_watch();
     http::router(state.clone())
         .merge(ws::router(state))
         .merge(crate::schema::router())

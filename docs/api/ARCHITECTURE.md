@@ -15,6 +15,8 @@ decided.
 | [RFC 9110 — HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110) | — | Status mapping in `error.rs`: 400 validation, 401 authentication, 403 permission, 404 not found, 409 conflict and stale scope/epoch, 202 for an accepted-but-unresolved mutation *receipt*, 503 for a capability with no owner and for transient dependency failure. `UNKNOWN_AFTER_DISPATCH` is never an `ApiError`. |
 | [RFC 6455 — WebSocket](https://www.rfc-editor.org/rfc/rfc6455) | — | One upgrade endpoint, text frames carrying JSON envelopes, server-initiated heartbeats, close on a slow consumer. |
 | [T-Invest developer protocols](https://developer.tbank.ru/invest/intro/developer/protocols/) | — | Confirms the provider speaks gRPC/protobuf. That stays inside the adapter: no provider wire type appears in this API, and the browser never reaches the provider. |
+| [T-Invest GetCandles](https://developer.tbank.ru/invest/api/market-data-service-get-candles) | 2026-08-27 | Historic `CandleInterval` is 1..=16 including 5s/10s/30s. |
+| [T-Invest marketdata proto](https://developer.tbank.ru/invest/services/quotes/marketdata) | pinned `#8` proto | MarketDataStream `SubscriptionInterval` is 1..=13 (no 5s/10s/30s). Provenance stays split. |
 
 Read on 2026-08-27. Versions are what `docs.rs/latest` served that day; the workspace pins
 `axum = "0.8"` and `utoipa = "5.5"`.
@@ -79,12 +81,26 @@ as aliases). That is lookup identity, not the capital-command target.
 stores facts already acquired by the #8 adapter and republishes them provider-neutrally:
 quote, order book, tape, candles, session and the instrument catalogue. Mapping functions
 (`quote_from_last_price`, `order_book_from_levels`, `trade_from_canonical`,
-`trading_status_from_provider`) take #8 field shapes (`FixedPoint`, uid, wire status)
-without importing protobuf. Every record carries `MarketFreshness`. An inconsistent book is
-refused. A missing instrument is `MARKET_FACT_NOT_FOUND`, never a zero price. Default
+`trading_status_from_provider`, `candle_interval_from_provider`) take #8 field shapes
+(`FixedPoint`, uid, historic `CandleInterval` wire numbers, wire status) without importing
+protobuf. Candle intervals are the official GetCandles set accepted by
+`vox_tinvest::market_data::candle_request_constraint` (1..=16), including **5s/10s/30s**.
+Those second-resolution bars are request/history only: MarketDataStream
+`SubscriptionInterval` stops at month (1..=13) and is not treated as the same enum.
+`CandleDto.state` is `OPEN` / `CLOSED` / `CORRECTED` with a per-bar `revision`; a boolean
+`closed` flag is not enough. Every record carries `MarketFreshness`. An inconsistent book
+is refused. A missing instrument is `MARKET_FACT_NOT_FOUND`, never a zero price. Default
 `vox-server` does not attach an empty projection, so unattached `MARKET_DATA` stays
-`CAPABILITY_UNAVAILABLE`. When attached, `QUOTES`/`ORDER_BOOK`/`TRADES` WebSocket
-subscriptions emit a typed snapshot from the store.
+`CAPABILITY_UNAVAILABLE`.
+
+**Live WebSocket is an application event bus.** `ApplicationEventBus` is a bounded
+broadcast of already-projected facts. `SnapshotMarketProjection` publish methods emit
+quote/book/tape events; a runtime-health watcher publishes `#11` health diffs after the
+first snapshot baseline. The `/api/v1/stream` gateway fans matching events to per-socket
+bounded queues as `UPDATE` with a monotonic per-subscription sequence. A lagging
+subscriber is `DROPPED_SLOW_CONSUMER`, not buffered without limit. Account topics stay
+explicitly unavailable until #17 attaches an account projection. This is not a second
+T-Invest stream client.
 
 **One document, generated.** `docs/api/openapi.json` is produced by
 `cargo run -p vox-api --bin openapi -- docs/api/openapi.json` and served at
@@ -110,8 +126,6 @@ schema: a test fails the build if one does.
 ## What this slice does not do
 
 No risk verdicts (#21), no valuation or P&L (#22), no strategy (#23), analytics (#24/#25),
-models (#26), decisions (#27), backtests (#29), the live market-data projection that feeds
-the read model published here (#38, next slice),
-connection or credential lifecycle (#17), bulk protection migration (#10). Each is listed in
-the capability set with its owner, and `docs/design/BACKEND_CONTRACTS.md` tracks the same
-dependencies for the design side.
+models (#26), decisions (#27), backtests (#29), live broker market feed credentials (#17),
+bulk protection migration (#10). Each is listed in the capability set with its owner, and
+`docs/design/BACKEND_CONTRACTS.md` tracks the same dependencies for the design side.

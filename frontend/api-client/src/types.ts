@@ -39,7 +39,7 @@ export type CancelOrderRequest = {
   logical_request_id?: string | null;
 };
 
-/** One candle. `closed` distinguishes a settled bar from the one still forming. */
+/** One candle. `state` is explicit: forming, settled, or a post-close correction. */
 export type CandleDto = {
   instrument_uid: string;
   interval: CandleIntervalDto;
@@ -50,12 +50,16 @@ export type CandleDto = {
   low: Decimal;
   close: Decimal;
   volume_units: number;
-  /** False while the bar is still forming. An open bar may be revised. */
-  closed: boolean;
+  state: CandleStateDto;
+  /** Zero at first publication of this open time. Increments on each later publish. */
+  revision: number;
 };
 
-/** Candle interval. Only intervals the provider actually serves appear here. */
-export type CandleIntervalDto = "ONE_MINUTE" | "FIVE_MINUTES" | "FIFTEEN_MINUTES" | "ONE_HOUR" | "ONE_DAY";
+/** Candle interval for the Vox read model. Variants and `historic_wire` numbers are the official T-Invest **GetCandles** `CandleInterval` set accepted by `#8` `candle_request_constraint` (1..=16). [`Self::market_data_stream_supported`] is the separate **MarketDataStream** `SubscriptionInterval` surface (1..=13). 5s/10s/30s exist on GetCandles only; they are not stream-subscribable and must not be invented as such. */
+export type CandleIntervalDto = "FIVE_SECONDS" | "TEN_SECONDS" | "THIRTY_SECONDS" | "ONE_MINUTE" | "TWO_MINUTES" | "THREE_MINUTES" | "FIVE_MINUTES" | "TEN_MINUTES" | "FIFTEEN_MINUTES" | "THIRTY_MINUTES" | "ONE_HOUR" | "TWO_HOURS" | "FOUR_HOURS" | "ONE_DAY" | "ONE_WEEK" | "ONE_MONTH";
+
+/** Lifecycle of one bar. Replaces a boolean `closed` so OPEN / CLOSED / CORRECTED do not have to be inferred. */
+export type CandleStateDto = "OPEN" | "CLOSED" | "CORRECTED";
 
 /** A page of candles for one instrument and interval. */
 export type CandlesDto = {

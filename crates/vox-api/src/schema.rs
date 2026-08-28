@@ -22,8 +22,9 @@ use crate::contract::execution::{
 };
 use crate::contract::instrument::InstrumentIdentityDto;
 use crate::contract::market::{
-    CandleDto, CandleIntervalDto, CandlesDto, DepthLevelDto, InstrumentSummaryDto, MarketFreshness,
-    OrderBookDto, QuoteDto, SessionDto, TradeDirectionDto, TradeTickDto, TradingStatusDto,
+    CandleDto, CandleIntervalDto, CandleStateDto, CandlesDto, DepthLevelDto, InstrumentSummaryDto,
+    MarketFreshness, OrderBookDto, QuoteDto, SessionDto, TradeDirectionDto, TradeTickDto,
+    TradingStatusDto,
 };
 use crate::contract::money::Decimal;
 use crate::contract::runtime::{
@@ -88,7 +89,7 @@ use crate::transport::http;
         Capability, CapabilitySet, UnavailableCapability,
         InstrumentIdentityDto, InstrumentSummaryDto, MarketFreshness, TradingStatusDto, SessionDto,
         QuoteDto, DepthLevelDto, OrderBookDto, TradeDirectionDto, TradeTickDto, CandleIntervalDto,
-        CandleDto, CandlesDto,
+        CandleStateDto, CandleDto, CandlesDto,
         ClientMessage, ServerEvent, EventPayload, Topic, SubscriptionStatus,
     )),
     tags(
@@ -193,6 +194,45 @@ mod tests {
                 "missing market route: {path}"
             );
         }
+    }
+
+    #[test]
+    fn candle_contract_covers_historic_five_seconds_and_explicit_state()
+    -> Result<(), serde_json::Error> {
+        let doc: serde_json::Value = serde_json::from_str(&openapi_json()?)?;
+        let intervals = doc["components"]["schemas"]["CandleIntervalDto"]["enum"]
+            .as_array()
+            .expect("CandleIntervalDto enum");
+        for required in [
+            "FIVE_SECONDS",
+            "TEN_SECONDS",
+            "THIRTY_SECONDS",
+            "TWO_MINUTES",
+            "ONE_WEEK",
+            "ONE_MONTH",
+        ] {
+            assert!(
+                intervals.iter().any(|value| value == required),
+                "missing interval {required}: {intervals:?}"
+            );
+        }
+        let states = doc["components"]["schemas"]["CandleStateDto"]["enum"]
+            .as_array()
+            .expect("CandleStateDto enum");
+        for required in ["OPEN", "CLOSED", "CORRECTED"] {
+            assert!(
+                states.iter().any(|value| value == required),
+                "missing candle state {required}: {states:?}"
+            );
+        }
+        let candle = &doc["components"]["schemas"]["CandleDto"]["properties"];
+        assert!(candle.get("state").is_some());
+        assert!(candle.get("revision").is_some());
+        assert!(
+            candle.get("closed").is_none(),
+            "boolean closed was replaced by explicit state"
+        );
+        Ok(())
     }
 
     #[test]

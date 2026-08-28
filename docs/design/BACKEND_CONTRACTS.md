@@ -186,7 +186,7 @@ must be corrected or shown as an explicitly deferred capability — not simulate
 | --- | --- | --- | --- |
 | BD-1 | every screen | Vox-side transport exposing the read models above | **#38 — the first slice is implemented**, see below |
 | BD-2 | shell, ticket | risk verdict / guardrail read model (exposure, day loss, concentration, resize) | #21 |
-| BD-3 | Markets, chart, book, tape, ticket price | market-data read model (quote, depth, trades, candles, session, catalogue) as a Vox projection over the accepted #8 adapter layer | **#38 — read model, REST, WS snapshots, and `SnapshotMarketProjection` are implemented**. Default `vox-server` does not attach an empty store, so `MARKET_DATA` stays `CAPABILITY_UNAVAILABLE` until a source publishes facts. No invented prices. |
+| BD-3 | Markets, chart, book, tape, ticket price | market-data read model (quote, depth, trades, candles, session, catalogue) as a Vox projection over the accepted #8 adapter layer | **#38 — read model, REST, live WS, and `SnapshotMarketProjection` are implemented**. Historic candle intervals include GetCandles 5s/10s/30s; those are not MarketDataStream intervals. Candle state is OPEN/CLOSED/CORRECTED. Default `vox-server` does not attach an empty store, so `MARKET_DATA` stays `CAPABILITY_UNAVAILABLE` until a source publishes facts. No invented prices. |
 | BD-4 | Portfolio | P&L, margin and valuation analytics, operation amounts | #22 |
 | BD-5 | Settings → Brokers | credential rotation/revocation lifecycle beyond `CredentialResolution` | #17 |
 | BD-6 | Strategy, Decision | strategy binding, signal and approval contracts | #23, #27 |
@@ -249,10 +249,12 @@ Two facts this work established that the earlier map did not record:
    documents eight; the two missing ones are the partially-filled entry and the protection
    that failed after entry.
 3. **Market-data projection is implemented** as `SnapshotMarketProjection` plus mapping
-   from #8 field shapes. WebSocket `QUOTES`/`ORDER_BOOK`/`TRADES` emit snapshots when a
-   projection is attached. Default process still refuses empty prices. `GET /api/v1/runtime/scopes`
-   returns `[]` until #17 bindings exist. Replace/stop/protection command routes exist and
-   stay `CAPABILITY_UNAVAILABLE` until an execution port is composed.
+   from #8 field shapes. WebSocket `QUOTES`/`ORDER_BOOK`/`TRADES` and `RUNTIME_HEALTH`
+   emit a snapshot on subscribe and later `UPDATE`s from `ApplicationEventBus` when the
+   projection or runtime health changes. Account topics stay unavailable until #17.
+   Default process still refuses empty prices. `GET /api/v1/runtime/scopes` returns `[]`
+   until #17 bindings exist. Replace/stop/protection command routes exist and stay
+   `CAPABILITY_UNAVAILABLE` until an execution port is composed.
 
 The design reference must gain those two states before it can claim to render the canonical
 lifecycle.

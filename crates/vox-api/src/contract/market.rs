@@ -139,20 +139,112 @@ pub struct TradeTickDto {
     pub own: bool,
 }
 
-/// Candle interval. Only intervals the provider actually serves appear here.
+/// Candle interval for the Vox read model.
+///
+/// Variants and `historic_wire` numbers are the official T-Invest **GetCandles**
+/// `CandleInterval` set accepted by `#8` `candle_request_constraint` (1..=16).
+/// [`Self::market_data_stream_supported`] is the separate **MarketDataStream**
+/// `SubscriptionInterval` surface (1..=13). 5s/10s/30s exist on GetCandles only;
+/// they are not stream-subscribable and must not be invented as such.
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema,
 )]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CandleIntervalDto {
+    FiveSeconds,
+    TenSeconds,
+    ThirtySeconds,
     OneMinute,
+    TwoMinutes,
+    ThreeMinutes,
     FiveMinutes,
+    TenMinutes,
     FifteenMinutes,
+    ThirtyMinutes,
     OneHour,
+    TwoHours,
+    FourHours,
     OneDay,
+    OneWeek,
+    OneMonth,
 }
 
-/// One candle. `closed` distinguishes a settled bar from the one still forming.
+impl CandleIntervalDto {
+    /// Historic GetCandles `CandleInterval` wire number. Same set as
+    /// `vox_tinvest::market_data::candle_request_constraint`.
+    #[must_use]
+    pub const fn historic_wire(self) -> i32 {
+        match self {
+            Self::OneMinute => 1,
+            Self::FiveMinutes => 2,
+            Self::FifteenMinutes => 3,
+            Self::OneHour => 4,
+            Self::OneDay => 5,
+            Self::TwoMinutes => 6,
+            Self::ThreeMinutes => 7,
+            Self::TenMinutes => 8,
+            Self::ThirtyMinutes => 9,
+            Self::TwoHours => 10,
+            Self::FourHours => 11,
+            Self::OneWeek => 12,
+            Self::OneMonth => 13,
+            Self::FiveSeconds => 14,
+            Self::TenSeconds => 15,
+            Self::ThirtySeconds => 16,
+        }
+    }
+
+    /// Inverse of [`historic_wire`]. `0` and unknown values are rejected.
+    #[must_use]
+    pub const fn from_historic_wire(interval: i32) -> Option<Self> {
+        match interval {
+            1 => Some(Self::OneMinute),
+            2 => Some(Self::FiveMinutes),
+            3 => Some(Self::FifteenMinutes),
+            4 => Some(Self::OneHour),
+            5 => Some(Self::OneDay),
+            6 => Some(Self::TwoMinutes),
+            7 => Some(Self::ThreeMinutes),
+            8 => Some(Self::TenMinutes),
+            9 => Some(Self::ThirtyMinutes),
+            10 => Some(Self::TwoHours),
+            11 => Some(Self::FourHours),
+            12 => Some(Self::OneWeek),
+            13 => Some(Self::OneMonth),
+            14 => Some(Self::FiveSeconds),
+            15 => Some(Self::TenSeconds),
+            16 => Some(Self::ThirtySeconds),
+            _ => None,
+        }
+    }
+
+    /// Whether MarketDataStream `SubscriptionInterval` accepts this bar size.
+    ///
+    /// Official stream intervals are 1m through month (wire 1..=13). Second-resolution
+    /// bars (5s/10s/30s) are GetCandles-only.
+    #[must_use]
+    pub const fn market_data_stream_supported(self) -> bool {
+        !matches!(
+            self,
+            Self::FiveSeconds | Self::TenSeconds | Self::ThirtySeconds
+        )
+    }
+}
+
+/// Lifecycle of one bar. Replaces a boolean `closed` so OPEN / CLOSED / CORRECTED
+/// do not have to be inferred.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CandleStateDto {
+    /// The bar is still forming. Later publishes of the same open time stay `OPEN`.
+    Open,
+    /// The bar has settled. First complete publication of this open time.
+    Closed,
+    /// A previously closed bar was republished with a different body.
+    Corrected,
+}
+
+/// One candle. `state` is explicit: forming, settled, or a post-close correction.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct CandleDto {
     pub instrument_uid: String,
@@ -164,8 +256,9 @@ pub struct CandleDto {
     pub low: Decimal,
     pub close: Decimal,
     pub volume_units: i64,
-    /// False while the bar is still forming. An open bar may be revised.
-    pub closed: bool,
+    pub state: CandleStateDto,
+    /// Zero at first publication of this open time. Increments on each later publish.
+    pub revision: u32,
 }
 
 /// A page of candles for one instrument and interval.
@@ -241,11 +334,67 @@ mod tests {
             low: Decimal::from_units_nano(1, 0)?,
             close: Decimal::from_units_nano(2, 0)?,
             volume_units: 10,
-            closed: false,
+            state: CandleStateDto::Open,
+            revision: 0,
         };
         let json = serde_json::to_value(&candle)?;
-        assert_eq!(json["closed"], false);
+        assert_eq!(json["state"], "OPEN");
+        assert_eq!(json["revision"], 0);
         assert_eq!(json["interval"], "FIVE_MINUTES");
+        Ok(())
+    }
+
+    #[test]
+    fn historic_get_candles_wire_covers_the_accepted_set() {
+        let expected = [
+            (1, CandleIntervalDto::OneMinute, true),
+            (2, CandleIntervalDto::FiveMinutes, true),
+            (3, CandleIntervalDto::FifteenMinutes, true),
+            (4, CandleIntervalDto::OneHour, true),
+            (5, CandleIntervalDto::OneDay, true),
+            (6, CandleIntervalDto::TwoMinutes, true),
+            (7, CandleIntervalDto::ThreeMinutes, true),
+            (8, CandleIntervalDto::TenMinutes, true),
+            (9, CandleIntervalDto::ThirtyMinutes, true),
+            (10, CandleIntervalDto::TwoHours, true),
+            (11, CandleIntervalDto::FourHours, true),
+            (12, CandleIntervalDto::OneWeek, true),
+            (13, CandleIntervalDto::OneMonth, true),
+            (14, CandleIntervalDto::FiveSeconds, false),
+            (15, CandleIntervalDto::TenSeconds, false),
+            (16, CandleIntervalDto::ThirtySeconds, false),
+        ];
+        for (wire, interval, stream) in expected {
+            assert_eq!(
+                CandleIntervalDto::from_historic_wire(wire),
+                Some(interval),
+                "historic wire {wire}"
+            );
+            assert_eq!(interval.historic_wire(), wire);
+            assert_eq!(
+                interval.market_data_stream_supported(),
+                stream,
+                "{interval:?} stream provenance"
+            );
+        }
+        assert_eq!(CandleIntervalDto::from_historic_wire(0), None);
+        assert_eq!(CandleIntervalDto::from_historic_wire(17), None);
+    }
+
+    #[test]
+    fn five_second_candles_serialize_as_historic_not_stream() -> Result<(), serde_json::Error> {
+        assert_eq!(
+            serde_json::to_string(&CandleIntervalDto::FiveSeconds)?,
+            "\"FIVE_SECONDS\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CandleStateDto::Corrected)?,
+            "\"CORRECTED\""
+        );
+        assert!(
+            !CandleIntervalDto::FiveSeconds.market_data_stream_supported(),
+            "5s is GetCandles-only"
+        );
         Ok(())
     }
 

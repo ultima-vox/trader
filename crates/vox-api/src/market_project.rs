@@ -13,13 +13,15 @@ use vox_domain::FixedPoint;
 
 use crate::application::MarketDataQueries;
 use crate::contract::market::{
-    CandleDto, CandleIntervalDto, CandlesDto, DepthLevelDto, InstrumentSummaryDto, MarketFreshness,
-    OrderBookDto, QuoteDto, SessionDto, TradeDirectionDto, TradeTickDto, TradingStatusDto,
+    CandleDto, CandleIntervalDto, CandleStateDto, CandlesDto, DepthLevelDto, InstrumentSummaryDto,
+    MarketFreshness, OrderBookDto, QuoteDto, SessionDto, TradeDirectionDto, TradeTickDto,
+    TradingStatusDto,
 };
 use crate::contract::money::Decimal;
 use crate::contract::runtime::StreamStateDto;
 use crate::contract::scope::ProviderDto;
 use crate::error::{ApiError, ErrorCategory};
+use crate::events::{ApplicationEvent, ApplicationEventBus};
 use crate::transport::http::now_unix_ms;
 
 #[derive(Clone, Debug)]
@@ -61,6 +63,7 @@ struct Inner {
 #[derive(Default)]
 pub struct SnapshotMarketProjection {
     inner: Mutex<Inner>,
+    events: Option<ApplicationEventBus>,
 }
 
 impl SnapshotMarketProjection {
@@ -69,33 +72,85 @@ impl SnapshotMarketProjection {
         Self::default()
     }
 
+    /// Live publishes also fan out on this bus. REST reads still work without it.
+    #[must_use]
+    pub fn with_events(mut self, events: ApplicationEventBus) -> Self {
+        self.events = Some(events);
+        self
+    }
+
     pub fn publish_quote(&self, quote: QuoteDto) {
-        let mut inner = lock(&self.inner);
-        inner
-            .quotes
-            .insert(quote.instrument_uid.clone(), StoredQuote { quote });
+        {
+            let mut inner = lock(&self.inner);
+            inner.quotes.insert(
+                quote.instrument_uid.clone(),
+                StoredQuote {
+                    quote: quote.clone(),
+                },
+            );
+        }
+        self.emit(ApplicationEvent::Quote(quote));
     }
 
     pub fn publish_order_book(&self, book: OrderBookDto) {
-        let mut inner = lock(&self.inner);
-        inner
-            .books
-            .insert(book.instrument_uid.clone(), StoredBook { book });
+        {
+            let mut inner = lock(&self.inner);
+            inner.books.insert(
+                book.instrument_uid.clone(),
+                StoredBook { book: book.clone() },
+            );
+        }
+        self.emit(ApplicationEvent::OrderBook(book));
     }
 
     pub fn publish_trades(&self, instrument_uid: String, trades: Vec<TradeTickDto>) {
-        let mut inner = lock(&self.inner);
-        inner.tapes.insert(instrument_uid, StoredTape { trades });
+        {
+            let mut inner = lock(&self.inner);
+            inner.tapes.insert(
+                instrument_uid.clone(),
+                StoredTape {
+                    trades: trades.clone(),
+                },
+            );
+        }
+        self.emit(ApplicationEvent::Trades {
+            instrument_uid,
+            ticks: trades,
+        });
     }
 
-    pub fn publish_candles(&self, candles: CandlesDto) {
+    pub fn publish_candles(&self, mut candles: CandlesDto) {
         let mut inner = lock(&self.inner);
+        if let Some(existing) = inner
+            .candles
+            .get(&candles.instrument_uid)
+            .and_then(|row| row.by_interval.get(&candles.interval))
+        {
+            for candle in &mut candles.candles {
+                if let Some(prior) = existing
+                    .candles
+                    .iter()
+                    .find(|row| row.opened_at_unix_ms == candle.opened_at_unix_ms)
+                {
+                    candle.revision = prior.revision.saturating_add(1);
+                    if prior.state != CandleStateDto::Open && candle.state != CandleStateDto::Open {
+                        candle.state = CandleStateDto::Corrected;
+                    }
+                }
+            }
+        }
         inner
             .candles
             .entry(candles.instrument_uid.clone())
             .or_default()
             .by_interval
             .insert(candles.interval, candles);
+    }
+
+    fn emit(&self, event: ApplicationEvent) {
+        if let Some(events) = &self.events {
+            events.publish(event);
+        }
     }
 
     pub fn publish_session(&self, session: SessionDto) {
@@ -321,7 +376,8 @@ pub fn trade_from_canonical(
     }
 }
 
-/// Maps a #8 candle. `closed == false` means the bar may still be revised.
+/// Maps a #8 candle. `is_complete` is the historic fact; stream candles leave it `None`
+/// and stay [`CandleStateDto::Open`] until a later complete publication.
 #[allow(
     clippy::too_many_arguments,
     reason = "maps one canonical candle field-for-field; grouping would invent a second DTO"
@@ -335,7 +391,7 @@ pub fn candle_from_canonical(
     low: FixedPoint,
     close: FixedPoint,
     volume_lots: i64,
-    closed: bool,
+    is_complete: Option<bool>,
 ) -> CandleDto {
     CandleDto {
         instrument_uid: instrument_uid.into(),
@@ -346,7 +402,11 @@ pub fn candle_from_canonical(
         low: Decimal::from_fixed_point(low),
         close: Decimal::from_fixed_point(close),
         volume_units: volume_lots,
-        closed,
+        state: match is_complete {
+            Some(true) => CandleStateDto::Closed,
+            Some(false) | None => CandleStateDto::Open,
+        },
+        revision: 0,
     }
 }
 
@@ -363,20 +423,18 @@ pub fn trading_status_from_provider(status: i32) -> TradingStatusDto {
     }
 }
 
-/// Maps documented `CANDLE_INTERVAL_*` wire numbers that this API serves.
+/// Maps historic GetCandles `CANDLE_INTERVAL_*` wire numbers accepted by `#8`.
+///
+/// This is [`CandleIntervalDto::from_historic_wire`], not MarketDataStream
+/// `SubscriptionInterval`. Second-resolution values 14..=16 are valid here.
 pub fn candle_interval_from_provider(interval: i32) -> Result<CandleIntervalDto, ApiError> {
-    match interval {
-        1 => Ok(CandleIntervalDto::OneMinute),
-        2 => Ok(CandleIntervalDto::FiveMinutes),
-        3 => Ok(CandleIntervalDto::FifteenMinutes),
-        4 => Ok(CandleIntervalDto::OneHour),
-        5 => Ok(CandleIntervalDto::OneDay),
-        other => Err(ApiError::new(
+    CandleIntervalDto::from_historic_wire(interval).ok_or_else(|| {
+        ApiError::new(
             ErrorCategory::Validation,
             "UNSUPPORTED_CANDLE_INTERVAL",
-            format!("candle interval {other} is not in the public Vox set"),
-        )),
-    }
+            format!("candle interval {interval} is not in the public Vox historic set"),
+        )
+    })
 }
 
 /// Nanoseconds since epoch → milliseconds. Truncates toward zero; no float step.
@@ -539,5 +597,80 @@ mod tests {
             unix_ms_from_ns(1_787_000_000_000_000_000),
             1_787_000_000_000
         );
+    }
+
+    #[test]
+    fn historic_interval_mapping_covers_five_seconds_and_rejects_unknown() {
+        assert_eq!(
+            candle_interval_from_provider(14).expect("5s"),
+            CandleIntervalDto::FiveSeconds
+        );
+        assert_eq!(
+            candle_interval_from_provider(16).expect("30s"),
+            CandleIntervalDto::ThirtySeconds
+        );
+        assert_eq!(
+            candle_interval_from_provider(1).expect("1m"),
+            CandleIntervalDto::OneMinute
+        );
+        let error = candle_interval_from_provider(0).expect_err("unspecified");
+        assert_eq!(error.code, "UNSUPPORTED_CANDLE_INTERVAL");
+    }
+
+    #[test]
+    fn a_republished_closed_bar_is_corrected() -> Result<(), Box<dyn std::error::Error>> {
+        let projection = SnapshotMarketProjection::new();
+        let first = candle_from_canonical(
+            "uid",
+            CandleIntervalDto::FiveSeconds,
+            1_000,
+            fp(1, 0)?,
+            fp(2, 0)?,
+            fp(1, 0)?,
+            fp(2, 0)?,
+            10,
+            Some(true),
+        );
+        assert_eq!(first.state, CandleStateDto::Closed);
+        projection.publish_candles(CandlesDto {
+            instrument_uid: "uid".into(),
+            interval: CandleIntervalDto::FiveSeconds,
+            candles: vec![first],
+            freshness: MarketFreshness {
+                stream: StreamStateDto::Active,
+                observed_at_unix_ms: 1_000,
+                age_ms: 0,
+            },
+        });
+        let revised = candle_from_canonical(
+            "uid",
+            CandleIntervalDto::FiveSeconds,
+            1_000,
+            fp(1, 0)?,
+            fp(3, 0)?,
+            fp(1, 0)?,
+            fp(2, 500_000_000)?,
+            12,
+            Some(true),
+        );
+        projection.publish_candles(CandlesDto {
+            instrument_uid: "uid".into(),
+            interval: CandleIntervalDto::FiveSeconds,
+            candles: vec![revised],
+            freshness: MarketFreshness {
+                stream: StreamStateDto::Active,
+                observed_at_unix_ms: 1_100,
+                age_ms: 0,
+            },
+        });
+        let stored = lock(&projection.inner)
+            .candles
+            .get("uid")
+            .and_then(|row| row.by_interval.get(&CandleIntervalDto::FiveSeconds))
+            .cloned()
+            .expect("stored candles");
+        assert_eq!(stored.candles[0].state, CandleStateDto::Corrected);
+        assert_eq!(stored.candles[0].revision, 1);
+        Ok(())
     }
 }
