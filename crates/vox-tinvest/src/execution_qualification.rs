@@ -85,6 +85,7 @@ pub fn qualify_ambiguous_dispatch_guard() -> Result<(), StoreError> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum QualificationEvidence {
     Qualified(String),
+    QualifiedWithProviderDeviation(String),
     GatedUnavailable(String),
     ProviderBlocked(String),
     Failed(String),
@@ -94,6 +95,9 @@ impl QualificationEvidence {
     fn render(&self, row: &str) -> String {
         match self {
             Self::Qualified(detail) => format!("QUALIFIED {row}: {detail}"),
+            Self::QualifiedWithProviderDeviation(detail) => {
+                format!("QUALIFIED_WITH_PROVIDER_DEVIATION {row}: {detail}")
+            }
             Self::GatedUnavailable(reason) => format!("GATED/UNAVAILABLE {row}: {reason}"),
             Self::ProviderBlocked(reason) => format!("BLOCKED/PROVIDER {row}: {reason}"),
             Self::Failed(reason) => format!("FAILED {row}: {reason}"),
@@ -235,5 +239,24 @@ mod tests {
             Err(SandboxQualificationError::ProviderBlockedRows(rows))
                 if rows.len() == 1 && rows[0].contains("70001")
         ));
+    }
+
+    #[test]
+    fn proven_provider_deviation_is_accepted_but_rendered_distinctly() {
+        let mut ledger = SandboxQualificationLedger::default();
+        for row in SANDBOX_QUALIFICATION_ROWS {
+            let evidence = if row == "trades_stream_health" {
+                QualificationEvidence::QualifiedWithProviderDeviation(
+                    "matching trade and pings observed; subscription ACK absent".into(),
+                )
+            } else {
+                QualificationEvidence::Qualified("contract evidence".into())
+            };
+            ledger.record(row, evidence).expect("unique row");
+        }
+        let lines = ledger.finish().expect("provider deviation is accepted");
+        assert!(lines.iter().any(|line| {
+            line.starts_with("QUALIFIED_WITH_PROVIDER_DEVIATION trades_stream_health:")
+        }));
     }
 }

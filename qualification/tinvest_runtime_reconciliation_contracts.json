@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "audited_at_utc": "2026-08-26T00:00:00Z",
+  "provider": "T_INVEST",
+  "official_contract_revision": "762e720e27164213f41cac0b226c5698c2ae8199",
+  "official_contract_revision_date": "2026-07-31T13:03:04Z",
+  "authority_policy": {
+    "broker_facts": "authoritative unary broker reads",
+    "stream_facts": "low-latency evidence; not durable replay",
+    "local_facts": "Vox mutation intent, dispatch uncertainty, identity links, runtime epoch, checkpoints, audit and derived readiness only",
+    "restart_or_gap": "freeze dispatch and perform full broker-authoritative unary reconciliation",
+    "sandbox": "qualification only; sandbox deviations never define production semantics"
+  },
+  "sources": [
+    "https://developer.tbank.ru/invest/api/users-service-get-accounts",
+    "https://developer.tbank.ru/invest/api/operations-service-get-portfolio",
+    "https://developer.tbank.ru/invest/api/operations-service-get-positions",
+    "https://developer.tbank.ru/invest/api/operations-service-get-operations-by-cursor",
+    "https://developer.tbank.ru/invest/services/operations/head-operations",
+    "https://developer.tbank.ru/invest/api/orders-service",
+    "https://developer.tbank.ru/invest/api/orders-service-get-order-state",
+    "https://developer.tbank.ru/invest/api/stop-orders-service-get-stop-orders",
+    "https://developer.tbank.ru/invest/api/operations-stream-service-positions-stream",
+    "https://developer.tbank.ru/invest/api/operations-stream-service-portfolio-stream",
+    "https://developer.tbank.ru/invest/api/operations-stream-service-operations-stream",
+    "https://developer.tbank.ru/invest/api/orders-stream-service-trades-stream",
+    "https://developer.tbank.ru/invest/api/orders-stream-service-order-state-stream",
+    "https://developer.tbank.ru/invest/intro/developer/stream",
+    "https://developer.tbank.ru/invest/intro/developer/speedup",
+    "https://developer.tbank.ru/invest/intro/developer/deadlines",
+    "https://developer.tbank.ru/invest/intro/developer/sandbox",
+    "crates/vox-tinvest/proto/tinkoff/VENDOR.md"
+  ],
+  "runtime_facts": [
+    {
+      "fact": "accounts_status",
+      "authoritative_capability": "UsersService/GetAccounts",
+      "sandbox_capability": "SandboxService/GetSandboxAccounts",
+      "stream_capability": null,
+      "identity_or_cursor": ["account_id"],
+      "freshness_and_limitations": "Returns accounts accessible to current credential. ACCOUNT_STATUS_OPEN is required for execution readiness.",
+      "runtime_use": "validate provider/environment/account scope and accessibility before READY",
+      "minimum_documented_deadline_ms": 300,
+      "pinned_proto": ["users.proto:GetAccountsRequest", "users.proto:GetAccountsResponse", "users.proto:Account"],
+      "contract_status": "DOCS_MATCH_PINNED_PROTO"
+    },
+    {
+      "fact": "cash_portfolio",
+      "authoritative_capability": "OperationsService/GetPortfolio",
+      "sandbox_capability": "SandboxService/GetSandboxPortfolio",
+      "stream_capability": "OperationsStreamService/PortfolioStream",
+      "identity_or_cursor": ["account_id"],
+      "freshness_and_limitations": "Broker is not strictly consistent. Portfolio stream/GetPortfolio can lag order and position surfaces. Sandbox omits some returns, risk and liquidity calculations.",
+      "runtime_use": "authoritative portfolio/cash snapshot and reconciliation completeness",
+      "minimum_documented_deadline_ms": 1500,
+      "pinned_proto": ["operations.proto:PortfolioRequest", "operations.proto:PortfolioResponse", "operations.proto:PortfolioStreamRequest"],
+      "contract_status": "DOCS_MATCH_PINNED_PROTO"
+    },
+    {
+      "fact": "positions",
+      "authoritative_capability": "OperationsService/GetPositions",
+      "sandbox_capability": "SandboxService/GetSandboxPositions",
+      "stream_capability": "OperationsStreamService/PositionsStream",
+      "identity_or_cursor": ["account_id", "instrument_uid", "position_uid", "figi"],
+      "freshness_and_limitations": "Direct snapshot is authoritative. Pinned PositionsStreamRequest supports with_initial_positions, but restart/gap still requires unary snapshot.",
+      "runtime_use": "authoritative current position state and discrepancy detection",
+      "minimum_documented_deadline_ms": 1000,
+      "pinned_proto": ["operations.proto:PositionsRequest", "operations.proto:PositionsResponse", "operations.proto:PositionsStreamRequest"],
+      "contract_status": "DOCS_MATCH_PINNED_PROTO"
+    },
+    {
+      "fact": "active_orders",
+      "authoritative_capability": "OrdersService/GetOrders",
+      "sandbox_capability": "SandboxService/GetSandboxOrders",
+      "stream_capability": "OrdersStreamService/OrderStateStream",
+      "identity_or_cursor": ["account_id", "broker_order_id", "client_request_id"],
+      "freshness_and_limitations": "GetOrders returns active set. OrderStateStream is faster evidence but gaps require GetOrders/GetOrderState recovery.",
+      "runtime_use": "active execution reconciliation and unfamiliar-order classification",
+      "minimum_documented_deadline_ms": 500,
+      "pinned_proto": ["orders.proto:GetOrdersRequest", "orders.proto:GetOrdersResponse", "orders.proto:OrderStateStreamRequest"],
+      "contract_status": "DOCS_MATCH_PINNED_PROTO"
+    },
+    {
+      "fact": "order_state",
+      "authoritative_capability": "OrdersService/GetOrderState",
+      "sandbox_capability": "SandboxService/GetSandboxOrderState",
+      "stream_capability": "OrdersStreamService/OrderStateStream",
+      "identity_or_cursor": ["account_id", "order_id", "order_id_type=EXCHANGE|REQUEST"],
+      "freshness_and_limitations": "Pinned and portal contracts support broker exchange identity or original idempotency/request identity. Absence is not treated as rejection unless provider contract makes it conclusive.",
+      "runtime_use": "highest-precedence UNKNOWN resolution evidence",
+      "minimum_documented_deadline_ms": 300,
+      "pinned_proto": ["orders.proto:GetOrderStateRequest", "orders.proto:OrderState"],
+      "contract_status": "DOCS_MATCH_PINNED_PROTO"
+    },
+    {
+      "fact": "stop_orders",
+      "authoritative_capability": "StopOrdersService/GetStopOrders",
+      "sandbox_capability": "SandboxService/GetSandboxStopOrders",
+      "stream_capability": "OrdersStreamService/OrderStateStream stop_order_state branch",
+      "identity_or_cursor": ["account_id", "stop_order_id", "status", "from_utc", "to_utc"],
+      "freshness_and_limitations": "Portal and pinned proto support ALL, ACTIVE, EXECUTED, CANCELED and EXPIRED with optional UTC range. Unfamiliar broker stops are preserved, never auto-canceled without Vox provenance.",
+      "runtime_use": "protection reconciliation and independent multi-leg resolution",
+      "minimum_documented_deadline_ms": 1500,
+      "pinned_proto": ["stoporders.proto:GetStopOrdersRequest", "stoporders.proto:GetStopOrdersResponse", "orders.proto:OrderStateStreamResponse"],
+      "contract_status": "DOCS_MATCH_PINNED_PROTO"
+    },
+    {
+      "fact": "fills_operations",
+      "authoritative_capability": "OperationsService/GetOperationsByCursor",
+      "sandbox_capability": "SandboxService/GetSandboxOperationsByCursor",
+      "stream_capability": "OrdersStreamService/TradesStream and OperationsStreamService/OperationsStream",
+      "identity_or_cursor": ["account_id", "cursor", "operation_id", "parent_operation_id", "trade_num"],
+      "freshness_and_limitations": "Cursor page default 100, maximum 1000. Operation id and parent id may change over time in pinned proto. Official guidance says operations can arrive after real execution and must not identify order-status changes.",
+      "runtime_use": "bounded history overlap and fill dedupe; execution evidence only for PostOrder/PostOrderAsync with exact logical-request or linked broker-order identity; never evidence for CancelOrder or ReplaceOrder",
+      "minimum_documented_deadline_ms": 1500,
+      "pinned_proto": ["operations.proto:GetOperationsByCursorRequest", "operations.proto:GetOperationsByCursorResponse", "operations.proto:OperationItem", "operations.proto:OperationItemTrade"],
+      "contract_status": "DOCS_MATCH_PINNED_PROTO_WITH_MUTABLE_OPERATION_ID_LIMITATION"
+    },
+    {
+      "fact": "sandbox_equivalents",
+      "authoritative_capability": "SandboxService accepted unary read methods",
+      "sandbox_capability": "GetSandboxAccounts|GetSandboxPortfolio|GetSandboxPositions|GetSandboxOrders|GetSandboxOrderState|GetSandboxStopOrders|GetSandboxOperationsByCursor",
+      "stream_capability": "sandbox endpoint accepts generated account/portfolio/position/order/operation streams subject to documented and qualified deviations",
+      "identity_or_cursor": ["same canonical typed identities as production"],
+      "freshness_and_limitations": "Sandbox accounts are virtual and may disappear after inactivity; margin, risk, guarantee and liquidity calculations are absent. TradesStream missing formal ACK is qualification-only provider deviation from #10.",
+      "runtime_use": "credentialed qualification only; never production semantic authority",
+      "minimum_documented_deadline_ms": null,
+      "pinned_proto": ["sandbox.proto:SandboxService", "orders.proto:TradesStreamRequest", "orders.proto:OrderStateStreamRequest"],
+      "contract_status": "DOCUMENTED_SANDBOX_DIFFERENCES_PLUS_QUALIFIED_TRADES_ACK_DEVIATION"
+    }
+  ],
+  "stream_policy": {
+    "documented_ping_interval_ms": {
+      "TradesStream": { "minimum": 5000, "default": 120000, "maximum": 180000 },
+      "OrderStateStream": { "minimum": 1000, "default": 120000, "maximum": 120000 },
+      "PositionsStream": { "minimum": 5000, "default": 120000, "maximum": 180000 },
+      "PortfolioStream": { "minimum": 5000, "default": 120000, "maximum": 180000 },
+      "OperationsStream": { "minimum": 5000, "default": 120000, "maximum": 180000 }
+    },
+    "required_for_ready": ["OrderStateStream", "PositionsStream", "PortfolioStream", "OperationsStream"],
+    "optional_for_ready": {
+      "TradesStream": "OrderState plus position, portfolio and operation streams provide capital-change signals; TradesStream remains optional evidence because sandbox cannot satisfy strict ACK semantics"
+    },
+    "disconnect_recovery": "bounded exponential backoff, exact resubscription, then authoritative unary recovery for potentially missed facts",
+    "durability": "no replay guarantee",
+    "ack_policy": "production ACK remains mandatory; pings never substitute for ACK"
+  },
+  "known_documentation_proto_differences": [
+    {
+      "surface": "execution stream ping limits",
+      "documentation": "TradesStream is 5000..180000 ms; OrderStateStream is 1000..120000 ms",
+      "pinned_executable_contract": "distinct ping fields share int32 wire type but not provider validation range",
+      "decision": "validate by ExecutionStreamKind; never label a Vox restriction as provider limit"
+    },
+    {
+      "surface": "speedup operations history name",
+      "documentation": "GetOperationsByCoursor spelling appears in prose",
+      "pinned_executable_contract": "GetOperationsByCursor",
+      "decision": "use pinned executable RPC name"
+    },
+    {
+      "surface": "Sandbox TradesStream subscription ACK",
+      "documentation": "stream contract exposes subscription response",
+      "qualified_behavior": "sandbox sends pings and matching trades but omits formal ACK",
+      "decision": "record QUALIFIED_WITH_PROVIDER_DEVIATION only in qualification; keep production ACK strict"
+    }
+  ]
+}
