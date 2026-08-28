@@ -85,6 +85,11 @@ export class VoxClient {
     return this.request("POST", "/api/v1/commands/stop-order", undefined, body);
   }
 
+  /** The UI uses this list instead of guessing. Intervals the provider does not name never appear; an unknown integer on a candle query fails as `UNSUPPORTED_CANDLE_INTERVAL`. */
+  marketCandleIntervals(): Promise<Array<T.CandleIntervalCapability>> {
+    return this.request("GET", "/api/v1/market/candle-intervals", undefined);
+  }
+
   /** Candles for one interval and window. */
   marketCandles(query: { from_unix_ms: number; instrument_uid: string; interval: T.CandleIntervalDto; provider: T.ProviderDto; to_unix_ms: number }): Promise<T.CandlesDto> {
     return this.request("GET", "/api/v1/market/candles", query);

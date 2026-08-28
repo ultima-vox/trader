@@ -423,12 +423,9 @@ pub fn trading_status_from_provider(status: i32) -> TradingStatusDto {
     }
 }
 
-/// Maps historic GetCandles `CANDLE_INTERVAL_*` wire numbers accepted by `#8`.
-///
-/// This is [`CandleIntervalDto::from_historic_wire`], not MarketDataStream
-/// `SubscriptionInterval`. Second-resolution values 14..=16 are valid here.
+/// Names an `#8` `CanonicalCandle.interval`. Not a MarketDataStream `SubscriptionInterval`.
 pub fn candle_interval_from_provider(interval: i32) -> Result<CandleIntervalDto, ApiError> {
-    CandleIntervalDto::from_historic_wire(interval).ok_or_else(|| {
+    CandleIntervalDto::from_canonical_interval(interval).ok_or_else(|| {
         ApiError::new(
             ErrorCategory::Validation,
             "UNSUPPORTED_CANDLE_INTERVAL",

@@ -22,8 +22,8 @@ use crate::contract::execution::{
     SubmitOrderRequest, SubmitProtectionRequest, SubmitStopOrderRequest,
 };
 use crate::contract::market::{
-    CandleIntervalDto, CandlesDto, InstrumentSummaryDto, OrderBookDto, QuoteDto, SessionDto,
-    TradeTickDto,
+    CandleIntervalCapability, CandleIntervalDto, CandlesDto, InstrumentSummaryDto, OrderBookDto,
+    QuoteDto, SessionDto, TradeTickDto,
 };
 use crate::contract::runtime::{RuntimeHealthDto, SystemHealthDto};
 use crate::contract::scope::{BrokerEnvironment, ExecutionScope, ProviderDto, TradingMode};
@@ -598,6 +598,23 @@ pub async fn trades(
     ))
 }
 
+/// Historic vs streaming provenance for every public candle interval.
+///
+/// The UI uses this list instead of guessing. Intervals the provider does not name never
+/// appear; an unknown integer on a candle query fails as `UNSUPPORTED_CANDLE_INTERVAL`.
+#[utoipa::path(
+    get, path = "/api/v1/market/candle-intervals", tag = "market",
+    responses((status = 200, description = "Named intervals with historic/stream flags", body = Vec<CandleIntervalCapability>))
+)]
+pub async fn candle_intervals() -> Json<Vec<CandleIntervalCapability>> {
+    Json(
+        CandleIntervalDto::ALL
+            .into_iter()
+            .map(CandleIntervalDto::capability)
+            .collect(),
+    )
+}
+
 /// Candles for one interval and window.
 #[utoipa::path(
     get, path = "/api/v1/market/candles", tag = "market", params(CandlesQuery),
@@ -685,6 +702,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/market/quote", get(quote))
         .route("/api/v1/market/order-book", get(order_book))
         .route("/api/v1/market/trades", get(trades))
+        .route("/api/v1/market/candle-intervals", get(candle_intervals))
         .route("/api/v1/market/candles", get(candles))
         .route("/api/v1/market/session", get(session))
         .with_state(state)
@@ -702,6 +720,24 @@ mod tests {
     use crate::error::ErrorCategory;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
+
+    #[tokio::test]
+    async fn candle_interval_capabilities_distinguish_historic_only_seconds() {
+        let Json(list) = candle_intervals().await;
+        assert_eq!(list.len(), 16);
+        let five = list
+            .iter()
+            .find(|row| row.interval == CandleIntervalDto::FiveSeconds)
+            .expect("5s");
+        assert!(five.historical_supported);
+        assert!(!five.streaming_supported);
+        let minute = list
+            .iter()
+            .find(|row| row.interval == CandleIntervalDto::OneMinute)
+            .expect("1m");
+        assert!(minute.historical_supported);
+        assert!(minute.streaming_supported);
+    }
 
     fn sample_scope() -> Result<ExecutionScope, crate::contract::scope::ScopeError> {
         ExecutionScope::new(

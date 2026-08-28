@@ -12,6 +12,7 @@ use axum::extract::State;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use axum::routing::get;
+use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio::time::interval;
 
@@ -110,49 +111,85 @@ async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> Respons
     ws.on_upgrade(move |socket| serve(socket, state))
 }
 
-async fn serve(mut socket: WebSocket, state: AppState) {
+async fn serve(socket: WebSocket, state: AppState) {
+    let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<ServerEvent>(OUTBOUND_QUEUE_CAPACITY);
     let mut subscriptions: HashMap<String, Subscription> = HashMap::new();
     let mut heartbeat = interval(HEARTBEAT_INTERVAL);
     heartbeat.tick().await; // the first tick fires immediately
     let mut live = state.events.subscribe();
+    let (drop_tx, mut drop_rx) = tokio::sync::oneshot::channel::<()>();
 
-    loop {
-        tokio::select! {
-            incoming = socket.recv() => {
-                let Some(Ok(message)) = incoming else { break };
-                let text = match message {
-                    Message::Text(text) => text.to_string(),
-                    Message::Close(_) => break,
-                    Message::Ping(_) | Message::Pong(_) | Message::Binary(_) => continue,
-                };
-                let events = handle_client_message(&text, &state, &mut subscriptions).await;
-                for event in events {
-                    if tx.try_send(event).is_err() {
-                        let _ = send(&mut socket, &slow_consumer_status()).await;
-                        return;
+    let writer = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                biased;
+                drop_signal = &mut drop_rx => {
+                    if drop_signal.is_ok() {
+                        let _ = tokio::time::timeout(
+                            Duration::from_millis(250),
+                            send(&mut sink, &slow_consumer_status()),
+                        )
+                        .await;
+                    }
+                    break;
+                }
+                queued = rx.recv() => {
+                    let Some(event) = queued else { break };
+                    match tokio::time::timeout(Duration::from_secs(2), send(&mut sink, &event)).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(_)) => break,
+                        Err(_) => {
+                            let _ = tokio::time::timeout(
+                                Duration::from_millis(250),
+                                send(&mut sink, &slow_consumer_status()),
+                            )
+                            .await;
+                            break;
+                        }
                     }
                 }
             }
-            queued = rx.recv() => {
-                let Some(event) = queued else { break };
-                if send(&mut socket, &event).await.is_err() { break }
+        }
+    });
+
+    let slow = loop {
+        tokio::select! {
+            incoming = stream.next() => {
+                let Some(Ok(message)) = incoming else { break false };
+                let text = match message {
+                    Message::Text(text) => text.to_string(),
+                    Message::Close(_) => break false,
+                    Message::Ping(_) | Message::Pong(_) | Message::Binary(_) => continue,
+                };
+                let events = handle_client_message(&text, &state, &mut subscriptions).await;
+                let mut overflow = false;
+                for event in events {
+                    if tx.try_send(event).is_err() {
+                        overflow = true;
+                        break;
+                    }
+                }
+                if overflow {
+                    break true;
+                }
             }
             live_event = live.recv() => {
                 match live_event {
                     Ok(event) => {
+                        let mut overflow = false;
                         for update in updates_for(&mut subscriptions, &event) {
                             if tx.try_send(update).is_err() {
-                                let _ = send(&mut socket, &slow_consumer_status()).await;
-                                return;
+                                overflow = true;
+                                break;
                             }
                         }
+                        if overflow {
+                            break true;
+                        }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        let _ = send(&mut socket, &slow_consumer_status()).await;
-                        return;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break true,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break false,
                 }
             }
             _ = heartbeat.tick() => {
@@ -161,9 +198,25 @@ async fn serve(mut socket: WebSocket, state: AppState) {
                     server_time_unix_ms: now_unix_ms(),
                     nonce: None,
                 };
-                if send(&mut socket, &beat).await.is_err() { break }
+                if tx.try_send(beat).is_err() {
+                    break true;
+                }
             }
         }
+    };
+
+    if slow {
+        let _ = drop_tx.send(());
+    } else {
+        drop(drop_tx);
+    }
+    drop(tx);
+    let abort = writer.abort_handle();
+    if tokio::time::timeout(Duration::from_millis(400), writer)
+        .await
+        .is_err()
+    {
+        abort.abort();
     }
 }
 
@@ -417,13 +470,16 @@ fn slow_consumer_status() -> ServerEvent {
     }
 }
 
-async fn send(socket: &mut WebSocket, event: &ServerEvent) -> Result<(), axum::Error> {
+async fn send<S>(sink: &mut S, event: &ServerEvent) -> Result<(), axum::Error>
+where
+    S: futures_util::Sink<Message, Error = axum::Error> + Unpin,
+{
     let text = serde_json::to_string(event).unwrap_or_else(|_| {
         // Serializing our own envelope cannot fail on valid data; if it ever does, say so
         // in the same typed shape rather than closing silently.
         "{\"type\":\"ERROR\",\"schema_version\":1,\"code\":\"ENCODE_FAILED\",\"message\":\"the server could not encode an event\",\"correlation_id\":\"\"}".to_owned()
     });
-    socket.send(Message::Text(Utf8Bytes::from(text))).await
+    sink.send(Message::Text(Utf8Bytes::from(text))).await
 }
 
 #[cfg(test)]

@@ -141,11 +141,11 @@ pub struct TradeTickDto {
 
 /// Candle interval for the Vox read model.
 ///
-/// Variants and `historic_wire` numbers are the official T-Invest **GetCandles**
-/// `CandleInterval` set accepted by `#8` `candle_request_constraint` (1..=16).
-/// [`Self::market_data_stream_supported`] is the separate **MarketDataStream**
-/// `SubscriptionInterval` surface (1..=13). 5s/10s/30s exist on GetCandles only;
-/// they are not stream-subscribable and must not be invented as such.
+/// `#8` `CanonicalCandle.interval` is the already-accepted historic GetCandles
+/// integer (`candle_request_constraint`, 1..=16). This enum names that integer;
+/// it does not invent a second wire table. Stream support is the separate
+/// MarketDataStream `SubscriptionInterval` surface (1..=13).
+/// 5s/10s/30s exist on GetCandles only; they are not stream-subscribable.
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema,
 )]
@@ -170,8 +170,27 @@ pub enum CandleIntervalDto {
 }
 
 impl CandleIntervalDto {
-    /// Historic GetCandles `CandleInterval` wire number. Same set as
-    /// `vox_tinvest::market_data::candle_request_constraint`.
+    /// Every interval this API names. Order matches the public capability list.
+    pub const ALL: [Self; 16] = [
+        Self::FiveSeconds,
+        Self::TenSeconds,
+        Self::ThirtySeconds,
+        Self::OneMinute,
+        Self::TwoMinutes,
+        Self::ThreeMinutes,
+        Self::FiveMinutes,
+        Self::TenMinutes,
+        Self::FifteenMinutes,
+        Self::ThirtyMinutes,
+        Self::OneHour,
+        Self::TwoHours,
+        Self::FourHours,
+        Self::OneDay,
+        Self::OneWeek,
+        Self::OneMonth,
+    ];
+
+    /// Historic GetCandles integer stored on `#8` `CanonicalCandle.interval`.
     #[must_use]
     pub const fn historic_wire(self) -> i32 {
         match self {
@@ -192,6 +211,12 @@ impl CandleIntervalDto {
             Self::TenSeconds => 15,
             Self::ThirtySeconds => 16,
         }
+    }
+
+    /// Names an `#8` `CanonicalCandle.interval`. `0` and unknown values are rejected.
+    #[must_use]
+    pub const fn from_canonical_interval(interval: i32) -> Option<Self> {
+        Self::from_historic_wire(interval)
     }
 
     /// Inverse of [`historic_wire`]. `0` and unknown values are rejected.
@@ -229,6 +254,29 @@ impl CandleIntervalDto {
             Self::FiveSeconds | Self::TenSeconds | Self::ThirtySeconds
         )
     }
+
+    /// Public provenance for this interval. Every named variant is historic-supported.
+    #[must_use]
+    pub const fn capability(self) -> CandleIntervalCapability {
+        CandleIntervalCapability {
+            interval: self,
+            historical_supported: true,
+            streaming_supported: self.market_data_stream_supported(),
+        }
+    }
+}
+
+/// Whether one interval is historic-only, stream-capable, or (by absence) unsupported.
+///
+/// Unsupported provider integers never appear here. An unknown integer fails as
+/// `UNSUPPORTED_CANDLE_INTERVAL`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+pub struct CandleIntervalCapability {
+    pub interval: CandleIntervalDto,
+    /// Accepted by historic GetCandles / `#8` `CanonicalCandle.interval`.
+    pub historical_supported: bool,
+    /// Accepted by MarketDataStream `SubscriptionInterval`. False for 5s/10s/30s.
+    pub streaming_supported: bool,
 }
 
 /// Lifecycle of one bar. Replaces a boolean `closed` so OPEN / CLOSED / CORRECTED
@@ -258,7 +306,7 @@ pub struct CandleDto {
     pub volume_units: i64,
     pub state: CandleStateDto,
     /// Zero at first publication of this open time. Increments on each later publish.
-    pub revision: u32,
+    pub revision: u64,
 }
 
 /// A page of candles for one instrument and interval.
@@ -395,6 +443,56 @@ mod tests {
             !CandleIntervalDto::FiveSeconds.market_data_stream_supported(),
             "5s is GetCandles-only"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn every_named_interval_has_explicit_historic_vs_stream_capability()
+    -> Result<(), serde_json::Error> {
+        assert_eq!(CandleIntervalDto::ALL.len(), 16);
+        for interval in CandleIntervalDto::ALL {
+            let capability = interval.capability();
+            assert!(capability.historical_supported, "{interval:?} is historic");
+            assert_eq!(
+                capability.streaming_supported,
+                interval.market_data_stream_supported()
+            );
+            assert_eq!(
+                CandleIntervalDto::from_canonical_interval(interval.historic_wire()),
+                Some(interval)
+            );
+        }
+        let json = serde_json::to_value(CandleIntervalDto::FiveSeconds.capability())?;
+        assert_eq!(json["interval"], "FIVE_SECONDS");
+        assert_eq!(json["historical_supported"], true);
+        assert_eq!(json["streaming_supported"], false);
+        let streamable = serde_json::to_value(CandleIntervalDto::OneMinute.capability())?;
+        assert_eq!(streamable["streaming_supported"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn candle_prices_and_volumes_are_never_floats() -> Result<(), Box<dyn std::error::Error>> {
+        let candle = CandleDto {
+            instrument_uid: "uid".to_owned(),
+            interval: CandleIntervalDto::TenSeconds,
+            opened_at_unix_ms: 1,
+            open: Decimal::from_units_nano(1, 250_000_000)?,
+            high: Decimal::from_units_nano(1, 500_000_000)?,
+            low: Decimal::from_units_nano(1, 0)?,
+            close: Decimal::from_units_nano(1, 250_000_000)?,
+            volume_units: 42,
+            state: CandleStateDto::Closed,
+            revision: 0,
+        };
+        let json = serde_json::to_value(&candle)?;
+        for field in ["open", "high", "low", "close"] {
+            assert!(json[field].is_string(), "{field} must be an exact string");
+        }
+        assert!(json["volume_units"].is_number());
+        assert!(!json["volume_units"].is_f64() || json["volume_units"].as_i64() == Some(42));
+        assert_eq!(json["state"], "CLOSED");
+        assert_eq!(json["revision"], 0);
         Ok(())
     }
 

@@ -476,6 +476,31 @@
         }
       }
     },
+    "/api/v1/market/candle-intervals": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Historic vs streaming provenance for every public candle interval.",
+        "description": "The UI uses this list instead of guessing. Intervals the provider does not name never\nappear; an unknown integer on a candle query fails as `UNSUPPORTED_CANDLE_INTERVAL`.",
+        "operationId": "candle_intervals",
+        "responses": {
+          "200": {
+            "description": "Named intervals with historic/stream flags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CandleIntervalCapability"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/market/candles": {
       "get": {
         "tags": [
@@ -1646,15 +1671,37 @@
           },
           "revision": {
             "type": "integer",
-            "format": "int32",
+            "format": "int64",
             "description": "Zero at first publication of this open time. Increments on each later publish.",
             "minimum": 0
           }
         }
       },
+      "CandleIntervalCapability": {
+        "type": "object",
+        "description": "Whether one interval is historic-only, stream-capable, or (by absence) unsupported.\n\nUnsupported provider integers never appear here. An unknown integer fails as\n`UNSUPPORTED_CANDLE_INTERVAL`.",
+        "required": [
+          "interval",
+          "historical_supported",
+          "streaming_supported"
+        ],
+        "properties": {
+          "interval": {
+            "$ref": "#/components/schemas/CandleIntervalDto"
+          },
+          "historical_supported": {
+            "type": "boolean",
+            "description": "Accepted by historic GetCandles / `#8` `CanonicalCandle.interval`."
+          },
+          "streaming_supported": {
+            "type": "boolean",
+            "description": "Accepted by MarketDataStream `SubscriptionInterval`. False for 5s/10s/30s."
+          }
+        }
+      },
       "CandleIntervalDto": {
         "type": "string",
-        "description": "Candle interval for the Vox read model.\n\nVariants and `historic_wire` numbers are the official T-Invest **GetCandles**\n`CandleInterval` set accepted by `#8` `candle_request_constraint` (1..=16).\n[`Self::market_data_stream_supported`] is the separate **MarketDataStream**\n`SubscriptionInterval` surface (1..=13). 5s/10s/30s exist on GetCandles only;\nthey are not stream-subscribable and must not be invented as such.",
+        "description": "Candle interval for the Vox read model.\n\n`#8` `CanonicalCandle.interval` is the already-accepted historic GetCandles\ninteger (`candle_request_constraint`, 1..=16). This enum names that integer;\nit does not invent a second wire table. Stream support is the separate\nMarketDataStream `SubscriptionInterval` surface (1..=13).\n5s/10s/30s exist on GetCandles only; they are not stream-subscribable.",
         "enum": [
           "FIVE_SECONDS",
           "TEN_SECONDS",

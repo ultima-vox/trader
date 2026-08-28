@@ -11,11 +11,12 @@ Sources of truth (Rust, serde-serializable, `SCREAMING_SNAKE_CASE` on enums):
 - `crates/vox-domain/src/{environment,execution,identity,instrument,money,mutation,readiness}.rs`
 - `crates/vox-runtime/src/{model,policy,ports}.rs`
 
-There is **no HTTP or gRPC server in the repository yet**: `vox-core` is a configuration
-binary, and `reqwest`/`tonic` are used to reach the provider, not to serve Vox clients.
-The transport for these contracts is therefore itself a tracked dependency (#11/#17); the
-types below are already canonical and a typed frontend client must be generated from them
-rather than from a hand-written API guess.
+`vox-api` now serves the Vox application boundary: REST `/api/v1`, WebSocket
+`/api/v1/stream`, generated OpenAPI, and a generated TypeScript client. Provider
+`reqwest`/`tonic` clients stay inside adapters. Account, credential, and execution
+dispatch remain `CAPABILITY_UNAVAILABLE` until #17/#10 compose them. The types below
+are canonical; the frontend generates from the OpenAPI artifact, never from a
+hand-written DTO guess.
 
 ---
 

@@ -2951,11 +2951,13 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "futures-util",
  "serde",
  "serde_json",
  "thiserror",
  "time",
  "tokio",
+ "tokio-tungstenite 0.28.0",
  "tower-http",
  "tracing",
  "utoipa",

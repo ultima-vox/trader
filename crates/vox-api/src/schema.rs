@@ -22,9 +22,9 @@ use crate::contract::execution::{
 };
 use crate::contract::instrument::InstrumentIdentityDto;
 use crate::contract::market::{
-    CandleDto, CandleIntervalDto, CandleStateDto, CandlesDto, DepthLevelDto, InstrumentSummaryDto,
-    MarketFreshness, OrderBookDto, QuoteDto, SessionDto, TradeDirectionDto, TradeTickDto,
-    TradingStatusDto,
+    CandleDto, CandleIntervalCapability, CandleIntervalDto, CandleStateDto, CandlesDto,
+    DepthLevelDto, InstrumentSummaryDto, MarketFreshness, OrderBookDto, QuoteDto, SessionDto,
+    TradeDirectionDto, TradeTickDto, TradingStatusDto,
 };
 use crate::contract::money::Decimal;
 use crate::contract::runtime::{
@@ -72,6 +72,7 @@ use crate::transport::http;
         http::trades,
         http::candles,
         http::session,
+        http::candle_intervals,
     ),
     components(schemas(
         ApiError, ErrorCategory, FieldError,
@@ -89,7 +90,7 @@ use crate::transport::http;
         Capability, CapabilitySet, UnavailableCapability,
         InstrumentIdentityDto, InstrumentSummaryDto, MarketFreshness, TradingStatusDto, SessionDto,
         QuoteDto, DepthLevelDto, OrderBookDto, TradeDirectionDto, TradeTickDto, CandleIntervalDto,
-        CandleStateDto, CandleDto, CandlesDto,
+        CandleIntervalCapability, CandleStateDto, CandleDto, CandlesDto,
         ClientMessage, ServerEvent, EventPayload, Topic, SubscriptionStatus,
     )),
     tags(
@@ -187,6 +188,7 @@ mod tests {
             "/api/v1/market/order-book",
             "/api/v1/market/trades",
             "/api/v1/market/candles",
+            "/api/v1/market/candle-intervals",
             "/api/v1/market/session",
         ] {
             assert!(
@@ -232,6 +234,10 @@ mod tests {
             candle.get("closed").is_none(),
             "boolean closed was replaced by explicit state"
         );
+        let capability = &doc["components"]["schemas"]["CandleIntervalCapability"]["properties"];
+        assert!(capability.get("interval").is_some());
+        assert!(capability.get("historical_supported").is_some());
+        assert!(capability.get("streaming_supported").is_some());
         Ok(())
     }
 

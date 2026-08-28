@@ -87,7 +87,10 @@ protobuf. Candle intervals are the official GetCandles set accepted by
 `vox_tinvest::market_data::candle_request_constraint` (1..=16), including **5s/10s/30s**.
 Those second-resolution bars are request/history only: MarketDataStream
 `SubscriptionInterval` stops at month (1..=13) and is not treated as the same enum.
-`CandleDto.state` is `OPEN` / `CLOSED` / `CORRECTED` with a per-bar `revision`; a boolean
+`GET /api/v1/market/candle-intervals` returns `CandleIntervalCapability` so a client can
+tell historic-only from stream-capable without guessing. Unknown provider integers are
+`UNSUPPORTED_CANDLE_INTERVAL`, never a silent drop.
+`CandleDto.state` is `OPEN` / `CLOSED` / `CORRECTED` with a per-bar `revision: u64`; a boolean
 `closed` flag is not enough. Every record carries `MarketFreshness`. An inconsistent book
 is refused. A missing instrument is `MARKET_FACT_NOT_FOUND`, never a zero price. Default
 `vox-server` does not attach an empty projection, so unattached `MARKET_DATA` stays
@@ -97,8 +100,9 @@ is refused. A missing instrument is `MARKET_FACT_NOT_FOUND`, never a zero price.
 broadcast of already-projected facts. `SnapshotMarketProjection` publish methods emit
 quote/book/tape events; a runtime-health watcher publishes `#11` health diffs after the
 first snapshot baseline. The `/api/v1/stream` gateway fans matching events to per-socket
-bounded queues as `UPDATE` with a monotonic per-subscription sequence. A lagging
-subscriber is `DROPPED_SLOW_CONSUMER`, not buffered without limit. Account topics stay
+bounded queues as `UPDATE` with a monotonic per-subscription sequence. Each socket has its
+own writer task, so a slow consumer cannot block another client or upstream publish.
+A lagging subscriber is `DROPPED_SLOW_CONSUMER`, not buffered without limit. Account topics stay
 explicitly unavailable until #17 attaches an account projection. This is not a second
 T-Invest stream client.
 

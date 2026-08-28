@@ -55,7 +55,16 @@ export type CandleDto = {
   revision: number;
 };
 
-/** Candle interval for the Vox read model. Variants and `historic_wire` numbers are the official T-Invest **GetCandles** `CandleInterval` set accepted by `#8` `candle_request_constraint` (1..=16). [`Self::market_data_stream_supported`] is the separate **MarketDataStream** `SubscriptionInterval` surface (1..=13). 5s/10s/30s exist on GetCandles only; they are not stream-subscribable and must not be invented as such. */
+/** Whether one interval is historic-only, stream-capable, or (by absence) unsupported. Unsupported provider integers never appear here. An unknown integer fails as `UNSUPPORTED_CANDLE_INTERVAL`. */
+export type CandleIntervalCapability = {
+  interval: CandleIntervalDto;
+  /** Accepted by historic GetCandles / `#8` `CanonicalCandle.interval`. */
+  historical_supported: boolean;
+  /** Accepted by MarketDataStream `SubscriptionInterval`. False for 5s/10s/30s. */
+  streaming_supported: boolean;
+};
+
+/** Candle interval for the Vox read model. `#8` `CanonicalCandle.interval` is the already-accepted historic GetCandles integer (`candle_request_constraint`, 1..=16). This enum names that integer; it does not invent a second wire table. Stream support is the separate MarketDataStream `SubscriptionInterval` surface (1..=13). 5s/10s/30s exist on GetCandles only; they are not stream-subscribable. */
 export type CandleIntervalDto = "FIVE_SECONDS" | "TEN_SECONDS" | "THIRTY_SECONDS" | "ONE_MINUTE" | "TWO_MINUTES" | "THREE_MINUTES" | "FIVE_MINUTES" | "TEN_MINUTES" | "FIFTEEN_MINUTES" | "THIRTY_MINUTES" | "ONE_HOUR" | "TWO_HOURS" | "FOUR_HOURS" | "ONE_DAY" | "ONE_WEEK" | "ONE_MONTH";
 
 /** Lifecycle of one bar. Replaces a boolean `closed` so OPEN / CLOSED / CORRECTED do not have to be inferred. */
