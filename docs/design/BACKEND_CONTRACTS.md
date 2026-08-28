@@ -239,10 +239,12 @@ contracts (`docs/api/openapi.json`) and a TypeScript client generated from that 
 Two facts this work established that the earlier map did not record:
 
 1. **`vox-runtime` is on `main` (#11 / PR #39).** The API maps those types exhaustively.
-   `/api/v1/runtime` serves accepted `RuntimeHealth`. Account reads attach through
-   `AccountReadAdapter` over `BrokerReadPort`; without a broker connection they stay
-   unavailable with owner `#17`, not as a missing #11 contract. Execution stays gated by
-   `#10`. Nothing is simulated.
+   `/api/v1/runtime` serves accepted `RuntimeHealth` without an account binding.
+   Canonical `account_id` is resolved through `AccountBindingResolver` before a
+   `RuntimeScope` is built; it is never copied into `broker_account_id`. Public
+   `broker_connection_id` is `RuntimeScope.connection_ref` via one conversion.
+   Without a persisted #17 binding the account read side stays unavailable with
+   owner `#17`. Execution stays gated by `#10`. Nothing is simulated.
 2. **The protection lifecycle has ten states, not eight** (section 1.5). The design system
    documents eight; the two missing ones are the partially-filled entry and the protection
    that failed after entry.

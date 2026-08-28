@@ -18,6 +18,7 @@
 )]
 
 pub mod application;
+pub mod binding;
 pub mod contract;
 pub mod error;
 pub mod runtime_attach;
@@ -25,5 +26,11 @@ pub mod schema;
 pub mod transport;
 
 pub use application::AppState;
-pub use runtime_attach::{AccountReadAdapter, ProcessRuntime, RuntimeHealthAdapter};
+pub use binding::{
+    AccountBinding, AccountBindingResolver, StaticAccountBindingResolver,
+    broker_connection_id_from_connection_ref, connection_ref_from_broker_connection_id,
+};
+pub use runtime_attach::{
+    AccountReadAdapter, ProcessRuntime, RuntimeHealthAdapter, runtime_scope_from_binding,
+};
 pub use transport::router;

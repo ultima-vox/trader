@@ -186,7 +186,7 @@ impl AppState {
     pub(crate) fn accounts_port(&self) -> Result<&Arc<dyn AccountQueries>, ApiError> {
         self.accounts
             .as_ref()
-            .ok_or_else(|| ApiError::capability_unavailable("ACCOUNT_READ_SIDE", "#11"))
+            .ok_or_else(|| ApiError::capability_unavailable("ACCOUNT_READ_SIDE", "#17"))
     }
 
     pub(crate) fn execution_port(&self) -> Result<&Arc<dyn ExecutionCommands>, ApiError> {
@@ -210,6 +210,10 @@ mod tests {
             .expect("a detached process has no account read side");
         assert_eq!(error.category, ErrorCategory::CapabilityUnavailable);
         assert_eq!(error.code, "CAPABILITY_UNAVAILABLE");
+        assert_eq!(
+            error.details.as_ref().and_then(|value| value.get("owner")),
+            Some(&serde_json::json!("#17"))
+        );
         assert!(
             !error.retryable,
             "a missing contract is not a transient failure"

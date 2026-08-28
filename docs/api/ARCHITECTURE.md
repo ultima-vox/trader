@@ -42,11 +42,16 @@ handler takes a typed request, calls a port and shapes a typed response.
 describe, and axum supports both halves in one router. Provider gRPC stays internal.
 
 **Ports, not a broker client.** `RuntimeQueries`, `AccountQueries` and `ExecutionCommands`
-are traits. A deployment attaches what it has. #11 has landed: `ProcessRuntime` and
-`AccountReadAdapter` map accepted `vox-runtime` types exhaustively. The server attaches
-runtime health from that contract. Account reads attach only when a `BrokerReadPort` is
-composed; until #17 supplies a connection they stay unavailable rather than inventing
-balances. Execution stays gated by #10.
+are traits. A deployment attaches what it has. #11 has landed: `ProcessRuntime` maps
+accepted `RuntimeHealth`. Account reads require an `AccountBindingResolver` that maps
+canonical `account_id` + `broker_connection_id` to `broker_account_id` before a
+`RuntimeScope` is built. Matching strings are never a binding. Until #17 persists those
+bindings, the server attaches runtime health only and account routes answer
+`CAPABILITY_UNAVAILABLE` naming `#17`. Execution stays gated by #10.
+
+**Connection identity.** Public `broker_connection_id` is the same opaque application
+identity as `RuntimeScope.connection_ref`. The only conversion is
+`connection_ref_from_broker_connection_id`, which validates through `OpaqueRef`.
 
 **Money is a string.** `Decimal` renders `FixedPoint` at nano scale as a fixed nine-decimal
 string. A JSON number would silently lose precision in a JavaScript client, so the type

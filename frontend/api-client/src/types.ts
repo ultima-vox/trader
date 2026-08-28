@@ -19,7 +19,7 @@ export type ApiError = {
 
 /** A broker account discovered through a connection. */
 export type BrokerAccountDto = {
-  /** Canonical Vox account/binding identity. Until #17 bindings exist this equals the bound broker account identifier. */
+  /** Canonical Vox account/binding identity. */
   account_id: string;
   /** Provider broker-account identifier. Metadata, not the capital-command target key. */
   broker_account_id: string;

@@ -13,13 +13,13 @@ use vox_runtime::{
     ReconciliationCheckpoint, StopFact,
 };
 
-use crate::error::ApiError;
+use crate::binding::AccountBinding;
+use crate::error::{ApiError, ErrorCategory};
 
 /// A broker account discovered through a connection.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct BrokerAccountDto {
-    /// Canonical Vox account/binding identity. Until #17 bindings exist this equals the
-    /// bound broker account identifier.
+    /// Canonical Vox account/binding identity.
     pub account_id: String,
     /// Provider broker-account identifier. Metadata, not the capital-command target key.
     pub broker_account_id: String,
@@ -28,14 +28,18 @@ pub struct BrokerAccountDto {
     pub accessible: bool,
 }
 
-impl From<&BrokerAccount> for BrokerAccountDto {
-    fn from(value: &BrokerAccount) -> Self {
-        Self {
-            account_id: value.account_id.clone(),
-            broker_account_id: value.account_id.clone(),
+impl BrokerAccountDto {
+    pub fn from_bound_fact(
+        binding: &AccountBinding,
+        value: &BrokerAccount,
+    ) -> Result<Self, ApiError> {
+        require_broker_account(binding, &value.account_id)?;
+        Ok(Self {
+            account_id: binding.account_id().to_owned(),
+            broker_account_id: binding.broker_account_id().to_owned(),
             open: value.open,
             accessible: value.accessible,
-        }
+        })
     }
 }
 
@@ -58,14 +62,18 @@ pub struct PortfolioDto {
 }
 
 impl PortfolioDto {
-    pub fn from_fact(value: &PortfolioFact) -> Result<Self, ApiError> {
+    pub fn from_bound_fact(
+        binding: &AccountBinding,
+        value: &PortfolioFact,
+    ) -> Result<Self, ApiError> {
+        require_broker_account(binding, &value.account_id)?;
         let mut balances = Vec::with_capacity(value.currencies.len());
         for (currency, amount) in &value.currencies {
             balances.push(CurrencyBalanceDto {
                 currency: currency.clone(),
                 amount: Decimal::from_exact_string(amount).map_err(|error| {
                     ApiError::new(
-                        crate::error::ErrorCategory::Internal,
+                        ErrorCategory::Internal,
                         "INVALID_BROKER_DECIMAL",
                         format!("portfolio amount for {currency} is not an exact decimal: {error}"),
                     )
@@ -73,7 +81,7 @@ impl PortfolioDto {
             });
         }
         Ok(Self {
-            account_id: value.account_id.clone(),
+            account_id: binding.account_id().to_owned(),
             balances,
             broker_observed_at_unix_ms: value.broker_observed_at_unix_ms,
         })
@@ -90,14 +98,18 @@ pub struct PositionDto {
     pub broker_observed_at_unix_ms: Option<i64>,
 }
 
-impl From<&PositionFact> for PositionDto {
-    fn from(value: &PositionFact) -> Self {
-        Self {
-            account_id: value.account_id.clone(),
+impl PositionDto {
+    pub fn from_bound_fact(
+        binding: &AccountBinding,
+        value: &PositionFact,
+    ) -> Result<Self, ApiError> {
+        require_broker_account(binding, &value.account_id)?;
+        Ok(Self {
+            account_id: binding.account_id().to_owned(),
             instrument_uid: value.instrument_uid.clone(),
             quantity_units: value.quantity_units,
             broker_observed_at_unix_ms: value.broker_observed_at_unix_ms,
-        }
+        })
     }
 }
 
@@ -113,16 +125,17 @@ pub struct OrderDto {
     pub terminal: bool,
 }
 
-impl From<&OrderFact> for OrderDto {
-    fn from(value: &OrderFact) -> Self {
-        Self {
-            account_id: value.account_id.clone(),
+impl OrderDto {
+    pub fn from_bound_fact(binding: &AccountBinding, value: &OrderFact) -> Result<Self, ApiError> {
+        require_broker_account(binding, &value.account_id)?;
+        Ok(Self {
+            account_id: binding.account_id().to_owned(),
             broker_order_id: value.broker_order_id.clone(),
             logical_request_id: value.logical_request_id.clone(),
             instrument_uid: value.instrument_uid.clone(),
             active: value.active,
             terminal: value.terminal,
-        }
+        })
     }
 }
 
@@ -137,16 +150,17 @@ pub struct StopOrderDto {
     pub terminal: bool,
 }
 
-impl From<&StopFact> for StopOrderDto {
-    fn from(value: &StopFact) -> Self {
-        Self {
-            account_id: value.account_id.clone(),
+impl StopOrderDto {
+    pub fn from_bound_fact(binding: &AccountBinding, value: &StopFact) -> Result<Self, ApiError> {
+        require_broker_account(binding, &value.account_id)?;
+        Ok(Self {
+            account_id: binding.account_id().to_owned(),
             broker_stop_order_id: value.broker_stop_order_id.clone(),
             logical_request_id: value.logical_request_id.clone(),
             instrument_uid: value.instrument_uid.clone(),
             active: value.active,
             terminal: value.terminal,
-        }
+        })
     }
 }
 
@@ -161,16 +175,20 @@ pub struct OperationDto {
     pub broker_fill_ids: Vec<String>,
 }
 
-impl From<&OperationFact> for OperationDto {
-    fn from(value: &OperationFact) -> Self {
-        Self {
-            account_id: value.account_id.clone(),
+impl OperationDto {
+    pub fn from_bound_fact(
+        binding: &AccountBinding,
+        value: &OperationFact,
+    ) -> Result<Self, ApiError> {
+        require_broker_account(binding, &value.account_id)?;
+        Ok(Self {
+            account_id: binding.account_id().to_owned(),
             cursor: value.cursor.clone(),
             provider_operation_id: value.provider_operation_id.clone(),
             broker_order_id: value.broker_order_id.clone(),
             logical_request_id: value.logical_request_id.clone(),
             broker_fill_ids: value.broker_fill_ids.iter().cloned().collect(),
-        }
+        })
     }
 }
 
@@ -181,13 +199,31 @@ pub struct OperationsPageDto {
     pub next_cursor: Option<String>,
 }
 
-impl From<&OperationsPage> for OperationsPageDto {
-    fn from(value: &OperationsPage) -> Self {
-        Self {
-            items: value.items.iter().map(OperationDto::from).collect(),
+impl OperationsPageDto {
+    pub fn from_bound_page(
+        binding: &AccountBinding,
+        value: &OperationsPage,
+    ) -> Result<Self, ApiError> {
+        Ok(Self {
+            items: value
+                .items
+                .iter()
+                .map(|item| OperationDto::from_bound_fact(binding, item))
+                .collect::<Result<Vec<_>, _>>()?,
             next_cursor: value.next_cursor.clone(),
-        }
+        })
     }
+}
+
+fn require_broker_account(binding: &AccountBinding, fact_account_id: &str) -> Result<(), ApiError> {
+    if fact_account_id != binding.broker_account_id() {
+        return Err(ApiError::new(
+            ErrorCategory::Internal,
+            "IDENTITY_MISMATCH",
+            "broker fact account id does not match the resolved binding",
+        ));
+    }
+    Ok(())
 }
 
 /// How complete the last reconciliation was, per domain.

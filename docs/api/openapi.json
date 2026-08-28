@@ -1217,7 +1217,7 @@
         "properties": {
           "account_id": {
             "type": "string",
-            "description": "Canonical Vox account/binding identity. Until #17 bindings exist this equals the\nbound broker account identifier."
+            "description": "Canonical Vox account/binding identity."
           },
           "broker_account_id": {
             "type": "string",
