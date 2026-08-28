@@ -1,0 +1,28 @@
+[package]
+name = "vox-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+utoipa.workspace = true
+uuid.workspace = true
+vox-domain = { path = "../vox-domain" }
+vox-runtime = { path = "../vox-runtime" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

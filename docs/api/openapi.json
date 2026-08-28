@@ -1,0 +1,3139 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Vox Trader Application API",
+    "description": "The application boundary between the Vox backend and its clients. The browser talks to this API and never to a broker. Money crosses as exact decimal strings, never as JSON numbers. A capability without a backend owner answers CAPABILITY_UNAVAILABLE rather than a plausible success.",
+    "license": {
+      "name": "Proprietary",
+      "identifier": "Proprietary"
+    },
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Same-origin deployment"
+    }
+  ],
+  "paths": {
+    "/api/v1/accounts": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Accounts discovered through the connection.",
+        "operationId": "accounts",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "description": "Provider of the connection, for example `T_INVEST`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "description": "Broker environment: `SANDBOX` or `PRODUCTION`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BrokerEnvironment"
+            }
+          },
+          {
+            "name": "broker_connection_id",
+            "in": "query",
+            "description": "Application connection identity. Never a credential.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "description": "Canonical Vox account/binding identity.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BrokerAccountDto"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No account read side is attached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/capabilities": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "What this deployment can actually do.",
+        "operationId": "capabilities",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "query",
+            "description": "Scope the capability set to one canonical account identity",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Capability set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitySet"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/commands/cancel-order": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Cancel a regular order.",
+        "operationId": "cancel_order",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceiptDto"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Dispatched, outcome not yet known; body is the mutation receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceiptDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/commands/order": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Submit a regular order. The scope in the body is the frozen target of the command.",
+        "operationId": "submit_order",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Mutation receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceiptDto"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Dispatched, outcome not yet known; body is the mutation receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceiptDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Execution is not authorized for this scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No execution side is attached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/market/candles": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Candles for one interval and window.",
+        "operationId": "candles",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "instrument_uid",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/CandleIntervalDto"
+            }
+          },
+          {
+            "name": "from_unix_ms",
+            "in": "query",
+            "description": "Window start, milliseconds since the Unix epoch, UTC.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to_unix_ms",
+            "in": "query",
+            "description": "Window end, milliseconds since the Unix epoch, UTC.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandlesDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/market/instruments": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Search the instrument catalogue.",
+        "operationId": "instruments",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "description": "Ticker or name fragment.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size; the server caps it.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InstrumentSummaryDto"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No market-data projection is attached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/market/order-book": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "A book snapshot.",
+        "operationId": "order_book",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "instrument_uid",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "description": "Levels per side; the server caps it at what the provider serves.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderBookDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/market/quote": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Last price and top of book, with the age of the record.",
+        "operationId": "quote",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "instrument_uid",
+            "in": "query",
+            "description": "The provider's stable instrument identifier.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/market/session": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Venue session state for one instrument.",
+        "operationId": "session",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "instrument_uid",
+            "in": "query",
+            "description": "The provider's stable instrument identifier.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/market/trades": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "The public tape.",
+        "operationId": "trades",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "instrument_uid",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TradeTickDto"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Operations history, paged by cursor.",
+        "operationId": "operations",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BrokerEnvironment"
+            }
+          },
+          {
+            "name": "broker_connection_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor returned by the previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size; the server caps it.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationsPageDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orders": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Active orders.",
+        "operationId": "orders",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "description": "Provider of the connection, for example `T_INVEST`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "description": "Broker environment: `SANDBOX` or `PRODUCTION`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BrokerEnvironment"
+            }
+          },
+          {
+            "name": "broker_connection_id",
+            "in": "query",
+            "description": "Application connection identity. Never a credential.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "description": "Canonical Vox account/binding identity.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OrderDto"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portfolio": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Currency balances as the broker reports them.",
+        "operationId": "portfolio",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "description": "Provider of the connection, for example `T_INVEST`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "description": "Broker environment: `SANDBOX` or `PRODUCTION`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BrokerEnvironment"
+            }
+          },
+          {
+            "name": "broker_connection_id",
+            "in": "query",
+            "description": "Application connection identity. Never a credential.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "description": "Canonical Vox account/binding identity.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortfolioDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/positions": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Positions and their quantities.",
+        "operationId": "positions",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "description": "Provider of the connection, for example `T_INVEST`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "description": "Broker environment: `SANDBOX` or `PRODUCTION`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BrokerEnvironment"
+            }
+          },
+          {
+            "name": "broker_connection_id",
+            "in": "query",
+            "description": "Application connection identity. Never a credential.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "description": "Canonical Vox account/binding identity.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PositionDto"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reconciliation": {
+      "get": {
+        "tags": [
+          "runtime"
+        ],
+        "summary": "How complete the last reconciliation was.",
+        "operationId": "reconciliation",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "description": "Provider of the connection, for example `T_INVEST`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "description": "Broker environment: `SANDBOX` or `PRODUCTION`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BrokerEnvironment"
+            }
+          },
+          {
+            "name": "broker_connection_id",
+            "in": "query",
+            "description": "Application connection identity. Never a credential.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "description": "Canonical Vox account/binding identity.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runtime": {
+      "get": {
+        "tags": [
+          "runtime"
+        ],
+        "summary": "Runtime state, readiness and stream health.",
+        "operationId": "runtime_health",
+        "responses": {
+          "200": {
+            "description": "Current runtime health",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeHealthDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No runtime is attached to this process",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stop-orders": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Stop orders.",
+        "operationId": "stop_orders",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "description": "Provider of the connection, for example `T_INVEST`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "description": "Broker environment: `SANDBOX` or `PRODUCTION`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BrokerEnvironment"
+            }
+          },
+          {
+            "name": "broker_connection_id",
+            "in": "query",
+            "description": "Application connection identity. Never a credential.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "description": "Canonical Vox account/binding identity.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StopOrderDto"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/system/health": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Liveness of the API process itself.",
+        "operationId": "system_health",
+        "responses": {
+          "200": {
+            "description": "The process can serve requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemHealthDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "description": "The public error envelope. Never carries provider payloads, credentials or stack traces.",
+        "required": [
+          "code",
+          "message",
+          "correlation_id",
+          "category",
+          "retryable"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine code, screaming snake case.",
+            "example": "CAPABILITY_UNAVAILABLE"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human sentence for the operator."
+          },
+          "correlation_id": {
+            "type": "string",
+            "description": "Correlates this response with server logs and with a mutation, when there is one."
+          },
+          "category": {
+            "$ref": "#/components/schemas/ErrorCategory"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "field_errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldError"
+            }
+          },
+          "details": {
+            "description": "Safe, typed extra context. Never provider metadata."
+          }
+        }
+      },
+      "BrokerAccountDto": {
+        "type": "object",
+        "description": "A broker account discovered through a connection.",
+        "required": [
+          "account_id",
+          "broker_account_id",
+          "open",
+          "accessible"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Canonical Vox account/binding identity."
+          },
+          "broker_account_id": {
+            "type": "string",
+            "description": "Provider broker-account identifier. Metadata, not the capital-command target key."
+          },
+          "open": {
+            "type": "boolean"
+          },
+          "accessible": {
+            "type": "boolean",
+            "description": "Whether the runtime can currently read this account."
+          }
+        }
+      },
+      "BrokerEnvironment": {
+        "type": "string",
+        "description": "The broker-side environment of a connection. Exactly the runtime contract's two values.",
+        "enum": [
+          "SANDBOX",
+          "PRODUCTION"
+        ]
+      },
+      "CancelOrderRequest": {
+        "type": "object",
+        "description": "Cancel a regular order. Exactly one of `broker_order_id` or `logical_request_id` names\nthe command being cancelled. `client_request_id` is the identity of *this* cancel.",
+        "required": [
+          "scope",
+          "client_request_id"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/ExecutionScope"
+          },
+          "client_request_id": {
+            "type": "string"
+          },
+          "broker_order_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logical_request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CandleDto": {
+        "type": "object",
+        "description": "One candle. `closed` distinguishes a settled bar from the one still forming.",
+        "required": [
+          "instrument_uid",
+          "interval",
+          "opened_at_unix_ms",
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume_units",
+          "closed"
+        ],
+        "properties": {
+          "instrument_uid": {
+            "type": "string"
+          },
+          "interval": {
+            "$ref": "#/components/schemas/CandleIntervalDto"
+          },
+          "opened_at_unix_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Opening time of the bar, milliseconds since the Unix epoch, UTC."
+          },
+          "open": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "high": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "low": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "close": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "volume_units": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "closed": {
+            "type": "boolean",
+            "description": "False while the bar is still forming. An open bar may be revised."
+          }
+        }
+      },
+      "CandleIntervalDto": {
+        "type": "string",
+        "description": "Candle interval. Only intervals the provider actually serves appear here.",
+        "enum": [
+          "ONE_MINUTE",
+          "FIVE_MINUTES",
+          "FIFTEEN_MINUTES",
+          "ONE_HOUR",
+          "ONE_DAY"
+        ]
+      },
+      "CandlesDto": {
+        "type": "object",
+        "description": "A page of candles for one instrument and interval.",
+        "required": [
+          "instrument_uid",
+          "interval",
+          "candles",
+          "freshness"
+        ],
+        "properties": {
+          "instrument_uid": {
+            "type": "string"
+          },
+          "interval": {
+            "$ref": "#/components/schemas/CandleIntervalDto"
+          },
+          "candles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandleDto"
+            }
+          },
+          "freshness": {
+            "$ref": "#/components/schemas/MarketFreshness"
+          }
+        }
+      },
+      "Capability": {
+        "type": "string",
+        "description": "A capability the frontend may gate on.",
+        "enum": [
+          "RUNTIME_HEALTH",
+          "ACCOUNT_READ_SIDE",
+          "ORDER_EXECUTION",
+          "PROTECTION_EXECUTION",
+          "PROTECTION_DEFAULTS",
+          "BULK_PROTECTION_MIGRATION",
+          "CONNECTION_MANAGEMENT",
+          "RBAC",
+          "RISK_VERDICT",
+          "PORTFOLIO_VALUATION",
+          "MARKET_DATA",
+          "STRATEGY",
+          "DECISION",
+          "MACHINE_LEARNING",
+          "RESEARCH",
+          "AGGREGATE_ACCOUNTS",
+          "MULTI_PROVIDER",
+          "NON_LIVE_TRADING_MODE"
+        ]
+      },
+      "CapabilitySet": {
+        "type": "object",
+        "description": "What this deployment can actually do, for one scope.",
+        "required": [
+          "provider",
+          "environment",
+          "supported",
+          "unavailable"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderDto"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/BrokerEnvironment"
+          },
+          "account_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present when the capability set is account-scoped."
+          },
+          "supported": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Capability"
+            }
+          },
+          "unavailable": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnavailableCapability"
+            }
+          }
+        }
+      },
+      "ClientMessage": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "subscription_id",
+              "topic",
+              "type"
+            ],
+            "properties": {
+              "subscription_id": {
+                "type": "string",
+                "description": "Client-generated id, echoed on every event of this subscription."
+              },
+              "topic": {
+                "$ref": "#/components/schemas/Topic"
+              },
+              "scope": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ExecutionScope",
+                    "description": "Required for every account-scoped topic."
+                  }
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "SUBSCRIBE"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "subscription_id",
+              "type"
+            ],
+            "properties": {
+              "subscription_id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "UNSUBSCRIBE"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "nonce": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "PING"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What a client may send."
+      },
+      "CurrencyBalanceDto": {
+        "type": "object",
+        "description": "One currency balance, exact.",
+        "required": [
+          "currency",
+          "amount"
+        ],
+        "properties": {
+          "currency": {
+            "type": "string",
+            "example": "rub"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Decimal"
+          }
+        }
+      },
+      "Decimal": {
+        "type": "string",
+        "description": "Exact decimal value, serialized as a string (`\"272.550000000\"`, `\"-3140.700000000\"`).",
+        "example": "272.550000000",
+        "pattern": "^-?(0|[1-9][0-9]*)\\.[0-9]{9}$"
+      },
+      "DepthLevelDto": {
+        "type": "object",
+        "description": "One level of the book.",
+        "required": [
+          "price",
+          "size_units",
+          "cumulative_units"
+        ],
+        "properties": {
+          "price": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "size_units": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Size at this level, in instrument units."
+          },
+          "cumulative_units": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cumulative size from the top of book down to this level."
+          }
+        }
+      },
+      "ErrorCategory": {
+        "type": "string",
+        "description": "The class of failure, which decides what the operator can do about it.",
+        "enum": [
+          "VALIDATION",
+          "AUTHENTICATION",
+          "PERMISSION",
+          "NOT_FOUND",
+          "CONFLICT",
+          "STALE",
+          "UNRESOLVED_UNKNOWN",
+          "CAPABILITY_UNAVAILABLE",
+          "TRANSIENT",
+          "INTERNAL"
+        ]
+      },
+      "EventPayload": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "topic"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/RuntimeHealthDto"
+              },
+              "topic": {
+                "type": "string",
+                "enum": [
+                  "RUNTIME_HEALTH"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The payload of an event, keyed by topic."
+      },
+      "ExecutionScope": {
+        "type": "object",
+        "description": "The immutable target of a read or a capital-affecting command.\n\n`broker_connection_id` is the application connection identity, never a credential.\n`account_id` is the canonical Vox account/binding identity. Provider broker-account\nidentifiers are read-side metadata, not this key.",
+        "required": [
+          "provider",
+          "environment",
+          "broker_connection_id",
+          "account_id",
+          "trading_mode"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderDto"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/BrokerEnvironment"
+          },
+          "broker_connection_id": {
+            "type": "string",
+            "description": "Application connection identity. Opaque; never a token.",
+            "example": "connection:primary"
+          },
+          "account_id": {
+            "type": "string",
+            "description": "Canonical Vox account/binding identity.",
+            "example": "account:primary"
+          },
+          "trading_mode": {
+            "$ref": "#/components/schemas/TradingMode",
+            "description": "How Vox executes for this scope."
+          }
+        }
+      },
+      "FieldError": {
+        "type": "object",
+        "description": "One field-level complaint.",
+        "required": [
+          "field",
+          "message"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "JSON pointer-ish path of the offending field.",
+            "example": "quantity_lots"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "InstrumentIdentityDto": {
+        "type": "object",
+        "description": "The canonical instrument identity, as the domain defines it.\n\nIdentity is `provider` + `uid`. Everything else is an alias for humans and for lookup.",
+        "required": [
+          "provider",
+          "uid",
+          "ticker",
+          "class_code"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "Provider whose namespace `uid` belongs to.",
+            "example": "tinvest"
+          },
+          "uid": {
+            "type": "string",
+            "description": "The provider's stable instrument identifier. Diagnostics only in normal UI.",
+            "example": "e6123145-9665-43e0-8413-cd61b8aa9b13"
+          },
+          "figi": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "FIGI where the provider supplies one. An alias, never the identity.",
+            "example": "BBG004730N88"
+          },
+          "ticker": {
+            "type": "string",
+            "description": "Exchange ticker. Shown to operators; not unique across venues or over time.",
+            "example": "SBER"
+          },
+          "class_code": {
+            "type": "string",
+            "description": "Venue or board code that qualifies the ticker.",
+            "example": "TQBR"
+          }
+        }
+      },
+      "InstrumentSummaryDto": {
+        "type": "object",
+        "description": "A catalogue entry: the canonical identity plus what the ticket needs to validate an order.\n\nLot size and price step are metadata, not UI rules: without them a quantity field would be\nguessing, and this API refuses to make the browser guess.",
+        "required": [
+          "identity",
+          "lot_size",
+          "min_price_increment",
+          "currency",
+          "tradable"
+        ],
+        "properties": {
+          "identity": {
+            "$ref": "#/components/schemas/InstrumentIdentityDto"
+          },
+          "lot_size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Instrument units in one lot."
+          },
+          "min_price_increment": {
+            "$ref": "#/components/schemas/Decimal",
+            "description": "Minimum price increment."
+          },
+          "currency": {
+            "type": "string",
+            "description": "Settlement currency code.",
+            "example": "rub"
+          },
+          "tradable": {
+            "type": "boolean",
+            "description": "Whether the provider currently lists the instrument as tradable."
+          }
+        }
+      },
+      "JournalStateDto": {
+        "type": "string",
+        "description": "Where a dispatched command stands. `UNKNOWN_AFTER_DISPATCH` is an unfinished answer.",
+        "enum": [
+          "NOT_DISPATCHED",
+          "DISPATCHING",
+          "ACKNOWLEDGED",
+          "REJECTED",
+          "UNKNOWN_AFTER_DISPATCH",
+          "RECONCILED"
+        ]
+      },
+      "MarketFreshness": {
+        "type": "object",
+        "description": "How current a market-data record is.\n\nFreshness is a property of the feed, not of the instrument, and it is never folded into\nthe price: a stale quote stays visible with its age rather than disappearing or pretending.",
+        "required": [
+          "stream",
+          "observed_at_unix_ms",
+          "age_ms"
+        ],
+        "properties": {
+          "stream": {
+            "$ref": "#/components/schemas/StreamStateDto",
+            "description": "Connectivity of the feed that produced this record."
+          },
+          "observed_at_unix_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Event time of the record itself, milliseconds since the Unix epoch, UTC."
+          },
+          "age_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Age of the record at the moment the API answered."
+          }
+        }
+      },
+      "MutationDecisionDto": {
+        "type": "string",
+        "description": "Whether the client may submit, must reconcile first, or must not submit at all.\nDecided by the backend; the browser never derives it.",
+        "enum": [
+          "SUBMIT",
+          "RECONCILE",
+          "DO_NOT_SUBMIT"
+        ]
+      },
+      "MutationKindDto": {
+        "type": "string",
+        "enum": [
+          "POST_ORDER",
+          "POST_ORDER_ASYNC",
+          "REPLACE_ORDER",
+          "CANCEL_ORDER",
+          "POST_STOP_ORDER",
+          "CANCEL_STOP_ORDER",
+          "PROTECTION_LEG"
+        ]
+      },
+      "MutationReceiptDto": {
+        "type": "object",
+        "description": "The receipt of a capital-affecting command.",
+        "required": [
+          "logical_request_id",
+          "scope",
+          "kind",
+          "state",
+          "decision",
+          "correlation_id",
+          "runtime_epoch",
+          "created_at_unix_ms",
+          "updated_at_unix_ms"
+        ],
+        "properties": {
+          "logical_request_id": {
+            "type": "string",
+            "description": "Vox-side identity of the command, stable across retries and reconciliation."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ExecutionScope",
+            "description": "The frozen target this command was dispatched to."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MutationKindDto"
+          },
+          "state": {
+            "$ref": "#/components/schemas/JournalStateDto"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/MutationDecisionDto",
+            "description": "What the backend says the client may do next."
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "broker_order_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set only once the broker has answered."
+          },
+          "broker_stop_order_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reconciliation_disposition": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Runtime disposition after reconciliation, when it has run."
+          },
+          "runtime_epoch": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "created_at_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updated_at_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "OperationDto": {
+        "type": "object",
+        "description": "An operation identity used for reconciliation. Amounts and kinds are owned by #22.",
+        "required": [
+          "account_id",
+          "cursor",
+          "broker_fill_ids"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "provider_operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "broker_order_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logical_request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "broker_fill_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "OperationsPageDto": {
+        "type": "object",
+        "description": "A page of operations with the cursor to continue from.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationDto"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "OrderBookDto": {
+        "type": "object",
+        "description": "A book snapshot at one depth.",
+        "required": [
+          "instrument_uid",
+          "depth",
+          "asks",
+          "bids",
+          "freshness"
+        ],
+        "properties": {
+          "instrument_uid": {
+            "type": "string"
+          },
+          "depth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of levels the provider returned per side.",
+            "minimum": 0
+          },
+          "asks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DepthLevelDto"
+            },
+            "description": "Best ask first."
+          },
+          "bids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DepthLevelDto"
+            },
+            "description": "Best bid first."
+          },
+          "spread_absolute": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal",
+                "description": "Absolute spread between best bid and best ask, when both sides exist."
+              }
+            ]
+          },
+          "freshness": {
+            "$ref": "#/components/schemas/MarketFreshness"
+          }
+        }
+      },
+      "OrderDto": {
+        "type": "object",
+        "description": "An order identity and its liveness. Price and quantity are not in the read model yet.",
+        "required": [
+          "account_id",
+          "broker_order_id",
+          "instrument_uid",
+          "active",
+          "terminal"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "broker_order_id": {
+            "type": "string"
+          },
+          "logical_request_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Vox-side identity of the command that created it, when it was ours."
+          },
+          "instrument_uid": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "terminal": {
+            "type": "boolean"
+          }
+        }
+      },
+      "OrderSideDto": {
+        "type": "string",
+        "description": "Which side of the market a command takes. The side is the action, never a mode.",
+        "enum": [
+          "BUY",
+          "SELL"
+        ]
+      },
+      "OrderTypeDto": {
+        "type": "string",
+        "enum": [
+          "LIMIT",
+          "MARKET",
+          "BEST_PRICE"
+        ]
+      },
+      "PortfolioDto": {
+        "type": "object",
+        "description": "Portfolio as the broker reports it: currency balances and when they were observed.\n\nValuation, P&L, exposure and margin are **not** here. #22 owns them.",
+        "required": [
+          "account_id",
+          "balances"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "balances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CurrencyBalanceDto"
+            }
+          },
+          "broker_observed_at_unix_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "PositionDto": {
+        "type": "object",
+        "description": "A position as the broker reports it: instrument and quantity, nothing derived.",
+        "required": [
+          "account_id",
+          "instrument_uid",
+          "quantity_units"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "instrument_uid": {
+            "type": "string"
+          },
+          "quantity_units": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Signed quantity in instrument units."
+          },
+          "broker_observed_at_unix_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "PriceConventionDto": {
+        "type": "string",
+        "enum": [
+          "SETTLEMENT_CURRENCY",
+          "POINTS"
+        ]
+      },
+      "ProtectionPlanDto": {
+        "type": "object",
+        "description": "Stop loss and take profit are independent and both optional.",
+        "properties": {
+          "stop_loss_trigger_price": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          },
+          "stop_loss_trailing": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TrailingDistanceDto"
+              }
+            ]
+          },
+          "take_profit_trigger_price": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          },
+          "take_profit_limit_price": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          }
+        }
+      },
+      "ProtectionStateDto": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "AWAITING_ENTRY"
+            ]
+          },
+          {
+            "type": "object",
+            "description": "The entry filled in part, so only part of the position carries protection.",
+            "required": [
+              "ENTRY_PARTIALLY_FILLED"
+            ],
+            "properties": {
+              "ENTRY_PARTIALLY_FILLED": {
+                "type": "object",
+                "description": "The entry filled in part, so only part of the position carries protection.",
+                "required": [
+                  "filled_lots",
+                  "protected_lots"
+                ],
+                "properties": {
+                  "filled_lots": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "protected_lots": {
+                    "type": "integer",
+                    "format": "int64"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ESTABLISHING"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ACTIVE"
+            ]
+          },
+          {
+            "type": "object",
+            "description": "The position is open and its protection did not establish. It is unprotected.",
+            "required": [
+              "FAILED_AFTER_ENTRY"
+            ],
+            "properties": {
+              "FAILED_AFTER_ENTRY": {
+                "type": "object",
+                "description": "The position is open and its protection did not establish. It is unprotected.",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "string",
+            "enum": [
+              "UNKNOWN_AFTER_DISPATCH"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "RECONCILIATION_REQUIRED"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "CLOSING_POSITION"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ORPHANED"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "TERMINAL"
+            ]
+          }
+        ],
+        "description": "The canonical protection lifecycle, all ten states.\n\nTwo of them carry data and are the two an operator most needs to see: a position that\nfilled only partly and is therefore only partly protected, and protection that failed\nafter the position was already open. `STALE` is deliberately absent: staleness is the age\nof the last broker answer, carried by stream health, not a lifecycle state."
+      },
+      "ProviderDto": {
+        "type": "string",
+        "description": "Providers with a registered adapter. A provider appears here only once it is real.",
+        "enum": [
+          "T_INVEST"
+        ]
+      },
+      "QuoteDto": {
+        "type": "object",
+        "description": "Last price and the top of book, with the day's range.\n\nAbsent fields mean the provider did not supply them for this instrument, which is a\ndifferent thing from a zero and must not be rendered as one.",
+        "required": [
+          "instrument_uid",
+          "freshness"
+        ],
+        "properties": {
+          "instrument_uid": {
+            "type": "string"
+          },
+          "last": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          },
+          "bid": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          },
+          "ask": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          },
+          "change_absolute": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal",
+                "description": "Absolute change against the previous close."
+              }
+            ]
+          },
+          "change_percent": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal",
+                "description": "Relative change against the previous close, as an exact percentage value."
+              }
+            ]
+          },
+          "day_high": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          },
+          "day_low": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          },
+          "volume_units": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Traded volume in instrument units."
+          },
+          "freshness": {
+            "$ref": "#/components/schemas/MarketFreshness"
+          }
+        }
+      },
+      "ReasonCodeDto": {
+        "type": "string",
+        "description": "Why the runtime is in its current state. The only reason vocabulary that exists.",
+        "enum": [
+          "STARTUP",
+          "CONNECTING",
+          "RECONCILIATION_STARTED",
+          "RECONCILIATION_COMPLETE",
+          "RECONCILIATION_INCOMPLETE",
+          "UNKNOWN_MUTATION",
+          "BROKER_POSITION_CONFLICT",
+          "BROKER_ORDER_CONFLICT",
+          "BROKER_STOP_CONFLICT",
+          "REQUIRED_READ_UNAVAILABLE",
+          "ACCOUNT_UNAVAILABLE",
+          "CREDENTIAL_REJECTED",
+          "EXECUTION_UNAUTHORIZED",
+          "STREAM_DISCONNECTED",
+          "STREAM_GAP",
+          "STREAM_QUEUE_OVERFLOW",
+          "OPTIONAL_CAPABILITY_UNAVAILABLE",
+          "CHECKPOINT_REBUILD",
+          "PERSISTENCE_FAILURE",
+          "OWNERSHIP_FAILURE",
+          "STALE_EPOCH",
+          "CORRUPT_MUTATION_EVIDENCE",
+          "SHUTDOWN_REQUESTED",
+          "SHUTDOWN_COMPLETE"
+        ]
+      },
+      "ReconciliationDto": {
+        "type": "object",
+        "description": "How complete the last reconciliation was, per domain.",
+        "required": [
+          "scope_key",
+          "reconciliation_id",
+          "snapshot_observed_at_unix_ms",
+          "completed_at_unix_ms",
+          "runtime_epoch",
+          "accounts_complete",
+          "portfolio_complete",
+          "positions_complete",
+          "orders_complete",
+          "stops_complete",
+          "operations_complete",
+          "complete"
+        ],
+        "properties": {
+          "scope_key": {
+            "type": "string"
+          },
+          "reconciliation_id": {
+            "type": "string"
+          },
+          "operations_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "snapshot_observed_at_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "completed_at_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "runtime_epoch": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "accounts_complete": {
+            "type": "boolean"
+          },
+          "portfolio_complete": {
+            "type": "boolean"
+          },
+          "positions_complete": {
+            "type": "boolean"
+          },
+          "orders_complete": {
+            "type": "boolean"
+          },
+          "stops_complete": {
+            "type": "boolean"
+          },
+          "operations_complete": {
+            "type": "boolean"
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "True only when every domain above is complete."
+          }
+        }
+      },
+      "RuntimeHealthDto": {
+        "type": "object",
+        "description": "Everything the shell needs to answer \"can I trade right now, and if not why\".",
+        "required": [
+          "state",
+          "reason_code",
+          "reason",
+          "provider",
+          "environment",
+          "account_display",
+          "runtime_epoch",
+          "connected",
+          "unresolved_unknown_count",
+          "open_order_count",
+          "active_stop_count",
+          "stream_states",
+          "persistence_healthy",
+          "execution_authorized",
+          "new_exposure_allowed"
+        ],
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/RuntimeStateDto"
+          },
+          "reason_code": {
+            "$ref": "#/components/schemas/ReasonCodeDto"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human sentence for the operator. The code is the diagnostic, this is the explanation."
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ProviderDto"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/BrokerEnvironment"
+          },
+          "account_display": {
+            "type": "string",
+            "description": "Human account label. Raw identifiers stay in diagnostics."
+          },
+          "runtime_epoch": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Monotonic ownership epoch. A response from a previous epoch must be discarded.",
+            "minimum": 0
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "last_successful_reconciliation_at_unix_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "reconciliation_age_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "unresolved_unknown_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "open_order_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "active_stop_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "stream_states": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StreamHealthDto"
+            }
+          },
+          "persistence_healthy": {
+            "type": "boolean"
+          },
+          "execution_authorized": {
+            "type": "boolean",
+            "description": "Whether Vox execution is authorized for this scope. Not the same as broker permission."
+          },
+          "new_exposure_allowed": {
+            "type": "boolean",
+            "description": "Whether new exposure may be created right now."
+          }
+        }
+      },
+      "RuntimeStateDto": {
+        "type": "string",
+        "description": "Runtime lifecycle. New exposure is permitted in `READY` only.",
+        "enum": [
+          "STARTING",
+          "CONNECTING",
+          "RECONCILING",
+          "READY",
+          "DEGRADED",
+          "HALTED",
+          "STOPPING",
+          "STOPPED"
+        ]
+      },
+      "SafetyConditionDto": {
+        "type": "string",
+        "description": "Why new exposure is blocked, when it is. Authoritative safety facts until #21 lands.",
+        "enum": [
+          "STARTUP_BEFORE_RECONCILIATION",
+          "UNRESOLVED_UNKNOWN_MUTATION",
+          "POSITION_CONFLICT",
+          "ORDER_IDENTITY_CONFLICT",
+          "STOP_IDENTITY_CONFLICT",
+          "REQUIRED_READ_UNAVAILABLE",
+          "ACCOUNT_UNAVAILABLE",
+          "CREDENTIAL_INVALID",
+          "EXECUTION_AUTHORIZATION_DISABLED",
+          "PRODUCTION_STREAM_DISCONNECTED_AFTER_UNARY_RECOVERY",
+          "OPTIONAL_ANALYTICS_UNAVAILABLE",
+          "CHECKPOINT_CORRUPT_SNAPSHOT_AVAILABLE",
+          "PERSISTENCE_FAILURE",
+          "OWNERSHIP_FAILURE",
+          "CLEAR"
+        ]
+      },
+      "ServerEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The full current state of a subscription, sent once on acceptance.",
+            "required": [
+              "schema_version",
+              "subscription_id",
+              "as_of_unix_ms",
+              "runtime_epoch",
+              "payload",
+              "type"
+            ],
+            "properties": {
+              "schema_version": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "subscription_id": {
+                "type": "string"
+              },
+              "as_of_unix_ms": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Event time in milliseconds since the Unix epoch, UTC."
+              },
+              "runtime_epoch": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Runtime ownership epoch this event belongs to.",
+                "minimum": 0
+              },
+              "scope": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ExecutionScope"
+                  }
+                ]
+              },
+              "payload": {
+                "$ref": "#/components/schemas/EventPayload"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "SNAPSHOT"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A change to an already-delivered snapshot.",
+            "required": [
+              "schema_version",
+              "subscription_id",
+              "as_of_unix_ms",
+              "runtime_epoch",
+              "sequence",
+              "payload",
+              "type"
+            ],
+            "properties": {
+              "schema_version": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "subscription_id": {
+                "type": "string"
+              },
+              "as_of_unix_ms": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "runtime_epoch": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "sequence": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Monotonic per-subscription sequence, so a gap is detectable.",
+                "minimum": 0
+              },
+              "scope": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ExecutionScope"
+                  }
+                ]
+              },
+              "payload": {
+                "$ref": "#/components/schemas/EventPayload"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "UPDATE"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The lifecycle of a subscription.",
+            "required": [
+              "schema_version",
+              "subscription_id",
+              "status",
+              "type"
+            ],
+            "properties": {
+              "schema_version": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "subscription_id": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/components/schemas/SubscriptionStatus"
+              },
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "STATUS"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A typed failure. Carries no provider internals and no secrets.",
+            "required": [
+              "schema_version",
+              "code",
+              "message",
+              "correlation_id",
+              "type"
+            ],
+            "properties": {
+              "schema_version": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "subscription_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "correlation_id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "ERROR"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Proof of liveness, also the answer to `PING`.",
+            "required": [
+              "schema_version",
+              "server_time_unix_ms",
+              "type"
+            ],
+            "properties": {
+              "schema_version": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "server_time_unix_ms": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "nonce": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "HEARTBEAT"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What the server sends."
+      },
+      "SessionDto": {
+        "type": "object",
+        "description": "The current session for one instrument.",
+        "required": [
+          "instrument_uid",
+          "status",
+          "freshness"
+        ],
+        "properties": {
+          "instrument_uid": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TradingStatusDto"
+          },
+          "limit_orders_available": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the venue accepts limit orders right now, when the provider says so."
+          },
+          "market_orders_available": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the venue accepts market orders right now, when the provider says so."
+          },
+          "freshness": {
+            "$ref": "#/components/schemas/MarketFreshness"
+          }
+        }
+      },
+      "StopOrderDto": {
+        "type": "object",
+        "description": "A stop order identity and its liveness. Trigger levels are not in the read model yet.",
+        "required": [
+          "account_id",
+          "broker_stop_order_id",
+          "instrument_uid",
+          "active",
+          "terminal"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "broker_stop_order_id": {
+            "type": "string"
+          },
+          "logical_request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "instrument_uid": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "terminal": {
+            "type": "boolean"
+          }
+        }
+      },
+      "StreamHealthDto": {
+        "type": "object",
+        "description": "Health of one broker stream, including how old its last event is.",
+        "required": [
+          "stream",
+          "state",
+          "queue_depth"
+        ],
+        "properties": {
+          "stream": {
+            "$ref": "#/components/schemas/StreamKindDto"
+          },
+          "state": {
+            "$ref": "#/components/schemas/StreamStateDto"
+          },
+          "queue_depth": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "last_event_at_unix_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Event time of the last message, in milliseconds since the Unix epoch, UTC."
+          }
+        }
+      },
+      "StreamKindDto": {
+        "type": "string",
+        "description": "Which broker stream a health record describes.",
+        "enum": [
+          "ORDER_STATE",
+          "TRADES",
+          "POSITIONS",
+          "PORTFOLIO",
+          "OPERATIONS"
+        ]
+      },
+      "StreamStateDto": {
+        "type": "string",
+        "description": "Stream connectivity. `STALE` here is a stream fact, never a protection lifecycle state.",
+        "enum": [
+          "DISCONNECTED",
+          "CONNECTING",
+          "ACTIVE",
+          "STALE",
+          "FAILED"
+        ]
+      },
+      "SubmitOrderRequest": {
+        "type": "object",
+        "description": "Submit a regular order. Quantity is in lots; price is exact and optional for market orders.",
+        "required": [
+          "scope",
+          "instrument_id",
+          "client_request_id",
+          "side",
+          "order_type",
+          "quantity_lots",
+          "price_convention",
+          "time_in_force"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/ExecutionScope",
+            "description": "The immutable target. A submitted command is never retargeted by a later UI change."
+          },
+          "instrument_id": {
+            "type": "string",
+            "description": "Opaque canonical instrument identity. Provider UID/FIGI mapping stays inside adapters.",
+            "example": "instrument:sber"
+          },
+          "client_request_id": {
+            "type": "string",
+            "description": "Client-generated identity of this command, used for idempotency and reconciliation.",
+            "example": "b4f1c2a0-6d18-4f0e-9a37-2d5c1f0b7e44"
+          },
+          "side": {
+            "$ref": "#/components/schemas/OrderSideDto"
+          },
+          "order_type": {
+            "$ref": "#/components/schemas/OrderTypeDto"
+          },
+          "quantity_lots": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "price": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          },
+          "price_convention": {
+            "$ref": "#/components/schemas/PriceConventionDto"
+          },
+          "time_in_force": {
+            "$ref": "#/components/schemas/TimeInForceDto"
+          },
+          "protection": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProtectionPlanDto"
+              }
+            ]
+          }
+        }
+      },
+      "SubscriptionStatus": {
+        "type": "string",
+        "description": "Why a subscription is in its current status.",
+        "enum": [
+          "ACTIVE",
+          "CANCELLED",
+          "DROPPED_SLOW_CONSUMER",
+          "UNAVAILABLE"
+        ]
+      },
+      "SystemHealthDto": {
+        "type": "object",
+        "description": "Liveness of the API process itself, independent of any broker connection.",
+        "required": [
+          "status",
+          "api_version",
+          "server_time_unix_ms"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Always `\"ok\"` when the process can serve requests.",
+            "example": "ok"
+          },
+          "api_version": {
+            "type": "string",
+            "description": "Public API version this process serves.",
+            "example": "v1"
+          },
+          "server_time_unix_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Server time in milliseconds since the Unix epoch, UTC."
+          }
+        }
+      },
+      "TimeInForceDto": {
+        "type": "string",
+        "enum": [
+          "DAY",
+          "FILL_AND_KILL",
+          "FILL_OR_KILL"
+        ]
+      },
+      "Topic": {
+        "type": "string",
+        "description": "Topics a client may subscribe to. A topic exists only when its read model does.",
+        "enum": [
+          "RUNTIME_HEALTH",
+          "POSITIONS",
+          "ORDERS",
+          "STOPS",
+          "OPERATIONS",
+          "PORTFOLIO",
+          "QUOTES",
+          "ORDER_BOOK",
+          "TRADES"
+        ]
+      },
+      "TradeDirectionDto": {
+        "type": "string",
+        "description": "Which side initiated a public trade, where the provider reports it.",
+        "enum": [
+          "BUY",
+          "SELL",
+          "UNKNOWN"
+        ]
+      },
+      "TradeTickDto": {
+        "type": "object",
+        "description": "One public trade on the tape.",
+        "required": [
+          "instrument_uid",
+          "price",
+          "size_units",
+          "direction",
+          "traded_at_unix_ms",
+          "own"
+        ],
+        "properties": {
+          "instrument_uid": {
+            "type": "string"
+          },
+          "price": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "size_units": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/TradeDirectionDto"
+          },
+          "traded_at_unix_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Exchange time of the trade, milliseconds since the Unix epoch, UTC."
+          },
+          "own": {
+            "type": "boolean",
+            "description": "True when this trade is one of the operator's own, matched by broker fill identity."
+          }
+        }
+      },
+      "TradingMode": {
+        "type": "string",
+        "description": "How Vox executes, which is not where the broker lives.\n\nOnly `LIVE` exists: orders go to the broker connection named by the scope. `PAPER` and\n`BACKTEST` are owned by #23 and #29 and will be added here when those runtimes exist,\nnot before.",
+        "enum": [
+          "LIVE"
+        ]
+      },
+      "TradingStatusDto": {
+        "type": "string",
+        "description": "Whether the venue is currently accepting orders for an instrument.\n\nThis is the venue's session state, not a Vox permission: execution authorization is a\nseparate fact carried by runtime health.",
+        "enum": [
+          "CLOSED",
+          "AUCTION",
+          "OPEN",
+          "SUSPENDED",
+          "UNKNOWN"
+        ]
+      },
+      "TrailingDistanceDto": {
+        "type": "object",
+        "description": "A trailing distance: an exact value plus the mode it is measured in.",
+        "required": [
+          "value",
+          "mode"
+        ],
+        "properties": {
+          "value": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/TrailingModeDto"
+          }
+        }
+      },
+      "TrailingModeDto": {
+        "type": "string",
+        "enum": [
+          "ABSOLUTE_PRICE",
+          "RELATIVE_PERCENT"
+        ]
+      },
+      "UnavailableCapability": {
+        "type": "object",
+        "description": "Why a capability is not available, and who owns making it so.",
+        "required": [
+          "capability",
+          "reason",
+          "owner"
+        ],
+        "properties": {
+          "capability": {
+            "$ref": "#/components/schemas/Capability"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human sentence naming what is missing."
+          },
+          "owner": {
+            "type": "string",
+            "description": "The issue that owns the missing contract, for example `#21`.",
+            "example": "#21"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "system",
+      "description": "Process liveness and capability discovery"
+    },
+    {
+      "name": "runtime",
+      "description": "Runtime state, readiness and reconciliation"
+    },
+    {
+      "name": "accounts",
+      "description": "Account-scoped read side"
+    },
+    {
+      "name": "execution",
+      "description": "Capital-affecting commands"
+    },
+    {
+      "name": "market",
+      "description": "Provider-neutral market data, projected over the #8 adapter layer"
+    }
+  ]
+}
