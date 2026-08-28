@@ -5,10 +5,10 @@ use thiserror::Error;
 use uuid::Uuid;
 use vox_domain::{
     CancelOrderCommand, CancelStopOrderCommand, ExecutionPriceConvention, FixedPoint, OrderSide,
-    PositionSide, ProtectionCapability, ProtectionCapabilityError, ProtectionPlan,
-    ProviderOrderIdentityKind, RegularOrderCommand, RegularOrderType, ReplaceOrderCommand,
-    StopLossProtection, TakeProfitProtection, TimeInForce, TrailingDistance, TrailingDistanceMode,
-    UnitsNano,
+    PositionSide, ProtectionCapability, ProtectionCapabilityError, ProtectionLeg,
+    ProtectionLegCommand, ProtectionPlan, ProviderOrderIdentityKind, RegularOrderCommand,
+    RegularOrderType, ReplaceOrderCommand, StopLossProtection, TakeProfitProtection, TimeInForce,
+    TrailingDistance, TrailingDistanceMode, UnitsNano,
 };
 
 use crate::account::ProviderTimestamp;
@@ -248,6 +248,7 @@ pub struct CanonicalStreamOrderState {
     pub client_request_id: Option<String>,
     pub account_id: Option<String>,
     pub execution_status: i32,
+    pub status_cause: Option<i32>,
     pub direction: i32,
     pub order_type: i32,
     pub lots_requested: i64,
@@ -577,6 +578,65 @@ pub fn protection_requests(
         )?);
     }
     Ok(requests)
+}
+
+pub fn protection_leg_request(
+    command: &ProtectionLegCommand,
+) -> Result<v1::PostStopOrderRequest, ExecutionValidationError> {
+    let expire_at = match (command.expire_at_unix_seconds, command.expire_at_nanos) {
+        (None, None) => None,
+        (Some(seconds), nanos) => Some(ProviderTimestamp {
+            seconds,
+            nanos: nanos.unwrap_or(0),
+        }),
+        (None, Some(_)) => return Err(ExecutionValidationError::Timestamp),
+    };
+    let (plan, request_ids) = match &command.leg {
+        ProtectionLeg::StopLoss(stop_loss) => (
+            ProtectionPlan {
+                stop_loss: Some(stop_loss.clone()),
+                take_profit: None,
+            },
+            ProtectionRequestIds {
+                stop_loss: Some(command.client_request_id.clone()),
+                take_profit: None,
+            },
+        ),
+        ProtectionLeg::TakeProfit(take_profit) => (
+            ProtectionPlan {
+                stop_loss: None,
+                take_profit: Some(take_profit.clone()),
+            },
+            ProtectionRequestIds {
+                stop_loss: None,
+                take_profit: Some(command.client_request_id.clone()),
+            },
+        ),
+    };
+    let mut requests = protection_requests(
+        &plan,
+        &ProtectionRequestContext {
+            account_id: command.account_id.clone(),
+            instrument_id: command.instrument_id.clone(),
+            quantity_lots: command.quantity_lots,
+            position_side: command.position_side,
+            price_convention: command.price_convention,
+            reference_price: command.reference_price,
+            expire_at,
+            confirm_margin_trade: command.confirm_margin_trade,
+            request_ids,
+        },
+    )?;
+    if requests.len() != 1 {
+        return Err(ExecutionValidationError::InvalidStopWire(
+            "protection leg must map to exactly one request",
+        ));
+    }
+    requests
+        .pop()
+        .ok_or(ExecutionValidationError::InvalidStopWire(
+            "protection leg request missing",
+        ))
 }
 
 fn take_profit_request(
@@ -1066,6 +1126,7 @@ fn stream_order_state(
             .filter(|value| !value.trim().is_empty()),
         account_id: optional_text(value.account_id),
         execution_status: value.execution_report_status,
+        status_cause: value.status_info,
         direction: value.direction,
         order_type: value.order_type,
         lots_requested: value.lots_requested,
@@ -1879,5 +1940,23 @@ mod tests {
                 .is_ok()
             );
         }
+        let order = decode_order_state_stream(v1::OrderStateStreamResponse {
+            payload: Some(StatePayload::OrderState(
+                v1::order_state_stream_response::OrderState {
+                    execution_report_status: 77_777,
+                    status_info: Some(15),
+                    ..Default::default()
+                },
+            )),
+        })
+        .expect("typed order stream");
+        assert!(matches!(
+            order,
+            CanonicalExecutionStreamEvent::OrderState(CanonicalStreamOrderState {
+                execution_status: 77_777,
+                status_cause: Some(15),
+                ..
+            })
+        ));
     }
 }

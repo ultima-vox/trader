@@ -7,7 +7,8 @@ use thiserror::Error;
 
 use crate::model::{
     BrokerEvent, BrokerEventClass, BrokerIdentityLinks, BrokerSnapshot, JournalState, MutationKind,
-    MutationRecord, ReasonCode, ReconciliationCheckpoint, RuntimeScope, RuntimeState,
+    MutationRecord, OrderExecutionStatus, ReasonCode, ReconciliationCheckpoint,
+    ReconciliationDisposition, RuntimeScope, RuntimeState, StopExecutionStatus,
 };
 use crate::ports::{
     BrokerMethod, BrokerPortError, BrokerReadPort, BrokerResultClass, MetricLabel, MetricName,
@@ -124,7 +125,7 @@ where
         let accounts = self
             .safe_read(BrokerMethod::GetAccounts, || self.reads.accounts(scope))
             .await?;
-        let (portfolio, positions, active_orders, stop_orders) = tokio::try_join!(
+        let (mut portfolio, positions, active_orders, stop_orders) = tokio::try_join!(
             self.safe_read(BrokerMethod::GetPortfolio, || self.reads.portfolio(scope)),
             self.safe_read(BrokerMethod::GetPositions, || self.reads.positions(scope)),
             self.safe_read(BrokerMethod::GetOrders, || self.reads.active_orders(scope)),
@@ -133,10 +134,11 @@ where
             }),
         )?;
         let operations = self.operations(scope, from_unix_ms).await?;
+        portfolio.cash_balances = positions.cash_balances;
         let snapshot = BrokerSnapshot {
             accounts,
             portfolio,
-            positions,
+            positions: positions.instruments,
             active_orders,
             stop_orders,
             operations,
@@ -300,7 +302,7 @@ where
             active_stop_count: snapshot
                 .stop_orders
                 .iter()
-                .filter(|stop| stop.active)
+                .filter(|stop| stop.status.active())
                 .count(),
             deduplicated_event_count,
             completed_at_unix_ms: now,
@@ -390,10 +392,14 @@ where
                 } else {
                     links.broker_order_id = Some(order.broker_order_id.clone());
                 }
+                let Some(disposition) = order_disposition(mutation.kind, order.status) else {
+                    return Ok(None);
+                };
                 reconcile_record(
                     &mut mutation,
                     runtime_epoch,
                     now,
+                    disposition,
                     format!("direct GetOrderState broker={}", order.broker_order_id),
                 );
                 return Ok(Some((mutation, links)));
@@ -412,10 +418,14 @@ where
             } else {
                 links.broker_order_id = Some(order.broker_order_id.clone());
             }
+            let Some(disposition) = order_disposition(mutation.kind, order.status) else {
+                return Ok(None);
+            };
             reconcile_record(
                 &mut mutation,
                 runtime_epoch,
                 now,
+                disposition,
                 format!(
                     "authoritative active order broker={}",
                     order.broker_order_id
@@ -425,28 +435,22 @@ where
         }
 
         if let Some(stop) = snapshot.stop_orders.iter().find(|stop| {
-            stop.logical_request_id.as_deref() == Some(&mutation.logical_request_id)
-                || existing.broker_stop_order_id.as_deref() == Some(&stop.broker_stop_order_id)
-        }) {
-            let resolves = match mutation.kind {
-                MutationKind::PostStopOrder | MutationKind::ProtectionLeg => true,
-                MutationKind::CancelStopOrder => stop.terminal && !stop.active,
-                _ => false,
-            };
-            if resolves {
-                let mut links = existing.clone();
-                links.broker_stop_order_id = Some(stop.broker_stop_order_id.clone());
-                reconcile_record(
-                    &mut mutation,
-                    runtime_epoch,
-                    now,
-                    format!(
-                        "authoritative GetStopOrders broker={}",
-                        stop.broker_stop_order_id
-                    ),
-                );
-                return Ok(Some((mutation, links)));
-            }
+            existing.broker_stop_order_id.as_deref() == Some(&stop.broker_stop_order_id)
+        }) && let Some(disposition) = stop_disposition(mutation.kind, stop.status)
+        {
+            let mut links = existing.clone();
+            links.broker_stop_order_id = Some(stop.broker_stop_order_id.clone());
+            reconcile_record(
+                &mut mutation,
+                runtime_epoch,
+                now,
+                disposition,
+                format!(
+                    "authoritative GetStopOrders broker={}",
+                    stop.broker_stop_order_id
+                ),
+            );
+            return Ok(Some((mutation, links)));
         }
 
         if let Some(operation) = snapshot
@@ -465,6 +469,7 @@ where
                 &mut mutation,
                 runtime_epoch,
                 now,
+                ReconciliationDisposition::OrderAccepted,
                 format!("GetOperationsByCursor cursor={}", operation.cursor),
             );
             return Ok(Some((mutation, links)));
@@ -479,6 +484,7 @@ where
                 &mut mutation,
                 runtime_epoch,
                 now,
+                ReconciliationDisposition::OrderAccepted,
                 format!("accepted stream event={}", event.stable_event_id),
             );
             return Ok(Some((mutation, existing)));
@@ -503,6 +509,7 @@ where
                     broker_order_id: operation.broker_order_id.clone(),
                     broker_stop_order_id: None,
                     logical_request_id: operation.logical_request_id.clone(),
+                    execution_state: None,
                     runtime_epoch,
                 };
                 let inserted = store_call(self.store.clone(), {
@@ -680,7 +687,11 @@ fn validate_snapshot(
         })
         .flatten()
         .collect::<BTreeSet<_>>();
-    for order in snapshot.active_orders.iter().filter(|order| order.active) {
+    for order in snapshot
+        .active_orders
+        .iter()
+        .filter(|order| order.status.active())
+    {
         if !linked_orders.contains(order.broker_order_id.as_str()) {
             discrepancies.push(format!(
                 "unfamiliar broker order preserved: {}",
@@ -697,7 +708,11 @@ fn validate_snapshot(
         .iter()
         .map(|position| (position.instrument_uid.as_str(), position.quantity_units))
         .collect::<BTreeMap<_, _>>();
-    for stop in snapshot.stop_orders.iter().filter(|stop| stop.active) {
+    for stop in snapshot
+        .stop_orders
+        .iter()
+        .filter(|stop| stop.status.active())
+    {
         if !linked_stops.contains(stop.broker_stop_order_id.as_str()) {
             discrepancies.push(format!(
                 "unfamiliar broker stop preserved: {}",
@@ -758,7 +773,8 @@ fn order_evidence_resolves(
         MutationKind::PostOrder | MutationKind::PostOrderAsync => logical_match || original_match,
         MutationKind::ReplaceOrder => logical_match || replacement_match,
         MutationKind::CancelOrder => {
-            (original_match || replacement_match) && order.terminal && !order.active
+            (original_match || replacement_match)
+                && order_disposition(mutation.kind, order.status).is_some()
         }
         _ => false,
     }
@@ -810,12 +826,67 @@ fn stream_evidence_resolves(
     }
 }
 
-fn reconcile_record(record: &mut MutationRecord, runtime_epoch: u64, now: i64, evidence: String) {
+fn reconcile_record(
+    record: &mut MutationRecord,
+    runtime_epoch: u64,
+    now: i64,
+    disposition: ReconciliationDisposition,
+    evidence: String,
+) {
     record.state = JournalState::Reconciled;
-    record.broker_evidence_ref = Some(evidence.clone());
-    record.reconciliation_disposition = Some(evidence);
+    record.broker_evidence_ref = Some(evidence);
+    record.reconciliation_disposition = Some(disposition);
     record.updated_at_unix_ms = now;
     record.runtime_epoch = runtime_epoch;
+}
+
+fn order_disposition(
+    mutation_kind: MutationKind,
+    status: OrderExecutionStatus,
+) -> Option<ReconciliationDisposition> {
+    match (mutation_kind, status) {
+        (MutationKind::CancelOrder, OrderExecutionStatus::Cancelled) => {
+            Some(ReconciliationDisposition::OrderCancelled)
+        }
+        (MutationKind::CancelOrder, OrderExecutionStatus::Filled) => {
+            Some(ReconciliationDisposition::OrderFilled)
+        }
+        (MutationKind::CancelOrder, OrderExecutionStatus::Rejected) => {
+            Some(ReconciliationDisposition::OrderRejected)
+        }
+        (MutationKind::CancelOrder, _) => None,
+        (_, OrderExecutionStatus::New) => Some(ReconciliationDisposition::OrderActiveNew),
+        (_, OrderExecutionStatus::PartiallyFilled) => {
+            Some(ReconciliationDisposition::OrderActivePartial)
+        }
+        (_, OrderExecutionStatus::Filled) => Some(ReconciliationDisposition::OrderFilled),
+        (_, OrderExecutionStatus::Cancelled) => Some(ReconciliationDisposition::OrderCancelled),
+        (_, OrderExecutionStatus::Rejected) => Some(ReconciliationDisposition::OrderRejected),
+        (_, OrderExecutionStatus::UnknownProviderStatus(_)) => None,
+    }
+}
+
+fn stop_disposition(
+    mutation_kind: MutationKind,
+    status: StopExecutionStatus,
+) -> Option<ReconciliationDisposition> {
+    match (mutation_kind, status) {
+        (MutationKind::CancelStopOrder, StopExecutionStatus::Canceled) => {
+            Some(ReconciliationDisposition::StopCanceled)
+        }
+        (MutationKind::CancelStopOrder, StopExecutionStatus::Executed) => {
+            Some(ReconciliationDisposition::StopExecuted)
+        }
+        (MutationKind::CancelStopOrder, StopExecutionStatus::Expired) => {
+            Some(ReconciliationDisposition::StopExpired)
+        }
+        (MutationKind::CancelStopOrder, _) => None,
+        (_, StopExecutionStatus::Active) => Some(ReconciliationDisposition::StopActive),
+        (_, StopExecutionStatus::Executed) => Some(ReconciliationDisposition::StopExecuted),
+        (_, StopExecutionStatus::Canceled) => Some(ReconciliationDisposition::StopCanceled),
+        (_, StopExecutionStatus::Expired) => Some(ReconciliationDisposition::StopExpired),
+        (_, StopExecutionStatus::UnknownProviderStatus(_)) => None,
+    }
 }
 
 fn discrepancy_reason(discrepancies: &[String], unresolved: &[String]) -> ReasonCode {
@@ -849,6 +920,68 @@ fn jittered(base: Duration) -> Duration {
     let jitter = spread.saturating_mul(byte) / 255;
     let total = nanos.saturating_add(jitter);
     Duration::from_nanos(u64::try_from(total).unwrap_or(u64::MAX))
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    #[test]
+    fn cancel_order_terminal_outcomes_remain_distinct() {
+        assert_eq!(
+            order_disposition(MutationKind::CancelOrder, OrderExecutionStatus::Cancelled),
+            Some(ReconciliationDisposition::OrderCancelled)
+        );
+        assert_eq!(
+            order_disposition(MutationKind::CancelOrder, OrderExecutionStatus::Filled),
+            Some(ReconciliationDisposition::OrderFilled)
+        );
+        assert_eq!(
+            order_disposition(MutationKind::CancelOrder, OrderExecutionStatus::Rejected),
+            Some(ReconciliationDisposition::OrderRejected)
+        );
+        assert_eq!(
+            order_disposition(
+                MutationKind::CancelOrder,
+                OrderExecutionStatus::PartiallyFilled
+            ),
+            None
+        );
+        assert_eq!(
+            order_disposition(
+                MutationKind::CancelOrder,
+                OrderExecutionStatus::UnknownProviderStatus(77_777)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn cancel_stop_terminal_outcomes_remain_distinct() {
+        assert_eq!(
+            stop_disposition(MutationKind::CancelStopOrder, StopExecutionStatus::Canceled),
+            Some(ReconciliationDisposition::StopCanceled)
+        );
+        assert_eq!(
+            stop_disposition(MutationKind::CancelStopOrder, StopExecutionStatus::Executed),
+            Some(ReconciliationDisposition::StopExecuted)
+        );
+        assert_eq!(
+            stop_disposition(MutationKind::CancelStopOrder, StopExecutionStatus::Expired),
+            Some(ReconciliationDisposition::StopExpired)
+        );
+        assert_eq!(
+            stop_disposition(MutationKind::CancelStopOrder, StopExecutionStatus::Active),
+            None
+        );
+        assert_eq!(
+            stop_disposition(
+                MutationKind::CancelStopOrder,
+                StopExecutionStatus::UnknownProviderStatus(88_888)
+            ),
+            None
+        );
+    }
 }
 
 fn now_unix_ms() -> Result<i64, ReconciliationError> {

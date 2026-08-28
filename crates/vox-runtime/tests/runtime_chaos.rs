@@ -6,15 +6,20 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::{Notify, mpsc};
+use vox_domain::{
+    CancelOrderCommand, CancelStopOrderCommand, ExecutionPriceConvention, FixedPoint, OrderSide,
+    PositionSide, ProtectionLeg, ProtectionLegCommand, RegularOrderCommand, RegularOrderType,
+    ReplaceOrderCommand, StopLossProtection, TakeProfitProtection,
+};
 use vox_runtime::{
     BrokerAccount, BrokerEvent, BrokerEventClass, BrokerIdentityLinks, BrokerMethod,
     BrokerPortError, BrokerReadPort, BrokerResultClass, CredentialResolution,
     CredentialResolverPort, ExecutionPort, ExecutionResult, ExecutionStreamPort, HealthReadPort,
-    InMemoryMetrics, JournalState, MetricLabel, MetricName, MutationKind, MutationRecord,
-    OpaqueRef, OperationFact, OperationsPage, OrderFact, PortfolioFact, Provider, ReasonCode,
-    ReconciliationConfig, RuntimeConfig, RuntimeCoordinator, RuntimeEnvironment, RuntimeError,
-    RuntimeScope, RuntimeState, RuntimeStore, SqliteRuntimeStore, StopFact, StreamKind,
-    StreamSignal,
+    InMemoryMetrics, JournalState, MetricLabel, MetricName, MutationEvidence, MutationKind,
+    MutationRecord, OpaqueRef, OperationFact, OperationsPage, OrderExecutionStatus, OrderFact,
+    PortfolioFact, Provider, ReasonCode, ReconciliationConfig, RuntimeConfig, RuntimeCoordinator,
+    RuntimeEnvironment, RuntimeError, RuntimeExecutionCommand, RuntimeScope, RuntimeState,
+    RuntimeStore, SqliteRuntimeStore, StopExecutionStatus, StopFact, StreamKind, StreamSignal,
 };
 
 #[derive(Clone)]
@@ -38,7 +43,9 @@ impl FakeSnapshot {
             }],
             portfolio: PortfolioFact {
                 account_id: account_id.into(),
-                currencies: BTreeMap::new(),
+                total_portfolio_valuation: None,
+                total_currency_valuation: None,
+                cash_balances: BTreeMap::new(),
                 broker_observed_at_unix_ms: Some(1),
             },
             positions: Vec::new(),
@@ -122,9 +129,12 @@ impl BrokerReadPort for FakeBroker {
     async fn positions(
         &self,
         _: &RuntimeScope,
-    ) -> Result<Vec<vox_runtime::PositionFact>, BrokerPortError> {
+    ) -> Result<vox_runtime::PositionsFact, BrokerPortError> {
         self.before(BrokerMethod::GetPositions)?;
-        Ok(self.snapshot().positions)
+        Ok(vox_runtime::PositionsFact {
+            instruments: self.snapshot().positions,
+            cash_balances: BTreeMap::new(),
+        })
     }
 
     async fn active_orders(&self, _: &RuntimeScope) -> Result<Vec<OrderFact>, BrokerPortError> {
@@ -179,6 +189,7 @@ impl BrokerReadPort for FakeBroker {
 
 struct FakeExecution {
     results: Mutex<VecDeque<Result<ExecutionResult, BrokerPortError>>>,
+    commands: Mutex<Vec<RuntimeExecutionCommand>>,
     calls: AtomicU64,
 }
 
@@ -186,6 +197,7 @@ impl FakeExecution {
     fn new(results: impl IntoIterator<Item = Result<ExecutionResult, BrokerPortError>>) -> Self {
         Self {
             results: Mutex::new(results.into_iter().collect()),
+            commands: Mutex::new(Vec::new()),
             calls: AtomicU64::new(0),
         }
     }
@@ -196,9 +208,13 @@ impl ExecutionPort for FakeExecution {
     async fn dispatch_once(
         &self,
         _: &RuntimeScope,
+        command: &RuntimeExecutionCommand,
         _: &MutationRecord,
     ) -> Result<ExecutionResult, BrokerPortError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut commands) = self.commands.lock() {
+            commands.push(command.clone());
+        }
         self.results
             .lock()
             .ok()
@@ -387,9 +403,8 @@ async fn clean_startup_existing_position_and_read_only_authorization_are_safe()
         harness
             .coordinator
             .dispatch(
+                regular_command("request-blocked"),
                 "request-blocked",
-                MutationKind::PostOrder,
-                "quantity=1",
                 "correlation"
             )
             .await,
@@ -419,23 +434,13 @@ async fn acknowledged_mutation_is_durable_and_duplicate_identity_is_rejected()
     harness.coordinator.start().await?;
     let receipt = harness
         .coordinator
-        .dispatch(
-            "request-1",
-            MutationKind::PostOrder,
-            "quantity=1; account=present",
-            "correlation-1",
-        )
+        .dispatch(regular_command("request-1"), "request-1", "correlation-1")
         .await?;
     assert_eq!(receipt.state, JournalState::Acknowledged);
     assert!(matches!(
         harness
             .coordinator
-            .dispatch(
-                "request-1",
-                MutationKind::PostOrder,
-                "quantity=2",
-                "correlation-2"
-            )
+            .dispatch(regular_command("request-1"), "request-1", "correlation-2")
             .await,
         Err(RuntimeError::Store(
             vox_runtime::StoreError::DuplicateMutation
@@ -462,10 +467,9 @@ async fn unknown_survives_restart_resolves_from_direct_readback_without_replay()
         harness
             .coordinator
             .dispatch(
+                async_order_command("request-unknown"),
                 "request-unknown",
-                MutationKind::PostOrderAsync,
-                "quantity=1",
-                "correlation-unknown"
+                "correlation-unknown",
             )
             .await,
         Err(RuntimeError::UnknownAfterDispatch(id)) if id == "request-unknown"
@@ -485,8 +489,8 @@ async fn unknown_survives_restart_resolves_from_direct_readback_without_replay()
             broker_order_id: "broker-recovered".into(),
             logical_request_id: Some("request-unknown".into()),
             instrument_uid: "instrument-1".into(),
-            active: true,
-            terminal: false,
+            status: OrderExecutionStatus::New,
+            status_cause: None,
         };
         snapshot.active_orders.push(order.clone());
         snapshot.order_states.push(order);
@@ -588,8 +592,8 @@ async fn partial_fill_operation_does_not_resolve_ambiguous_cancel_until_terminal
         broker_order_id: "old-order".into(),
         logical_request_id: Some("original-post".into()),
         instrument_uid: "instrument-1".into(),
-        active: true,
-        terminal: false,
+        status: OrderExecutionStatus::PartiallyFilled,
+        status_cause: None,
     };
     let mut snapshot = FakeSnapshot::flat("account-1");
     snapshot.active_orders.push(partial.clone());
@@ -626,8 +630,8 @@ async fn partial_fill_operation_does_not_resolve_ambiguous_cancel_until_terminal
             broker_order_id: "old-order".into(),
             logical_request_id: Some("original-post".into()),
             instrument_uid: "instrument-1".into(),
-            active: false,
-            terminal: true,
+            status: OrderExecutionStatus::Cancelled,
+            status_cause: None,
         }];
     }
     let report = coordinator
@@ -646,7 +650,7 @@ async fn partial_fill_operation_does_not_resolve_ambiguous_cancel_until_terminal
 }
 
 #[tokio::test]
-async fn old_order_operation_does_not_resolve_replace_until_exact_replacement_identity()
+async fn old_order_fill_does_not_resolve_replace_until_exact_replacement_identity()
 -> Result<(), Box<dyn std::error::Error>> {
     let path = runtime_path("replace-old-operation");
     let scope = scope()?;
@@ -676,11 +680,10 @@ async fn old_order_operation_does_not_resolve_replace_until_exact_replacement_id
         broker_order_id: "old-order".into(),
         logical_request_id: Some("original-post".into()),
         instrument_uid: "instrument-1".into(),
-        active: true,
-        terminal: false,
+        status: OrderExecutionStatus::Filled,
+        status_cause: None,
     };
     let mut snapshot = FakeSnapshot::flat("account-1");
-    snapshot.active_orders.push(old.clone());
     snapshot.order_states.push(old);
     snapshot.operations.push(OperationFact {
         account_id: "account-1".into(),
@@ -713,8 +716,8 @@ async fn old_order_operation_does_not_resolve_replace_until_exact_replacement_id
             broker_order_id: "replacement-order".into(),
             logical_request_id: Some("replace-1".into()),
             instrument_uid: "instrument-1".into(),
-            active: true,
-            terminal: false,
+            status: OrderExecutionStatus::New,
+            status_cause: None,
         };
         snapshot.active_orders.push(replacement.clone());
         snapshot.order_states.push(replacement);
@@ -755,16 +758,15 @@ async fn manual_order_and_orphan_stop_are_preserved_and_halt_runtime()
         broker_order_id: "manual-order".into(),
         logical_request_id: None,
         instrument_uid: "instrument-1".into(),
-        active: true,
-        terminal: false,
+        status: OrderExecutionStatus::New,
+        status_cause: None,
     });
     snapshot.stops.push(StopFact {
         account_id: "account-1".into(),
         broker_stop_order_id: "manual-stop".into(),
-        logical_request_id: None,
         instrument_uid: "instrument-1".into(),
-        active: true,
-        terminal: false,
+        status: StopExecutionStatus::Active,
+        status_cause: None,
     });
     let harness = Harness::new(snapshot, [], true)?;
     let report = harness.coordinator.start().await?;
@@ -873,6 +875,7 @@ async fn external_position_event_forces_authoritative_refresh_before_ready()
             broker_order_id: None,
             broker_stop_order_id: None,
             logical_request_id: None,
+            execution_state: None,
             runtime_epoch: epoch,
         }))
         .await?;
@@ -882,6 +885,19 @@ async fn external_position_event_forces_authoritative_refresh_before_ready()
         RuntimeState::Reconciling
     );
     assert!(!harness.coordinator.health().await.new_exposure_allowed);
+    harness
+        .streams
+        .send(StreamSignal::Event(BrokerEvent {
+            account_id: "account-1".into(),
+            event_class: BrokerEventClass::Portfolio,
+            stable_event_id: "portfolio-during-reconciliation".into(),
+            broker_order_id: None,
+            broker_stop_order_id: None,
+            logical_request_id: None,
+            execution_state: None,
+            runtime_epoch: epoch,
+        }))
+        .await?;
     harness.broker.release_accounts.notify_one();
     for _ in 0..100 {
         if harness.broker.call_count(BrokerMethod::GetAccounts) > reads_before
@@ -892,6 +908,10 @@ async fn external_position_event_forces_authoritative_refresh_before_ready()
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert!(harness.broker.call_count(BrokerMethod::GetAccounts) > reads_before);
+    assert_eq!(
+        harness.broker.call_count(BrokerMethod::GetAccounts),
+        reads_before + 2
+    );
     assert!(harness.coordinator.health().await.new_exposure_allowed);
     harness.coordinator.shutdown().await?;
     harness.cleanup();
@@ -911,6 +931,7 @@ async fn duplicate_and_stale_epoch_events_are_idempotent() -> Result<(), Box<dyn
         broker_order_id: Some("broker-1".into()),
         broker_stop_order_id: None,
         logical_request_id: None,
+        execution_state: None,
         runtime_epoch: epoch,
     };
     harness
@@ -928,6 +949,7 @@ async fn duplicate_and_stale_epoch_events_are_idempotent() -> Result<(), Box<dyn
             broker_order_id: Some("broker-old".into()),
             broker_stop_order_id: None,
             logical_request_id: None,
+            execution_state: None,
         }))
         .await?;
     tokio::time::sleep(Duration::from_millis(30)).await;
@@ -962,6 +984,7 @@ async fn unfamiliar_stream_order_closes_gate_even_when_unary_readback_lags()
             broker_order_id: Some("external-broker-order".into()),
             broker_stop_order_id: None,
             logical_request_id: None,
+            execution_state: None,
             runtime_epoch: epoch,
         }))
         .await?;
@@ -1066,9 +1089,8 @@ async fn position_conflict_and_stream_overflow_force_reconciliation()
     harness
         .coordinator
         .dispatch(
+            regular_command("position-command"),
             "position-command",
-            MutationKind::PostOrder,
-            "quantity=1",
             "position-correlation",
         )
         .await?;
@@ -1108,9 +1130,8 @@ async fn graceful_shutdown_preserves_ambiguous_mutation_and_releases_ownership()
     let _ = harness
         .coordinator
         .dispatch(
+            regular_command("shutdown-unknown"),
             "shutdown-unknown",
-            MutationKind::PostOrder,
-            "quantity=1",
             "shutdown-correlation",
         )
         .await;
@@ -1175,16 +1196,15 @@ async fn restart_with_vox_owned_open_order_and_stop_converges_without_mutation()
         broker_order_id: "broker-owned-order".into(),
         logical_request_id: Some("owned-order".into()),
         instrument_uid: "instrument-1".into(),
-        active: true,
-        terminal: false,
+        status: OrderExecutionStatus::New,
+        status_cause: None,
     });
     snapshot.stops.push(StopFact {
         account_id: "account-1".into(),
         broker_stop_order_id: "broker-owned-stop".into(),
-        logical_request_id: Some("owned-stop".into()),
         instrument_uid: "instrument-1".into(),
-        active: true,
-        terminal: false,
+        status: StopExecutionStatus::Active,
+        status_cause: None,
     });
     let store = SqliteRuntimeStore::open(&path)?;
     let execution = Arc::new(FakeExecution::new([]));
@@ -1232,15 +1252,24 @@ async fn protection_legs_resolve_independently_and_partial_plan_stays_halted()
             "take-profit-leg",
             MutationKind::ProtectionLeg,
         )?;
+        store.upsert_identity_links(
+            &scope.key(),
+            &BrokerIdentityLinks {
+                logical_request_id: "stop-leg".into(),
+                broker_stop_order_id: Some("broker-stop-leg".into()),
+                ..BrokerIdentityLinks::default()
+            },
+            epoch,
+            2,
+        )?;
     }
     let mut snapshot = FakeSnapshot::flat("account-1");
     snapshot.stops.push(StopFact {
         account_id: "account-1".into(),
         broker_stop_order_id: "broker-stop-leg".into(),
-        logical_request_id: Some("stop-leg".into()),
         instrument_uid: "instrument-1".into(),
-        active: true,
-        terminal: false,
+        status: StopExecutionStatus::Active,
+        status_cause: None,
     });
     let store = SqliteRuntimeStore::open(&path)?;
     let coordinator = RuntimeCoordinator::new(
@@ -1368,7 +1397,13 @@ fn seed_unknown(
         scope,
         id,
         kind,
-        "account=present; broker_identity=present",
+        MutationEvidence {
+            command_kind: kind,
+            instrument_ref: None,
+            quantity_lots: None,
+            price_present: false,
+            protection_kind: None,
+        },
         format!("correlation-{id}"),
         epoch,
         1,
@@ -1394,11 +1429,270 @@ fn seed_acknowledged(
         &[JournalState::UnknownAfterDispatch],
         JournalState::Acknowledged,
         Some("broker:acknowledged"),
-        Some("seeded authoritative acknowledgement"),
+        None,
         epoch,
         4,
     )?;
     Ok(())
+}
+
+#[tokio::test]
+async fn capital_event_bursts_have_bounded_reconciliation_amplification()
+-> Result<(), Box<dyn std::error::Error>> {
+    let harness = Harness::new(FakeSnapshot::flat("account-1"), [], true)?;
+    harness.coordinator.start().await?;
+    let reads_before = harness.broker.call_count(BrokerMethod::GetAccounts);
+    let epoch = harness.coordinator.health().await.runtime_epoch;
+    harness
+        .broker
+        .pause_next_accounts
+        .store(true, Ordering::SeqCst);
+    let accounts_paused = harness.broker.accounts_paused.notified();
+    for (index, event_class) in [
+        BrokerEventClass::Fill,
+        BrokerEventClass::Position,
+        BrokerEventClass::Portfolio,
+        BrokerEventClass::Operation,
+    ]
+    .into_iter()
+    .chain((0..100).map(|_| BrokerEventClass::Position))
+    .enumerate()
+    {
+        harness
+            .streams
+            .send(StreamSignal::Event(BrokerEvent {
+                account_id: "account-1".into(),
+                event_class,
+                stable_event_id: format!("burst-{index}"),
+                broker_order_id: None,
+                broker_stop_order_id: None,
+                logical_request_id: None,
+                execution_state: None,
+                runtime_epoch: epoch,
+            }))
+            .await?;
+    }
+    tokio::time::timeout(Duration::from_secs(1), accounts_paused).await?;
+    for _ in 0..100 {
+        let queue_drained = harness
+            .coordinator
+            .health()
+            .await
+            .stream_states
+            .iter()
+            .filter(|stream| {
+                matches!(
+                    stream.stream,
+                    StreamKind::Trades
+                        | StreamKind::Positions
+                        | StreamKind::Portfolio
+                        | StreamKind::Operations
+                )
+            })
+            .all(|stream| stream.queue_depth == 0);
+        if queue_drained {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!harness.coordinator.health().await.new_exposure_allowed);
+    harness.broker.release_accounts.notify_one();
+    for _ in 0..200 {
+        if harness.coordinator.health().await.state == RuntimeState::Ready
+            && harness.broker.call_count(BrokerMethod::GetAccounts) >= reads_before + 2
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        harness.broker.call_count(BrokerMethod::GetAccounts),
+        reads_before + 2
+    );
+    assert!(harness.coordinator.health().await.new_exposure_allowed);
+    harness.coordinator.shutdown().await?;
+    harness.cleanup();
+    Ok(())
+}
+
+#[tokio::test]
+async fn ambiguous_post_stop_restart_never_fuzzy_matches_or_replays()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = runtime_path("post-stop-unknown");
+    let scope = scope()?;
+    {
+        let store = SqliteRuntimeStore::open(&path)?;
+        let epoch = store.acquire_ownership(&scope, "seed", 1)?;
+        seed_unknown(
+            &store,
+            &scope,
+            epoch,
+            "550e8400-e29b-41d4-a716-446655440099",
+            MutationKind::PostStopOrder,
+        )?;
+    }
+    let mut snapshot = FakeSnapshot::flat("account-1");
+    snapshot.stops.push(StopFact {
+        account_id: "account-1".into(),
+        broker_stop_order_id: "unowned-similar-stop".into(),
+        instrument_uid: "instrument-1".into(),
+        status: StopExecutionStatus::Active,
+        status_cause: None,
+    });
+    let store = SqliteRuntimeStore::open(&path)?;
+    let execution = Arc::new(FakeExecution::new([]));
+    let coordinator = RuntimeCoordinator::new(
+        scope.clone(),
+        store.clone(),
+        Arc::new(FakeBroker::new(snapshot)),
+        execution.clone(),
+        Arc::new(FakeStreams::default()),
+        Arc::new(FakeCredential::accepted(true)),
+        Arc::new(InMemoryMetrics::default()),
+        ReconciliationConfig::default(),
+        RuntimeConfig::default(),
+    );
+    let report = coordinator.start().await?;
+    assert_eq!(report.resulting_state, RuntimeState::Halted);
+    assert_eq!(report.unresolved_logical_request_ids.len(), 1);
+    assert_eq!(execution.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(store.counts(&scope.key())?.linked_active_stop_count, 0);
+    coordinator.shutdown().await?;
+    drop(coordinator);
+    drop(store);
+    cleanup_path(&path);
+    Ok(())
+}
+
+#[tokio::test]
+async fn typed_runtime_boundary_delivers_every_supported_command_without_evidence_parsing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let ids = [
+        "550e8400-e29b-41d4-a716-446655440010",
+        "550e8400-e29b-41d4-a716-446655440011",
+        "550e8400-e29b-41d4-a716-446655440012",
+        "550e8400-e29b-41d4-a716-446655440013",
+        "550e8400-e29b-41d4-a716-446655440014",
+        "550e8400-e29b-41d4-a716-446655440015",
+    ];
+    let results = ids.iter().map(|id| {
+        Ok(ExecutionResult::Acknowledged {
+            broker_evidence_ref: format!("ack:{id}"),
+            links: BrokerIdentityLinks {
+                logical_request_id: (*id).into(),
+                ..BrokerIdentityLinks::default()
+            },
+        })
+    });
+    let harness = Harness::new(FakeSnapshot::flat("account-1"), results, true)?;
+    harness.coordinator.start().await?;
+    let fixed = FixedPoint::from_units_nano(10, 0)?;
+    let commands = vec![
+        regular_command(ids[0]),
+        RuntimeExecutionCommand::ReplaceOrder(ReplaceOrderCommand {
+            account_id: "account-1".into(),
+            existing_order_id: "broker-order-1".into(),
+            existing_order_id_kind: None,
+            replacement_request_id: ids[1].into(),
+            quantity_lots: 2,
+            price: fixed,
+            price_convention: ExecutionPriceConvention::SettlementCurrency,
+            confirm_margin_trade: false,
+        }),
+        RuntimeExecutionCommand::CancelOrder(CancelOrderCommand {
+            account_id: "account-1".into(),
+            order_id: "broker-order-1".into(),
+            order_id_kind: None,
+        }),
+        RuntimeExecutionCommand::PostStopOrder(protection_command(
+            ids[3],
+            ProtectionLeg::StopLoss(StopLossProtection::Fixed {
+                trigger_price: fixed,
+                limit_price: None,
+            }),
+        )),
+        RuntimeExecutionCommand::CancelStopOrder(CancelStopOrderCommand {
+            account_id: "account-1".into(),
+            broker_stop_order_id: "broker-stop-1".into(),
+        }),
+        RuntimeExecutionCommand::ProtectionLeg(protection_command(
+            ids[5],
+            ProtectionLeg::TakeProfit(TakeProfitProtection {
+                trigger_price: Some(fixed),
+                limit_price: None,
+                trailing: None,
+            }),
+        )),
+    ];
+    for (command, id) in commands.iter().cloned().zip(ids) {
+        harness
+            .coordinator
+            .dispatch(command, id, format!("correlation-{id}"))
+            .await?;
+    }
+    assert_eq!(
+        *harness
+            .execution
+            .commands
+            .lock()
+            .map_err(|error| error.to_string())?,
+        commands
+    );
+    assert!(matches!(
+        harness
+            .coordinator
+            .dispatch(
+                regular_command("550e8400-e29b-41d4-a716-446655440099"),
+                "different-logical-id",
+                "mismatch-correlation",
+            )
+            .await,
+        Err(RuntimeError::Safety(_))
+    ));
+    assert_eq!(harness.execution.calls.load(Ordering::SeqCst), 6);
+    harness.coordinator.shutdown().await?;
+    harness.cleanup();
+    Ok(())
+}
+
+fn regular_command(client_request_id: &str) -> RuntimeExecutionCommand {
+    RuntimeExecutionCommand::RegularOrder(RegularOrderCommand {
+        account_id: "account-1".into(),
+        instrument_id: "instrument-1".into(),
+        client_request_id: client_request_id.into(),
+        quantity_lots: 1,
+        price: Some(FixedPoint::from_units_nano(1, 0).expect("valid price")),
+        price_convention: ExecutionPriceConvention::SettlementCurrency,
+        side: OrderSide::Buy,
+        order_type: RegularOrderType::Limit,
+        time_in_force: None,
+        confirm_margin_trade: false,
+    })
+}
+
+fn async_order_command(client_request_id: &str) -> RuntimeExecutionCommand {
+    match regular_command(client_request_id) {
+        RuntimeExecutionCommand::RegularOrder(command) => {
+            RuntimeExecutionCommand::PostOrderAsync(command)
+        }
+        _ => unreachable!("helper always creates regular order"),
+    }
+}
+
+fn protection_command(client_request_id: &str, leg: ProtectionLeg) -> ProtectionLegCommand {
+    ProtectionLegCommand {
+        account_id: "account-1".into(),
+        instrument_id: "instrument-1".into(),
+        client_request_id: client_request_id.into(),
+        quantity_lots: 1,
+        position_side: PositionSide::Long,
+        price_convention: ExecutionPriceConvention::SettlementCurrency,
+        reference_price: FixedPoint::from_units_nano(11, 0).expect("valid reference price"),
+        expire_at_unix_seconds: None,
+        expire_at_nanos: None,
+        confirm_margin_trade: false,
+        leg,
+    }
 }
 
 fn runtime_path(name: &str) -> PathBuf {

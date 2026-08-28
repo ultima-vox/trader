@@ -57,6 +57,8 @@ def type_of(schema: dict, required: bool = True) -> str:
             rendered = "number"
         elif kind == "boolean":
             rendered = "boolean"
+        elif kind == "null":
+            rendered = "null"
         else:
             rendered = "unknown"
     if not required:

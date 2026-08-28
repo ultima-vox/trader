@@ -109,6 +109,46 @@ pub struct CancelStopOrderCommand {
     pub broker_stop_order_id: String,
 }
 
+/// Provider-neutral context for dispatching exactly one broker-native protection leg.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProtectionLegCommand {
+    pub account_id: String,
+    pub instrument_id: String,
+    pub client_request_id: String,
+    pub quantity_lots: i64,
+    pub position_side: PositionSide,
+    pub price_convention: ExecutionPriceConvention,
+    pub reference_price: FixedPoint,
+    pub expire_at_unix_seconds: Option<i64>,
+    pub expire_at_nanos: Option<i32>,
+    pub confirm_margin_trade: bool,
+    pub leg: ProtectionLeg,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ProtectionLeg {
+    StopLoss(StopLossProtection),
+    TakeProfit(TakeProfitProtection),
+}
+
+/// Exact typed command transported across runtime execution boundary.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "command",
+    content = "payload",
+    rename_all = "SCREAMING_SNAKE_CASE"
+)]
+pub enum RuntimeExecutionCommand {
+    RegularOrder(RegularOrderCommand),
+    PostOrderAsync(RegularOrderCommand),
+    ReplaceOrder(ReplaceOrderCommand),
+    CancelOrder(CancelOrderCommand),
+    PostStopOrder(ProtectionLegCommand),
+    CancelStopOrder(CancelStopOrderCommand),
+    ProtectionLeg(ProtectionLegCommand),
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TrailingDistanceMode {

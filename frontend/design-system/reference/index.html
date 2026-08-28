@@ -318,7 +318,7 @@
       </div>
       <div class="vox-deferred" style="margin-top:10px">
         <div class="vox-deferred__head"><span class="vox-deferred__title">Что из этого сейчас наблюдаемо</span><span class="vox-dep">BD-1 · BD-4</span></div>
-        <div class="vox-deferred__body">Словарь канонический и остаётся. Контракт сегодня отдаёт по заявке только <code class="ref__code">OrderFact.active</code> и <code class="ref__code">terminal</code>, а по отправленной команде — <code class="ref__code">JournalState</code>. Частичное исполнение, снятие, отклонение и истечение станут различимы, когда появятся соответствующие поля.</div>
+        <div class="vox-deferred__body">Словарь канонический и остаётся. Контракт отдаёт точный <code class="ref__code">OrderExecutionStatus</code>/<code class="ref__code">StopExecutionStatus</code>, включая неизвестное wire-значение, а по отправленной команде — <code class="ref__code">JournalState</code>. Исполнение, снятие, отклонение и истечение не сводятся к общему terminal-флагу.</div>
       </div>
     </div>
     <div class="ref__spec vox-surface">
@@ -1795,7 +1795,7 @@
 
     <div class="vox-deferred" style="margin-bottom:12px">
       <div class="vox-deferred__head"><span class="vox-deferred__title">Портфель показывает только валютные остатки</span><span class="vox-dep">BD-4 · BD-3</span></div>
-      <div class="vox-deferred__body">Подкреплено: <code class="ref__code">PortfolioFact.currencies</code> (код валюты → сумма строкой), позиции и их количество, признаки active/terminal у заявок и стоп-заявок, курсор операций.</div>
+      <div class="vox-deferred__body">Подкреплено: отдельные total portfolio/currency valuation, реальные cash balances из <code class="ref__code">GetPositions</code>, позиции и их количество, точные статусы заявок и стоп-заявок, курсор операций. Aggregate valuation не выдаётся за доступный валютный остаток.</div>
       <div class="vox-deferred__body">Не подкреплено: стоимость портфеля, свободные средства, реализованный и нереализованный P&amp;L, экспозиция, маржа, суммы операций и уровни защиты по позиции. <code class="ref__code">OperationFact</code> хранит идентичность операции, а не её сумму.</div>
     </div>
 

@@ -80,6 +80,19 @@ impl Decimal {
         Self::parse(value.as_ref())
     }
 
+    /// Builds decimal units from canonical total-nanos storage used by runtime facts.
+    pub fn from_total_nanos_string(value: impl AsRef<str>) -> Result<Self, DecimalError> {
+        let value = value.as_ref();
+        if value.is_empty() || value.chars().any(char::is_whitespace) || value.starts_with('+') {
+            return Err(DecimalError::InvalidGrammar);
+        }
+        let nanos: i128 = value.parse().map_err(|_| DecimalError::OutOfRange)?;
+        if nanos.to_string() != value {
+            return Err(DecimalError::InvalidGrammar);
+        }
+        Ok(Self(render_nanos(nanos)))
+    }
+
     pub fn parse(value: &str) -> Result<Self, DecimalError> {
         Ok(Self(render_nanos(parse_nanos(value)?)))
     }
@@ -203,6 +216,17 @@ mod tests {
         assert!(!json.contains(':'), "money must not serialize as an object");
         let back: Decimal = serde_json::from_str(&json)?;
         assert_eq!(back, value);
+        Ok(())
+    }
+
+    #[test]
+    fn total_nanos_storage_converts_without_float_or_scale_loss() -> Result<(), DecimalError> {
+        assert_eq!(
+            Decimal::from_total_nanos_string("100000000001")?.as_str(),
+            "100.000000001"
+        );
+        assert!(Decimal::from_total_nanos_string("01").is_err());
+        assert!(Decimal::from_total_nanos_string("1.0").is_err());
         Ok(())
     }
 
