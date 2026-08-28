@@ -91,6 +91,7 @@ jobs:
             rustup_init="$RUNNER_TEMP/rustup-init"
             curl -4 --proto '=https' --tlsv1.2 --retry 5 \
               --retry-all-errors --retry-delay 5 -sSfL \
+              --connect-timeout 15 --max-time 300 \
               https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init \
               -o "$rustup_init"
             chmod +x "$rustup_init"
@@ -101,8 +102,8 @@ jobs:
             echo "$channel is already installed; not touching the network"
           else
             for attempt in 1 2 3; do
-              if rustup toolchain install "$channel" --profile minimal \
-                --component clippy,rustfmt; then
+              if timeout 900 rustup toolchain install "$channel" \
+                --profile minimal --component clippy,rustfmt; then
                 break
               fi
               [[ "$attempt" -lt 3 ]] || exit 1
@@ -129,13 +130,23 @@ jobs:
       - name: Fetch locked dependencies
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            if cargo fetch --locked; then
-              break
-            fi
-            [[ "$attempt" -lt 3 ]] || exit 1
-            sleep "$((attempt * 10))"
-          done
+          # The registry cache lives in the persistent CARGO_HOME, so an
+          # unchanged lockfile needs no network at all. Ask offline first and
+          # only reach for crates.io when the lockfile actually grew.
+          if cargo fetch --locked --offline; then
+            echo "the cargo cache already satisfies the lockfile"
+          else
+            echo "the lockfile names crates that are not cached; fetching"
+            for attempt in 1 2 3; do
+              # A blocked crates.io hangs rather than refusing, so bound it:
+              # a hang must fail fast and legibly, not burn the job timeout.
+              if timeout 300 cargo fetch --locked; then
+                break
+              fi
+              [[ "$attempt" -lt 3 ]] || exit 1
+              sleep "$((attempt * 10))"
+            done
+          fi
           # Everything the lockfile names is on disk; the rest of the job is
           # offline, so a network stall cannot turn into a false red build.
           echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
