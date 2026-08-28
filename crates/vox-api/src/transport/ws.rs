@@ -136,7 +136,9 @@ async fn serve(socket: WebSocket, state: AppState) {
                 }
                 queued = rx.recv() => {
                     let Some(event) = queued else { break };
-                    match tokio::time::timeout(Duration::from_secs(2), send(&mut sink, &event)).await {
+                    match tokio::time::timeout(Duration::from_millis(250), send(&mut sink, &event))
+                        .await
+                    {
                         Ok(Ok(())) => {}
                         Ok(Err(_)) => break,
                         Err(_) => {

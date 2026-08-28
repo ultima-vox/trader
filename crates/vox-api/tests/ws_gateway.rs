@@ -433,35 +433,39 @@ async fn slow_consumer_is_dropped_and_does_not_block_a_second_client() {
         ServerEvent::Snapshot { .. }
     ));
 
+    let (stop_fast, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let fast_reader = tokio::spawn(async move {
+        tokio::pin!(stop_rx);
         let mut updates = 0_u32;
-        for _ in 0..256 {
-            match tokio::time::timeout(Duration::from_secs(2), recv_event(&mut fast)).await {
-                Ok(ServerEvent::Update {
-                    payload: EventPayload::Quote(_),
-                    ..
-                }) => {
-                    updates += 1;
-                    if updates >= 3 {
-                        break;
+        loop {
+            tokio::select! {
+                _ = &mut stop_rx => break,
+                event = recv_event(&mut fast) => {
+                    if matches!(
+                        event,
+                        ServerEvent::Update {
+                            payload: EventPayload::Quote(_),
+                            ..
+                        }
+                    ) {
+                        updates += 1;
                     }
                 }
-                Ok(_) => {}
-                Err(_) => break,
             }
         }
         updates
     });
 
-    for i in 0..(OUTBOUND_QUEUE_CAPACITY * 4) {
+    for i in 0..(OUTBOUND_QUEUE_CAPACITY * 64) {
         projection.publish_quote(quote_from_last_price(
             "uid-sber",
-            fp(i64::try_from(i).expect("i"), 0),
+            fp(i64::try_from(i % 10_000).expect("i"), 0),
             2_000 + i64::try_from(i).expect("i"),
             StreamStateDto::Active,
         ));
         tokio::task::yield_now().await;
     }
+    let _ = stop_fast.send(());
 
     let fast_updates = fast_reader.await.expect("fast reader");
     assert!(
@@ -469,7 +473,7 @@ async fn slow_consumer_is_dropped_and_does_not_block_a_second_client() {
         "fast client must keep receiving UPDATEs, got {fast_updates}"
     );
 
-    let slow_end = tokio::time::timeout(Duration::from_secs(3), async {
+    let slow_end = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match slow.next().await {
                 None => return "closed",
