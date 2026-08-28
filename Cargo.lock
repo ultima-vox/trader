@@ -2961,6 +2961,7 @@ dependencies = [
  "utoipa",
  "uuid",
  "vox-domain",
+ "vox-runtime",
 ]
 
 [[package]]

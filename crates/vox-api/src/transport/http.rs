@@ -4,6 +4,8 @@
 //! typed response. No business rule, no risk decision, no precedence arithmetic lives here.
 
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -15,7 +17,9 @@ use crate::contract::account::{
     StopOrderDto,
 };
 use crate::contract::capability::CapabilitySet;
-use crate::contract::execution::{CancelOrderRequest, MutationReceiptDto, SubmitOrderRequest};
+use crate::contract::execution::{
+    CancelOrderRequest, JournalStateDto, MutationReceiptDto, SubmitOrderRequest,
+};
 use crate::contract::market::{
     CandleIntervalDto, CandlesDto, InstrumentSummaryDto, OrderBookDto, QuoteDto, SessionDto,
     TradeTickDto,
@@ -31,38 +35,29 @@ pub struct ScopeQuery {
     pub provider: ProviderDto,
     /// Broker environment: `SANDBOX` or `PRODUCTION`.
     pub environment: BrokerEnvironment,
-    /// Broker account identifier.
-    pub broker_account_id: String,
-    /// Opaque connection reference. Never a credential.
-    pub connection_ref: String,
+    /// Application connection identity. Never a credential.
+    pub broker_connection_id: String,
+    /// Canonical Vox account/binding identity.
+    pub account_id: String,
 }
 
 impl ScopeQuery {
     fn into_scope(self) -> Result<ExecutionScope, ApiError> {
-        if self.broker_account_id.trim().is_empty() {
-            return Err(ApiError::validation(
-                "the account-scoped read needs a broker account id",
+        ExecutionScope::new(
+            self.provider,
+            self.environment,
+            self.broker_connection_id,
+            self.account_id,
+            TradingMode::Live,
+        )
+        .map_err(|error| {
+            ApiError::validation(
+                error.to_string(),
                 vec![FieldError {
-                    field: "broker_account_id".to_owned(),
-                    message: "must not be empty".to_owned(),
+                    field: "account_id".to_owned(),
+                    message: error.to_string(),
                 }],
-            ));
-        }
-        if self.connection_ref.trim().is_empty() {
-            return Err(ApiError::validation(
-                "the account-scoped read needs a connection reference",
-                vec![FieldError {
-                    field: "connection_ref".to_owned(),
-                    message: "must not be empty".to_owned(),
-                }],
-            ));
-        }
-        Ok(ExecutionScope {
-            provider: self.provider,
-            environment: self.environment,
-            broker_account_id: self.broker_account_id,
-            connection_ref: self.connection_ref,
-            trading_mode: TradingMode::Live,
+            )
         })
     }
 }
@@ -75,8 +70,8 @@ impl ScopeQuery {
 pub struct OperationsQuery {
     pub provider: ProviderDto,
     pub environment: BrokerEnvironment,
-    pub broker_account_id: String,
-    pub connection_ref: String,
+    pub broker_connection_id: String,
+    pub account_id: String,
     /// Cursor returned by the previous page.
     pub cursor: Option<String>,
     /// Page size; the server caps it.
@@ -90,8 +85,8 @@ impl OperationsQuery {
         let scope = ScopeQuery {
             provider: self.provider,
             environment: self.environment,
-            broker_account_id: self.broker_account_id,
-            connection_ref: self.connection_ref,
+            broker_connection_id: self.broker_connection_id,
+            account_id: self.account_id,
         }
         .into_scope()?;
         Ok((scope, cursor, limit))
@@ -128,19 +123,19 @@ pub async fn runtime_health(
 /// What this deployment can actually do.
 #[utoipa::path(
     get, path = "/api/v1/capabilities", tag = "system",
-    params(("broker_account_id" = Option<String>, Query, description = "Scope the capability set to one account")),
+    params(("account_id" = Option<String>, Query, description = "Scope the capability set to one canonical account identity")),
     responses((status = 200, description = "Capability set", body = CapabilitySet))
 )]
 pub async fn capabilities(
     State(state): State<AppState>,
     Query(params): Query<CapabilityQuery>,
 ) -> Json<CapabilitySet> {
-    Json(state.capabilities(params.broker_account_id))
+    Json(state.capabilities(params.account_id))
 }
 
 #[derive(Clone, Debug, Deserialize, IntoParams, ToSchema)]
 pub struct CapabilityQuery {
-    pub broker_account_id: Option<String>,
+    pub account_id: Option<String>,
 }
 
 /// Accounts discovered through the connection.
@@ -247,7 +242,7 @@ pub async fn reconciliation(
     post, path = "/api/v1/commands/order", tag = "execution", request_body = SubmitOrderRequest,
     responses(
         (status = 200, description = "Mutation receipt", body = MutationReceiptDto),
-        (status = 202, description = "Dispatched, outcome not yet known", body = ApiError),
+        (status = 202, description = "Dispatched, outcome not yet known; body is the mutation receipt", body = MutationReceiptDto),
         (status = 400, body = ApiError),
         (status = 403, description = "Execution is not authorized for this scope", body = ApiError),
         (status = 503, description = "No execution side is attached", body = ApiError),
@@ -256,9 +251,11 @@ pub async fn reconciliation(
 pub async fn submit_order(
     State(state): State<AppState>,
     Json(request): Json<SubmitOrderRequest>,
-) -> Result<Json<MutationReceiptDto>, ApiError> {
+) -> Result<MutationHttpResponse, ApiError> {
     validate_submit(&request)?;
-    Ok(Json(state.execution_port()?.submit_order(request).await?))
+    Ok(MutationHttpResponse(
+        state.execution_port()?.submit_order(request).await?,
+    ))
 }
 
 /// Cancel a regular order.
@@ -266,6 +263,7 @@ pub async fn submit_order(
     post, path = "/api/v1/commands/cancel-order", tag = "execution", request_body = CancelOrderRequest,
     responses(
         (status = 200, body = MutationReceiptDto),
+        (status = 202, description = "Dispatched, outcome not yet known; body is the mutation receipt", body = MutationReceiptDto),
         (status = 400, body = ApiError),
         (status = 503, body = ApiError),
     )
@@ -273,17 +271,26 @@ pub async fn submit_order(
 pub async fn cancel_order(
     State(state): State<AppState>,
     Json(request): Json<CancelOrderRequest>,
-) -> Result<Json<MutationReceiptDto>, ApiError> {
-    if request.broker_order_id.is_none() && request.logical_request_id.is_none() {
-        return Err(ApiError::validation(
-            "a cancel needs the order it cancels",
-            vec![FieldError {
-                field: "broker_order_id".to_owned(),
-                message: "provide either broker_order_id or logical_request_id".to_owned(),
-            }],
-        ));
+) -> Result<MutationHttpResponse, ApiError> {
+    request.target()?;
+    Ok(MutationHttpResponse(
+        state.execution_port()?.cancel_order(request).await?,
+    ))
+}
+
+/// HTTP envelope for a mutation receipt. UNKNOWN after dispatch is 202 with the receipt
+/// body, never an `ApiError`.
+pub struct MutationHttpResponse(pub MutationReceiptDto);
+
+impl IntoResponse for MutationHttpResponse {
+    fn into_response(self) -> Response {
+        let status = if self.0.state == JournalStateDto::UnknownAfterDispatch {
+            StatusCode::ACCEPTED
+        } else {
+            StatusCode::OK
+        };
+        (status, Json(self.0)).into_response()
     }
-    Ok(Json(state.execution_port()?.cancel_order(request).await?))
 }
 
 fn validate_submit(request: &SubmitOrderRequest) -> Result<(), ApiError> {
@@ -300,9 +307,9 @@ fn validate_submit(request: &SubmitOrderRequest) -> Result<(), ApiError> {
             message: "must not be empty: it is the identity used for reconciliation".to_owned(),
         });
     }
-    if request.instrument_uid.trim().is_empty() {
+    if request.instrument_id.trim().is_empty() {
         errors.push(FieldError {
-            field: "instrument_uid".to_owned(),
+            field: "instrument_id".to_owned(),
             message: "must not be empty".to_owned(),
         });
     }
@@ -541,4 +548,69 @@ pub fn router(state: AppState) -> Router {
 
 pub(crate) fn now_unix_ms() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::execution::{MutationDecisionDto, MutationKindDto};
+    use crate::contract::scope::TradingMode;
+    use crate::error::ErrorCategory;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    fn sample_scope() -> Result<ExecutionScope, crate::contract::scope::ScopeError> {
+        ExecutionScope::new(
+            ProviderDto::TInvest,
+            BrokerEnvironment::Sandbox,
+            "connection:primary",
+            "account:primary",
+            TradingMode::Live,
+        )
+    }
+
+    #[test]
+    fn unknown_after_dispatch_is_accepted_as_a_receipt_not_an_api_error()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let receipt = MutationReceiptDto::unknown_after_dispatch(
+            "req-1",
+            sample_scope()?,
+            MutationKindDto::PostOrder,
+            "corr-1",
+            7,
+            1,
+            2,
+        );
+        assert_eq!(receipt.decision, MutationDecisionDto::Reconcile);
+        let response = MutationHttpResponse(receipt.clone()).into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let json = serde_json::to_value(&receipt)?;
+        assert_eq!(json["state"], "UNKNOWN_AFTER_DISPATCH");
+        assert_eq!(json["decision"], "RECONCILE");
+        assert!(json.get("code").is_none());
+        assert_ne!(
+            ErrorCategory::UnresolvedUnknown.status(),
+            StatusCode::OK,
+            "the unused error category must not be how UNKNOWN is returned"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn acknowledged_receipts_are_ok() -> Result<(), Box<dyn std::error::Error>> {
+        let mut receipt = MutationReceiptDto::unknown_after_dispatch(
+            "req-1",
+            sample_scope()?,
+            MutationKindDto::PostOrder,
+            "corr-1",
+            7,
+            1,
+            2,
+        );
+        receipt.state = JournalStateDto::Acknowledged;
+        receipt.decision = MutationDecisionDto::DoNotSubmit;
+        let response = MutationHttpResponse(receipt).into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        Ok(())
+    }
 }

@@ -164,7 +164,9 @@ impl AppState {
             self.provider,
             self.environment,
             account_id,
+            self.runtime.is_some(),
             self.accounts.is_some(),
+            self.execution.is_some(),
             self.market_data.is_some(),
         )
     }

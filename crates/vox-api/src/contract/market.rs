@@ -198,12 +198,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_quote_states_its_age_and_carries_no_float() -> Result<(), serde_json::Error> {
+    fn a_quote_states_its_age_and_carries_no_float() -> Result<(), Box<dyn std::error::Error>> {
         let quote = QuoteDto {
             instrument_uid: "e6123145-9665-43e0-8413-cd61b8aa9b13".to_owned(),
-            last: Some(Decimal::from_units_nano(272, 550_000_000)),
-            bid: Some(Decimal::from_units_nano(272, 540_000_000)),
-            ask: Some(Decimal::from_units_nano(272, 560_000_000)),
+            last: Some(Decimal::from_units_nano(272, 550_000_000)?),
+            bid: Some(Decimal::from_units_nano(272, 540_000_000)?),
+            ask: Some(Decimal::from_units_nano(272, 560_000_000)?),
             change_absolute: None,
             change_percent: None,
             day_high: None,
@@ -229,15 +229,15 @@ mod tests {
     }
 
     #[test]
-    fn an_open_candle_is_marked_as_still_forming() -> Result<(), serde_json::Error> {
+    fn an_open_candle_is_marked_as_still_forming() -> Result<(), Box<dyn std::error::Error>> {
         let candle = CandleDto {
             instrument_uid: "uid".to_owned(),
             interval: CandleIntervalDto::FiveMinutes,
             opened_at_unix_ms: 1,
-            open: Decimal::from_units_nano(1, 0),
-            high: Decimal::from_units_nano(2, 0),
-            low: Decimal::from_units_nano(1, 0),
-            close: Decimal::from_units_nano(2, 0),
+            open: Decimal::from_units_nano(1, 0)?,
+            high: Decimal::from_units_nano(2, 0)?,
+            low: Decimal::from_units_nano(1, 0)?,
+            close: Decimal::from_units_nano(2, 0)?,
             volume_units: 10,
             closed: false,
         };

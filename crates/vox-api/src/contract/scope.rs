@@ -4,9 +4,15 @@
 //! apart. `SANDBOX`/`PRODUCTION` is what a broker connection actually has; `PAPER` and
 //! `BACKTEST` are application trading modes owned by #23/#29 and are absent here until
 //! those contracts exist. Nothing in this file may grow a value to satisfy a design badge.
+//!
+//! Public identity is canonical Vox identity, not provider wire identity:
+//! `broker_connection_id` and `account_id`. Provider broker-account identifiers remain
+//! read-side metadata. The scope key includes the connection so two connections that expose
+//! the same broker account cannot collide.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::ToSchema;
+
 /// Providers with a registered adapter. A provider appears here only once it is real.
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema,
@@ -39,33 +45,126 @@ pub enum TradingMode {
     Live,
 }
 
+/// Why a public execution scope cannot be constructed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScopeError {
+    EmptyAccount,
+    EmptyConnection,
+    SecretLikeConnection,
+}
+
+impl core::fmt::Display for ScopeError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::EmptyAccount => formatter.write_str("account_id cannot be empty"),
+            Self::EmptyConnection => formatter.write_str("broker_connection_id cannot be empty"),
+            Self::SecretLikeConnection => {
+                formatter.write_str("broker_connection_id resembles secret material")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ScopeError {}
+
 /// The immutable target of a read or a capital-affecting command.
 ///
-/// `connection_ref` is an opaque reference, never a credential: the runtime rejects any
-/// value that resembles secret material before it can reach this boundary.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema)]
+/// `broker_connection_id` is the application connection identity, never a credential.
+/// `account_id` is the canonical Vox account/binding identity. Provider broker-account
+/// identifiers are read-side metadata, not this key.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema)]
 pub struct ExecutionScope {
     pub provider: ProviderDto,
     pub environment: BrokerEnvironment,
-    /// Broker account identifier. Human labels live in the UI; identity stays explicit here.
-    #[schema(example = "2000000001")]
-    pub broker_account_id: String,
-    /// Opaque connection reference from the runtime. Never a token.
+    /// Application connection identity. Opaque; never a token.
     #[schema(example = "connection:primary")]
-    pub connection_ref: String,
+    pub broker_connection_id: String,
+    /// Canonical Vox account/binding identity.
+    #[schema(example = "account:primary")]
+    pub account_id: String,
     /// How Vox executes for this scope.
     pub trading_mode: TradingMode,
 }
 
 impl ExecutionScope {
-    /// Stable key of the scope, matching the runtime's own scope key semantics.
+    pub fn new(
+        provider: ProviderDto,
+        environment: BrokerEnvironment,
+        broker_connection_id: impl Into<String>,
+        account_id: impl Into<String>,
+        trading_mode: TradingMode,
+    ) -> Result<Self, ScopeError> {
+        let broker_connection_id = require_connection_id(broker_connection_id.into())?;
+        let account_id = require_account_id(account_id.into())?;
+        Ok(Self {
+            provider,
+            environment,
+            broker_connection_id,
+            account_id,
+            trading_mode,
+        })
+    }
+
+    /// Stable key of the scope. Connection identity is part of the key so two connections
+    /// that expose the same account cannot collide for idempotency or reconciliation.
     #[must_use]
     pub fn key(&self) -> String {
         format!(
-            "{:?}:{:?}:{}",
-            self.provider, self.environment, self.broker_account_id
+            "{:?}:{:?}:{}:{}",
+            self.provider, self.environment, self.broker_connection_id, self.account_id
         )
     }
+}
+
+impl<'de> Deserialize<'de> for ExecutionScope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            provider: ProviderDto,
+            environment: BrokerEnvironment,
+            broker_connection_id: String,
+            account_id: String,
+            trading_mode: TradingMode,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        Self::new(
+            raw.provider,
+            raw.environment,
+            raw.broker_connection_id,
+            raw.account_id,
+            raw.trading_mode,
+        )
+        .map_err(serde::de::Error::custom)
+    }
+}
+
+fn require_account_id(value: String) -> Result<String, ScopeError> {
+    if value.trim().is_empty() {
+        Err(ScopeError::EmptyAccount)
+    } else {
+        Ok(value)
+    }
+}
+
+fn require_connection_id(value: String) -> Result<String, ScopeError> {
+    if value.trim().is_empty() {
+        return Err(ScopeError::EmptyConnection);
+    }
+    if value.len() > 256
+        || value.chars().any(char::is_whitespace)
+        || ["Bearer", "token=", "secret=", "t."].iter().any(|needle| {
+            value
+                .to_ascii_lowercase()
+                .contains(&needle.to_ascii_lowercase())
+        })
+    {
+        return Err(ScopeError::SecretLikeConnection);
+    }
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -103,5 +202,75 @@ mod tests {
     fn broker_environment_rejects_a_trading_mode_value() {
         assert!(serde_json::from_str::<BrokerEnvironment>("\"PAPER\"").is_err());
         assert!(serde_json::from_str::<BrokerEnvironment>("\"LIVE\"").is_err());
+    }
+
+    #[test]
+    fn public_scope_uses_canonical_application_identities() -> Result<(), ScopeError> {
+        let scope = ExecutionScope::new(
+            ProviderDto::TInvest,
+            BrokerEnvironment::Sandbox,
+            "connection:primary",
+            "account:primary",
+            TradingMode::Live,
+        )?;
+        assert_eq!(scope.broker_connection_id, "connection:primary");
+        assert_eq!(scope.account_id, "account:primary");
+        Ok(())
+    }
+
+    #[test]
+    fn scope_key_includes_connection_identity() -> Result<(), ScopeError> {
+        let left = ExecutionScope::new(
+            ProviderDto::TInvest,
+            BrokerEnvironment::Sandbox,
+            "connection:one",
+            "account:shared",
+            TradingMode::Live,
+        )?;
+        let right = ExecutionScope::new(
+            ProviderDto::TInvest,
+            BrokerEnvironment::Sandbox,
+            "connection:two",
+            "account:shared",
+            TradingMode::Live,
+        )?;
+        assert_ne!(
+            left.key(),
+            right.key(),
+            "two connections exposing the same account must not share a scope key"
+        );
+        assert!(left.key().contains("connection:one"));
+        assert!(right.key().contains("connection:two"));
+        Ok(())
+    }
+
+    #[test]
+    fn empty_or_secret_like_identities_fail_closed() {
+        assert_eq!(
+            ExecutionScope::new(
+                ProviderDto::TInvest,
+                BrokerEnvironment::Sandbox,
+                "connection:primary",
+                "  ",
+                TradingMode::Live,
+            ),
+            Err(ScopeError::EmptyAccount)
+        );
+        assert_eq!(
+            ExecutionScope::new(
+                ProviderDto::TInvest,
+                BrokerEnvironment::Sandbox,
+                "Bearer abc",
+                "account:primary",
+                TradingMode::Live,
+            ),
+            Err(ScopeError::SecretLikeConnection)
+        );
+        assert!(
+            serde_json::from_str::<ExecutionScope>(
+                r#"{"provider":"T_INVEST","environment":"SANDBOX","broker_connection_id":"token=abc","account_id":"account:primary","trading_mode":"LIVE"}"#
+            )
+            .is_err()
+        );
     }
 }

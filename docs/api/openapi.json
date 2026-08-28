@@ -43,18 +43,18 @@
             }
           },
           {
-            "name": "broker_account_id",
+            "name": "broker_connection_id",
             "in": "query",
-            "description": "Broker account identifier.",
+            "description": "Application connection identity. Never a credential.",
             "required": true,
             "schema": {
               "type": "string"
             }
           },
           {
-            "name": "connection_ref",
+            "name": "account_id",
             "in": "query",
-            "description": "Opaque connection reference. Never a credential.",
+            "description": "Canonical Vox account/binding identity.",
             "required": true,
             "schema": {
               "type": "string"
@@ -97,9 +97,9 @@
         "operationId": "capabilities",
         "parameters": [
           {
-            "name": "broker_account_id",
+            "name": "account_id",
             "in": "query",
-            "description": "Scope the capability set to one account",
+            "description": "Scope the capability set to one canonical account identity",
             "required": false,
             "schema": {
               "type": "string"
@@ -140,6 +140,16 @@
         "responses": {
           "200": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceiptDto"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Dispatched, outcome not yet known; body is the mutation receipt",
             "content": {
               "application/json": {
                 "schema": {
@@ -200,11 +210,11 @@
             }
           },
           "202": {
-            "description": "Dispatched, outcome not yet known",
+            "description": "Dispatched, outcome not yet known; body is the mutation receipt",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/MutationReceiptDto"
                 }
               }
             }
@@ -679,7 +689,7 @@
             }
           },
           {
-            "name": "broker_account_id",
+            "name": "broker_connection_id",
             "in": "query",
             "required": true,
             "schema": {
@@ -687,7 +697,7 @@
             }
           },
           {
-            "name": "connection_ref",
+            "name": "account_id",
             "in": "query",
             "required": true,
             "schema": {
@@ -772,18 +782,18 @@
             }
           },
           {
-            "name": "broker_account_id",
+            "name": "broker_connection_id",
             "in": "query",
-            "description": "Broker account identifier.",
+            "description": "Application connection identity. Never a credential.",
             "required": true,
             "schema": {
               "type": "string"
             }
           },
           {
-            "name": "connection_ref",
+            "name": "account_id",
             "in": "query",
-            "description": "Opaque connection reference. Never a credential.",
+            "description": "Canonical Vox account/binding identity.",
             "required": true,
             "schema": {
               "type": "string"
@@ -844,18 +854,18 @@
             }
           },
           {
-            "name": "broker_account_id",
+            "name": "broker_connection_id",
             "in": "query",
-            "description": "Broker account identifier.",
+            "description": "Application connection identity. Never a credential.",
             "required": true,
             "schema": {
               "type": "string"
             }
           },
           {
-            "name": "connection_ref",
+            "name": "account_id",
             "in": "query",
-            "description": "Opaque connection reference. Never a credential.",
+            "description": "Canonical Vox account/binding identity.",
             "required": true,
             "schema": {
               "type": "string"
@@ -913,18 +923,18 @@
             }
           },
           {
-            "name": "broker_account_id",
+            "name": "broker_connection_id",
             "in": "query",
-            "description": "Broker account identifier.",
+            "description": "Application connection identity. Never a credential.",
             "required": true,
             "schema": {
               "type": "string"
             }
           },
           {
-            "name": "connection_ref",
+            "name": "account_id",
             "in": "query",
-            "description": "Opaque connection reference. Never a credential.",
+            "description": "Canonical Vox account/binding identity.",
             "required": true,
             "schema": {
               "type": "string"
@@ -985,18 +995,18 @@
             }
           },
           {
-            "name": "broker_account_id",
+            "name": "broker_connection_id",
             "in": "query",
-            "description": "Broker account identifier.",
+            "description": "Application connection identity. Never a credential.",
             "required": true,
             "schema": {
               "type": "string"
             }
           },
           {
-            "name": "connection_ref",
+            "name": "account_id",
             "in": "query",
-            "description": "Opaque connection reference. Never a credential.",
+            "description": "Canonical Vox account/binding identity.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1085,18 +1095,18 @@
             }
           },
           {
-            "name": "broker_account_id",
+            "name": "broker_connection_id",
             "in": "query",
-            "description": "Broker account identifier.",
+            "description": "Application connection identity. Never a credential.",
             "required": true,
             "schema": {
               "type": "string"
             }
           },
           {
-            "name": "connection_ref",
+            "name": "account_id",
             "in": "query",
-            "description": "Opaque connection reference. Never a credential.",
+            "description": "Canonical Vox account/binding identity.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1200,12 +1210,18 @@
         "description": "A broker account discovered through a connection.",
         "required": [
           "account_id",
+          "broker_account_id",
           "open",
           "accessible"
         ],
         "properties": {
           "account_id": {
-            "type": "string"
+            "type": "string",
+            "description": "Canonical Vox account/binding identity. Until #17 bindings exist this equals the\nbound broker account identifier."
+          },
+          "broker_account_id": {
+            "type": "string",
+            "description": "Provider broker-account identifier. Metadata, not the capital-command target key."
           },
           "open": {
             "type": "boolean"
@@ -1226,7 +1242,7 @@
       },
       "CancelOrderRequest": {
         "type": "object",
-        "description": "Cancel a regular order by broker identity or by the logical request that created it.",
+        "description": "Cancel a regular order. Exactly one of `broker_order_id` or `logical_request_id` names\nthe command being cancelled. `client_request_id` is the identity of *this* cancel.",
         "required": [
           "scope",
           "client_request_id"
@@ -1495,8 +1511,9 @@
       },
       "Decimal": {
         "type": "string",
-        "description": "Exact decimal value, serialized as a string (`\"272.55\"`, `\"-3140.70\"`).",
-        "example": "272.550000000"
+        "description": "Exact decimal value, serialized as a string (`\"272.550000000\"`, `\"-3140.700000000\"`).",
+        "example": "272.550000000",
+        "pattern": "^-?(0|[1-9][0-9]*)\\.[0-9]{9}$"
       },
       "DepthLevelDto": {
         "type": "object",
@@ -1563,12 +1580,12 @@
       },
       "ExecutionScope": {
         "type": "object",
-        "description": "The immutable target of a read or a capital-affecting command.\n\n`connection_ref` is an opaque reference, never a credential: the runtime rejects any\nvalue that resembles secret material before it can reach this boundary.",
+        "description": "The immutable target of a read or a capital-affecting command.\n\n`broker_connection_id` is the application connection identity, never a credential.\n`account_id` is the canonical Vox account/binding identity. Provider broker-account\nidentifiers are read-side metadata, not this key.",
         "required": [
           "provider",
           "environment",
-          "broker_account_id",
-          "connection_ref",
+          "broker_connection_id",
+          "account_id",
           "trading_mode"
         ],
         "properties": {
@@ -1578,15 +1595,15 @@
           "environment": {
             "$ref": "#/components/schemas/BrokerEnvironment"
           },
-          "broker_account_id": {
+          "broker_connection_id": {
             "type": "string",
-            "description": "Broker account identifier. Human labels live in the UI; identity stays explicit here.",
-            "example": "2000000001"
-          },
-          "connection_ref": {
-            "type": "string",
-            "description": "Opaque connection reference from the runtime. Never a token.",
+            "description": "Application connection identity. Opaque; never a token.",
             "example": "connection:primary"
+          },
+          "account_id": {
+            "type": "string",
+            "description": "Canonical Vox account/binding identity.",
+            "example": "account:primary"
           },
           "trading_mode": {
             "$ref": "#/components/schemas/TradingMode",
@@ -2866,7 +2883,7 @@
         "description": "Submit a regular order. Quantity is in lots; price is exact and optional for market orders.",
         "required": [
           "scope",
-          "instrument_uid",
+          "instrument_id",
           "client_request_id",
           "side",
           "order_type",
@@ -2879,8 +2896,10 @@
             "$ref": "#/components/schemas/ExecutionScope",
             "description": "The immutable target. A submitted command is never retargeted by a later UI change."
           },
-          "instrument_uid": {
-            "type": "string"
+          "instrument_id": {
+            "type": "string",
+            "description": "Opaque canonical instrument identity. Provider UID/FIGI mapping stays inside adapters.",
+            "example": "instrument:sber"
           },
           "client_request_id": {
             "type": "string",

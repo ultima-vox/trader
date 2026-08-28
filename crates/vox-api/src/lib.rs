@@ -20,8 +20,10 @@
 pub mod application;
 pub mod contract;
 pub mod error;
+pub mod runtime_attach;
 pub mod schema;
 pub mod transport;
 
 pub use application::AppState;
+pub use runtime_attach::{AccountReadAdapter, ProcessRuntime, RuntimeHealthAdapter};
 pub use transport::router;

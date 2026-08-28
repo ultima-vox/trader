@@ -108,10 +108,15 @@ jobs:
           curl -sf http://127.0.0.1:18099/api/v1/capabilities |
             python -c "import json,sys; d=json.load(sys.stdin); assert d['unavailable'], 'nothing is reported unavailable'; assert all(u['owner'] for u in d['unavailable']), 'an unavailable capability has no owner'; print(' ', len(d['supported']), 'supported,', len(d['unavailable']), 'unavailable')"
 
-          echo "an unattached capability refuses instead of pretending:"
+          echo "runtime health is the accepted #11 contract, not CAPABILITY_UNAVAILABLE:"
           code=$(curl -s -o /tmp/runtime.json -w '%{http_code}' http://127.0.0.1:18099/api/v1/runtime)
-          test "$code" = "503" || { echo "expected 503, got $code"; cat /tmp/runtime.json; exit 1; }
-          python -c "import json; d=json.load(open('/tmp/runtime.json')); assert d['code']=='CAPABILITY_UNAVAILABLE', d; assert d['details']['owner'], d; print(' ', d['code'], d['details']['owner'])"
+          test "$code" = "200" || { echo "expected 200, got $code"; cat /tmp/runtime.json; exit 1; }
+          python -c "import json; d=json.load(open('/tmp/runtime.json')); assert d['state']=='STARTING', d; assert d['reason_code']=='STARTUP', d; assert d['execution_authorized'] is False, d; assert d['new_exposure_allowed'] is False, d; print(' ', d['state'], d['reason_code'])"
+
+          echo "an unattached account read refuses instead of inventing balances:"
+          code=$(curl -s -o /tmp/accounts.json -w '%{http_code}' 'http://127.0.0.1:18099/api/v1/accounts?provider=T_INVEST&environment=SANDBOX&broker_connection_id=connection:primary&account_id=account:primary')
+          test "$code" = "503" || { echo "expected 503, got $code"; cat /tmp/accounts.json; exit 1; }
+          python -c "import json; d=json.load(open('/tmp/accounts.json')); assert d['code']=='CAPABILITY_UNAVAILABLE', d; assert d['details']['owner'], d; print(' ', d['code'], d['details']['owner'])"
 
           echo "market data refuses instead of inventing a price:"
           code=$(curl -s -o /tmp/quote.json -w '%{http_code}' 'http://127.0.0.1:18099/api/v1/market/quote?provider=T_INVEST&instrument_uid=probe')

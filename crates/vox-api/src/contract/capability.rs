@@ -88,33 +88,39 @@ impl CapabilitySet {
         environment: BrokerEnvironment,
         account_id: Option<String>,
         runtime_attached: bool,
+        accounts_attached: bool,
+        execution_attached: bool,
         market_data_attached: bool,
     ) -> Self {
-        let mut supported = vec![Capability::RuntimeHealth];
+        let mut supported = Vec::new();
         let mut unavailable = Vec::new();
         if runtime_attached {
+            supported.push(Capability::RuntimeHealth);
+        } else {
+            unavailable.push(UnavailableCapability {
+                capability: Capability::RuntimeHealth,
+                reason: "no runtime health port is attached to this process".to_owned(),
+                owner: "#11".to_owned(),
+            });
+        }
+        if accounts_attached {
             supported.push(Capability::AccountReadSide);
+        } else {
+            unavailable.push(UnavailableCapability {
+                capability: Capability::AccountReadSide,
+                reason: "no broker read port is attached to this process".to_owned(),
+                owner: "#17".to_owned(),
+            });
+        }
+        if execution_attached {
             supported.push(Capability::OrderExecution);
             supported.push(Capability::ProtectionExecution);
         } else {
-            for (capability, reason) in [
-                (
-                    Capability::AccountReadSide,
-                    "no broker runtime is attached to this process",
-                ),
-                (
-                    Capability::OrderExecution,
-                    "no broker runtime is attached to this process",
-                ),
-                (
-                    Capability::ProtectionExecution,
-                    "no broker runtime is attached to this process",
-                ),
-            ] {
+            for capability in [Capability::OrderExecution, Capability::ProtectionExecution] {
                 unavailable.push(UnavailableCapability {
                     capability,
-                    reason: reason.to_owned(),
-                    owner: "#11".to_owned(),
+                    reason: "no execution port is attached to this process".to_owned(),
+                    owner: "#10".to_owned(),
                 });
             }
         }
@@ -222,6 +228,8 @@ mod tests {
             None,
             false,
             false,
+            false,
+            false,
         );
         for capability in [
             Capability::RiskVerdict,
@@ -254,10 +262,13 @@ mod tests {
         let set = CapabilitySet::without_backend_owners(
             ProviderDto::TInvest,
             BrokerEnvironment::Production,
-            Some("2000000001".to_owned()),
+            Some("account:primary".to_owned()),
+            true,
+            true,
             true,
             false,
         );
+        assert!(set.supported.contains(&Capability::RuntimeHealth));
         assert!(set.supported.contains(&Capability::AccountReadSide));
         assert!(set.supported.contains(&Capability::OrderExecution));
         assert!(!set.supported.contains(&Capability::RiskVerdict));

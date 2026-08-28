@@ -138,6 +138,14 @@ impl ApiError {
     }
 }
 
+impl core::fmt::Display for ApiError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "{}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for ApiError {}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (self.category.status(), Json(self)).into_response()

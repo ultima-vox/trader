@@ -46,12 +46,12 @@ export class VoxClient {
   }
 
   /** Accounts discovered through the connection. */
-  accounts(query: { broker_account_id: string; connection_ref: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<Array<T.BrokerAccountDto>> {
+  accounts(query: { account_id: string; broker_connection_id: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<Array<T.BrokerAccountDto>> {
     return this.request("GET", "/api/v1/accounts", query);
   }
 
   /** What this deployment can actually do. */
-  capabilities(query: { broker_account_id?: string }): Promise<T.CapabilitySet> {
+  capabilities(query: { account_id?: string }): Promise<T.CapabilitySet> {
     return this.request("GET", "/api/v1/capabilities", query);
   }
 
@@ -96,27 +96,27 @@ export class VoxClient {
   }
 
   /** Operations history, paged by cursor. */
-  operations(query: { broker_account_id: string; connection_ref: string; cursor?: string | null; environment: T.BrokerEnvironment; limit?: number | null; provider: T.ProviderDto }): Promise<T.OperationsPageDto> {
+  operations(query: { account_id: string; broker_connection_id: string; cursor?: string | null; environment: T.BrokerEnvironment; limit?: number | null; provider: T.ProviderDto }): Promise<T.OperationsPageDto> {
     return this.request("GET", "/api/v1/operations", query);
   }
 
   /** Active orders. */
-  orders(query: { broker_account_id: string; connection_ref: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<Array<T.OrderDto>> {
+  orders(query: { account_id: string; broker_connection_id: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<Array<T.OrderDto>> {
     return this.request("GET", "/api/v1/orders", query);
   }
 
   /** Currency balances as the broker reports them. */
-  portfolio(query: { broker_account_id: string; connection_ref: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<T.PortfolioDto> {
+  portfolio(query: { account_id: string; broker_connection_id: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<T.PortfolioDto> {
     return this.request("GET", "/api/v1/portfolio", query);
   }
 
   /** Positions and their quantities. */
-  positions(query: { broker_account_id: string; connection_ref: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<Array<T.PositionDto>> {
+  positions(query: { account_id: string; broker_connection_id: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<Array<T.PositionDto>> {
     return this.request("GET", "/api/v1/positions", query);
   }
 
   /** How complete the last reconciliation was. */
-  reconciliation(query: { broker_account_id: string; connection_ref: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<T.ReconciliationDto> {
+  reconciliation(query: { account_id: string; broker_connection_id: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<T.ReconciliationDto> {
     return this.request("GET", "/api/v1/reconciliation", query);
   }
 
@@ -126,7 +126,7 @@ export class VoxClient {
   }
 
   /** Stop orders. */
-  stopOrders(query: { broker_account_id: string; connection_ref: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<Array<T.StopOrderDto>> {
+  stopOrders(query: { account_id: string; broker_connection_id: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<Array<T.StopOrderDto>> {
     return this.request("GET", "/api/v1/stop-orders", query);
   }
 

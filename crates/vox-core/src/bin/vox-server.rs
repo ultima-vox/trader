@@ -1,9 +1,9 @@
 //! Starts the Vox application API.
 //!
 //! `vox-core` composes the process: it reads configuration, decides which application ports
-//! are attached, and serves the boundary. It attaches no broker runtime yet — `vox-runtime`
-//! lands with #11 — so every account-scoped route answers `CAPABILITY_UNAVAILABLE` and says
-//! which issue owns the missing contract. That is the honest state of this deployment.
+//! are attached, and serves the boundary. #11 runtime health is attached from the accepted
+//! `RuntimeHealth` contract. Account reads attach only when a broker read port exists; until
+//! #17 supplies a connection they stay unavailable rather than inventing balances.
 //!
 //! TLS is terminated in front of this process (reverse proxy or platform load balancer);
 //! the server itself binds plain HTTP on the loopback address by default, so a
@@ -14,8 +14,8 @@ use std::net::SocketAddr;
 use anyhow::{Context, anyhow};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
-use vox_api::AppState;
 use vox_api::contract::scope::{BrokerEnvironment, ProviderDto};
+use vox_api::{AppState, ProcessRuntime};
 use vox_core::{CoreConfig, CoreRuntime};
 use vox_domain::Environment;
 
@@ -33,9 +33,11 @@ async fn main() -> anyhow::Result<()> {
     let runtime = CoreRuntime::new(config);
     let environment = broker_environment(config.environment())?;
 
-    // No broker runtime is attached in this slice: the read and execution ports stay empty
-    // and the API reports them as unavailable rather than answering with invented data.
-    let state = AppState::detached(ProviderDto::TInvest, environment);
+    // #11 runtime health is attached from the accepted contract. Account and execution
+    // ports stay empty until a broker connection exists; they refuse rather than invent data.
+    let state = AppState::detached(ProviderDto::TInvest, environment).with_runtime(
+        std::sync::Arc::new(ProcessRuntime::starting(ProviderDto::TInvest, environment)),
+    );
     let app = vox_api::router(state);
 
     let address: SocketAddr = std::env::var("VOX_API_BIND")

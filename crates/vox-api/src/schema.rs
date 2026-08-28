@@ -186,19 +186,43 @@ mod tests {
     }
 
     #[test]
-    fn no_second_instrument_identifier_is_published() -> Result<(), serde_json::Error> {
+    fn execution_commands_use_canonical_instrument_id_not_provider_uid()
+    -> Result<(), serde_json::Error> {
         let doc: serde_json::Value = serde_json::from_str(&openapi_json()?)?;
-        let schemas = doc["components"]["schemas"]
-            .as_object()
-            .expect("the document has component schemas");
-        for (name, schema) in schemas {
-            if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-                assert!(
-                    !properties.contains_key("instrument_id"),
-                    "{name} mints a second instrument identity; the domain uid is the identity"
-                );
-            }
-        }
+        let submit = &doc["components"]["schemas"]["SubmitOrderRequest"]["properties"];
+        assert!(
+            submit.get("instrument_id").is_some(),
+            "public execution identity is instrument_id"
+        );
+        assert!(
+            submit.get("instrument_uid").is_none(),
+            "provider UID must not be the public execution identity"
+        );
+        let scope = &doc["components"]["schemas"]["ExecutionScope"]["properties"];
+        assert!(scope.get("broker_connection_id").is_some());
+        assert!(scope.get("account_id").is_some());
+        assert!(
+            scope.get("broker_account_id").is_none(),
+            "provider broker-account id is not the command target key"
+        );
+        assert!(
+            scope.get("connection_ref").is_none(),
+            "connection_ref is not the public connection identity"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn decimal_schema_is_a_validated_string() -> Result<(), serde_json::Error> {
+        let doc: serde_json::Value = serde_json::from_str(&openapi_json()?)?;
+        let decimal = &doc["components"]["schemas"]["Decimal"];
+        assert_eq!(decimal["type"], "string");
+        assert!(
+            decimal["pattern"]
+                .as_str()
+                .is_some_and(|pattern| pattern.contains(r"[0-9]{9}")),
+            "Decimal must advertise the canonical nano grammar: {decimal}"
+        );
         Ok(())
     }
 

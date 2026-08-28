@@ -19,7 +19,10 @@ export type ApiError = {
 
 /** A broker account discovered through a connection. */
 export type BrokerAccountDto = {
+  /** Canonical Vox account/binding identity. Until #17 bindings exist this equals the bound broker account identifier. */
   account_id: string;
+  /** Provider broker-account identifier. Metadata, not the capital-command target key. */
+  broker_account_id: string;
   open: boolean;
   /** Whether the runtime can currently read this account. */
   accessible: boolean;
@@ -28,7 +31,7 @@ export type BrokerAccountDto = {
 /** The broker-side environment of a connection. Exactly the runtime contract's two values. */
 export type BrokerEnvironment = "SANDBOX" | "PRODUCTION";
 
-/** Cancel a regular order by broker identity or by the logical request that created it. */
+/** Cancel a regular order. Exactly one of `broker_order_id` or `logical_request_id` names the command being cancelled. `client_request_id` is the identity of *this* cancel. */
 export type CancelOrderRequest = {
   scope: ExecutionScope;
   client_request_id: string;
@@ -96,7 +99,7 @@ export type CurrencyBalanceDto = {
   amount: Decimal;
 };
 
-/** Exact decimal value, serialized as a string (`"272.55"`, `"-3140.70"`). */
+/** Exact decimal value, serialized as a string (`"272.550000000"`, `"-3140.700000000"`). */
 export type Decimal = string;
 
 /** One level of the book. */
@@ -117,14 +120,14 @@ export type EventPayload = {
   topic: "RUNTIME_HEALTH";
 };
 
-/** The immutable target of a read or a capital-affecting command. `connection_ref` is an opaque reference, never a credential: the runtime rejects any value that resembles secret material before it can reach this boundary. */
+/** The immutable target of a read or a capital-affecting command. `broker_connection_id` is the application connection identity, never a credential. `account_id` is the canonical Vox account/binding identity. Provider broker-account identifiers are read-side metadata, not this key. */
 export type ExecutionScope = {
   provider: ProviderDto;
   environment: BrokerEnvironment;
-  /** Broker account identifier. Human labels live in the UI; identity stays explicit here. */
-  broker_account_id: string;
-  /** Opaque connection reference from the runtime. Never a token. */
-  connection_ref: string;
+  /** Application connection identity. Opaque; never a token. */
+  broker_connection_id: string;
+  /** Canonical Vox account/binding identity. */
+  account_id: string;
   /** How Vox executes for this scope. */
   trading_mode: TradingMode;
 };
@@ -439,7 +442,8 @@ export type StreamStateDto = "DISCONNECTED" | "CONNECTING" | "ACTIVE" | "STALE" 
 export type SubmitOrderRequest = {
   /** The immutable target. A submitted command is never retargeted by a later UI change. */
   scope: ExecutionScope;
-  instrument_uid: string;
+  /** Opaque canonical instrument identity. Provider UID/FIGI mapping stays inside adapters. */
+  instrument_id: string;
   /** Client-generated identity of this command, used for idempotency and reconciliation. */
   client_request_id: string;
   side: OrderSideDto;

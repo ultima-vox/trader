@@ -238,10 +238,11 @@ contracts (`docs/api/openapi.json`) and a TypeScript client generated from that 
 
 Two facts this work established that the earlier map did not record:
 
-1. **`vox-runtime` is not on `main`.** It lands with #11. The API therefore defines its
-   application ports as traits and attaches nothing: `/api/v1/runtime` and every
-   account-scoped route answer `503 CAPABILITY_UNAVAILABLE` naming `#11`. Nothing is
-   simulated, and the capability set lists seventeen unavailable capabilities with owners.
+1. **`vox-runtime` is on `main` (#11 / PR #39).** The API maps those types exhaustively.
+   `/api/v1/runtime` serves accepted `RuntimeHealth`. Account reads attach through
+   `AccountReadAdapter` over `BrokerReadPort`; without a broker connection they stay
+   unavailable with owner `#17`, not as a missing #11 contract. Execution stays gated by
+   `#10`. Nothing is simulated.
 2. **The protection lifecycle has ten states, not eight** (section 1.5). The design system
    documents eight; the two missing ones are the partially-filled entry and the protection
    that failed after entry.

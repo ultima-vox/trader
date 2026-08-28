@@ -14,6 +14,7 @@ use vox_domain::{
 
 use super::money::Decimal;
 use super::scope::ExecutionScope;
+use crate::error::{ApiError, FieldError};
 
 /// Which side of the market a command takes. The side is the action, never a mode.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
@@ -174,6 +175,19 @@ pub enum JournalStateDto {
     Reconciled,
 }
 
+impl From<vox_runtime::JournalState> for JournalStateDto {
+    fn from(value: vox_runtime::JournalState) -> Self {
+        match value {
+            vox_runtime::JournalState::NotDispatched => Self::NotDispatched,
+            vox_runtime::JournalState::Dispatching => Self::Dispatching,
+            vox_runtime::JournalState::Acknowledged => Self::Acknowledged,
+            vox_runtime::JournalState::Rejected => Self::Rejected,
+            vox_runtime::JournalState::UnknownAfterDispatch => Self::UnknownAfterDispatch,
+            vox_runtime::JournalState::Reconciled => Self::Reconciled,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MutationKindDto {
@@ -184,6 +198,20 @@ pub enum MutationKindDto {
     PostStopOrder,
     CancelStopOrder,
     ProtectionLeg,
+}
+
+impl From<vox_runtime::MutationKind> for MutationKindDto {
+    fn from(value: vox_runtime::MutationKind) -> Self {
+        match value {
+            vox_runtime::MutationKind::PostOrder => Self::PostOrder,
+            vox_runtime::MutationKind::PostOrderAsync => Self::PostOrderAsync,
+            vox_runtime::MutationKind::ReplaceOrder => Self::ReplaceOrder,
+            vox_runtime::MutationKind::CancelOrder => Self::CancelOrder,
+            vox_runtime::MutationKind::PostStopOrder => Self::PostStopOrder,
+            vox_runtime::MutationKind::CancelStopOrder => Self::CancelStopOrder,
+            vox_runtime::MutationKind::ProtectionLeg => Self::ProtectionLeg,
+        }
+    }
 }
 
 /// Whether the client may submit, must reconcile first, or must not submit at all.
@@ -221,7 +249,9 @@ pub struct ProtectionPlanDto {
 pub struct SubmitOrderRequest {
     /// The immutable target. A submitted command is never retargeted by a later UI change.
     pub scope: ExecutionScope,
-    pub instrument_uid: String,
+    /// Opaque canonical instrument identity. Provider UID/FIGI mapping stays inside adapters.
+    #[schema(example = "instrument:sber")]
+    pub instrument_id: String,
     /// Client-generated identity of this command, used for idempotency and reconciliation.
     #[schema(example = "b4f1c2a0-6d18-4f0e-9a37-2d5c1f0b7e44")]
     pub client_request_id: String,
@@ -236,7 +266,15 @@ pub struct SubmitOrderRequest {
     pub protection: Option<ProtectionPlanDto>,
 }
 
-/// Cancel a regular order by broker identity or by the logical request that created it.
+/// Which existing command a cancel names. Exactly one variant is valid.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CancelTarget {
+    BrokerOrder { broker_order_id: String },
+    LogicalRequest { logical_request_id: String },
+}
+
+/// Cancel a regular order. Exactly one of `broker_order_id` or `logical_request_id` names
+/// the command being cancelled. `client_request_id` is the identity of *this* cancel.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct CancelOrderRequest {
     pub scope: ExecutionScope,
@@ -245,6 +283,47 @@ pub struct CancelOrderRequest {
     pub broker_order_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logical_request_id: Option<String>,
+}
+
+impl CancelOrderRequest {
+    /// Returns the single cancellation target. Two identifiers at once, or none, is invalid.
+    pub fn target(&self) -> Result<CancelTarget, ApiError> {
+        let broker = nonempty(self.broker_order_id.as_deref());
+        let logical = nonempty(self.logical_request_id.as_deref());
+        match (broker, logical) {
+            (Some(broker_order_id), None) => Ok(CancelTarget::BrokerOrder {
+                broker_order_id: broker_order_id.to_owned(),
+            }),
+            (None, Some(logical_request_id)) => Ok(CancelTarget::LogicalRequest {
+                logical_request_id: logical_request_id.to_owned(),
+            }),
+            (Some(_), Some(_)) => Err(ApiError::validation(
+                "a cancel cannot name two targets; prove they are the same command first",
+                vec![
+                    FieldError {
+                        field: "broker_order_id".to_owned(),
+                        message: "must be omitted when logical_request_id is set".to_owned(),
+                    },
+                    FieldError {
+                        field: "logical_request_id".to_owned(),
+                        message: "must be omitted when broker_order_id is set".to_owned(),
+                    },
+                ],
+            )),
+            (None, None) => Err(ApiError::validation(
+                "a cancel needs exactly one identifier for the order it cancels",
+                vec![FieldError {
+                    field: "broker_order_id".to_owned(),
+                    message: "provide exactly one of broker_order_id or logical_request_id"
+                        .to_owned(),
+                }],
+            )),
+        }
+    }
+}
+
+fn nonempty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 /// The receipt of a capital-affecting command.
@@ -272,9 +351,52 @@ pub struct MutationReceiptDto {
     pub updated_at_unix_ms: i64,
 }
 
+impl MutationReceiptDto {
+    /// UNKNOWN after dispatch is a valid unfinished mutation, never an API error.
+    #[must_use]
+    pub fn unknown_after_dispatch(
+        logical_request_id: impl Into<String>,
+        scope: ExecutionScope,
+        kind: MutationKindDto,
+        correlation_id: impl Into<String>,
+        runtime_epoch: u64,
+        created_at_unix_ms: i64,
+        updated_at_unix_ms: i64,
+    ) -> Self {
+        Self {
+            logical_request_id: logical_request_id.into(),
+            scope,
+            kind,
+            state: JournalStateDto::UnknownAfterDispatch,
+            decision: MutationDecisionDto::Reconcile,
+            correlation_id: correlation_id.into(),
+            broker_order_id: None,
+            broker_stop_order_id: None,
+            reconciliation_disposition: None,
+            runtime_epoch,
+            created_at_unix_ms,
+            updated_at_unix_ms,
+        }
+    }
+
+    #[must_use]
+    pub const fn decision_for(state: JournalStateDto) -> MutationDecisionDto {
+        match state {
+            JournalStateDto::NotDispatched => MutationDecisionDto::Submit,
+            JournalStateDto::Dispatching | JournalStateDto::UnknownAfterDispatch => {
+                MutationDecisionDto::Reconcile
+            }
+            JournalStateDto::Acknowledged
+            | JournalStateDto::Rejected
+            | JournalStateDto::Reconciled => MutationDecisionDto::DoNotSubmit,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contract::scope::{BrokerEnvironment, ProviderDto, TradingMode};
 
     #[test]
     fn protection_lifecycle_has_no_stale_state() -> Result<(), serde_json::Error> {
@@ -312,5 +434,77 @@ mod tests {
                 "{spelling} is not in the recorded contract map"
             );
         }
+    }
+
+    fn sample_scope() -> Result<ExecutionScope, crate::contract::scope::ScopeError> {
+        ExecutionScope::new(
+            ProviderDto::TInvest,
+            BrokerEnvironment::Sandbox,
+            "connection:primary",
+            "account:primary",
+            TradingMode::Live,
+        )
+    }
+
+    #[test]
+    fn unknown_after_dispatch_is_a_receipt_that_forbids_blind_retry()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let receipt = MutationReceiptDto::unknown_after_dispatch(
+            "req-1",
+            sample_scope()?,
+            MutationKindDto::PostOrder,
+            "corr-1",
+            7,
+            1,
+            2,
+        );
+        assert_eq!(receipt.state, JournalStateDto::UnknownAfterDispatch);
+        assert_eq!(receipt.decision, MutationDecisionDto::Reconcile);
+        assert_ne!(receipt.decision, MutationDecisionDto::Submit);
+        let json = serde_json::to_value(&receipt)?;
+        assert_eq!(json["state"], "UNKNOWN_AFTER_DISPATCH");
+        assert_eq!(json["decision"], "RECONCILE");
+        assert_eq!(json["logical_request_id"], "req-1");
+        assert_eq!(json["scope"]["account_id"], "account:primary");
+        assert_eq!(json["scope"]["broker_connection_id"], "connection:primary");
+        assert!(
+            json.get("code").is_none(),
+            "UNKNOWN after dispatch must not be an ApiError envelope"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cancel_requires_exactly_one_target_identity()
+    -> Result<(), crate::contract::scope::ScopeError> {
+        let both = CancelOrderRequest {
+            scope: sample_scope()?,
+            client_request_id: "cancel-1".to_owned(),
+            broker_order_id: Some("broker-1".to_owned()),
+            logical_request_id: Some("req-1".to_owned()),
+        };
+        assert!(both.target().is_err(), "two targets are ambiguous");
+
+        let neither = CancelOrderRequest {
+            scope: sample_scope()?,
+            client_request_id: "cancel-1".to_owned(),
+            broker_order_id: None,
+            logical_request_id: None,
+        };
+        assert!(neither.target().is_err());
+
+        let broker = CancelOrderRequest {
+            scope: sample_scope()?,
+            client_request_id: "cancel-1".to_owned(),
+            broker_order_id: Some("broker-1".to_owned()),
+            logical_request_id: None,
+        };
+        assert_eq!(
+            broker.target().ok(),
+            Some(CancelTarget::BrokerOrder {
+                broker_order_id: "broker-1".to_owned()
+            })
+        );
+        Ok(())
     }
 }

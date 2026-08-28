@@ -12,7 +12,7 @@ decided.
 | [axum WebSocket](https://docs.rs/axum/latest/axum/extract/ws/) | 0.8.9 | `WebSocketUpgrade` extractor, `ws.on_upgrade(handler)`, messages as `Message::Text(Utf8Bytes)`. |
 | [utoipa](https://docs.rs/utoipa/latest/utoipa/) | **5.5.0** | `ToSchema` derive, `#[utoipa::path]`, `#[derive(OpenApi)]` with `paths(..)`/`components(schemas(..))`, **OpenAPI 3.1**, document via `ApiDoc::openapi()`. |
 | [OpenAPI Specification](https://spec.openapis.org/oas/latest.html) | 3.1 | The generated document targets 3.1; `oneOf` carries the tagged unions of the protection lifecycle and the stream envelopes. |
-| [RFC 9110 — HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110) | — | Status mapping in `error.rs`: 400 validation, 401 authentication, 403 permission, 404 not found, 409 conflict and stale scope/epoch, 202 for an accepted-but-unresolved dispatch, 503 for a capability with no owner and for transient dependency failure. |
+| [RFC 9110 — HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110) | — | Status mapping in `error.rs`: 400 validation, 401 authentication, 403 permission, 404 not found, 409 conflict and stale scope/epoch, 202 for an accepted-but-unresolved mutation *receipt*, 503 for a capability with no owner and for transient dependency failure. `UNKNOWN_AFTER_DISPATCH` is never an `ApiError`. |
 | [RFC 6455 — WebSocket](https://www.rfc-editor.org/rfc/rfc6455) | — | One upgrade endpoint, text frames carrying JSON envelopes, server-initiated heartbeats, close on a slow consumer. |
 | [T-Invest developer protocols](https://developer.tbank.ru/invest/intro/developer/protocols/) | — | Confirms the provider speaks gRPC/protobuf. That stays inside the adapter: no provider wire type appears in this API, and the browser never reaches the provider. |
 
@@ -42,9 +42,11 @@ handler takes a typed request, calls a port and shapes a typed response.
 describe, and axum supports both halves in one router. Provider gRPC stays internal.
 
 **Ports, not a broker client.** `RuntimeQueries`, `AccountQueries` and `ExecutionCommands`
-are traits. A deployment attaches what it has. `vox-runtime` is not on `main` yet — it lands
-with #11 — so this slice attaches nothing and every account-scoped route answers
-`CAPABILITY_UNAVAILABLE` naming the owning issue. No route invents data to look finished.
+are traits. A deployment attaches what it has. #11 has landed: `ProcessRuntime` and
+`AccountReadAdapter` map accepted `vox-runtime` types exhaustively. The server attaches
+runtime health from that contract. Account reads attach only when a `BrokerReadPort` is
+composed; until #17 supplies a connection they stay unavailable rather than inventing
+balances. Execution stays gated by #10.
 
 **Money is a string.** `Decimal` renders `FixedPoint` at nano scale as a fixed nine-decimal
 string. A JSON number would silently lose precision in a JavaScript client, so the type
@@ -56,22 +58,17 @@ system forbids one: there is no numeric money type in the public schema.
 runtimes exist; the server refuses to start in `Environment::Paper` rather than serve a
 scope the contracts cannot express.
 
-**Instrument identity is the domain's, not a new one.** Before adding market data I
-audited the accepted identity model rather than minting a Vox identifier. `vox-domain` already
-defines `InstrumentIdentity` as the "provider-normalized instrument identity retained beside
-runtime projections", carrying `provider`, `uid`, optional `figi`, `ticker` and `class_code`;
-#7 required those be retained *separately* rather than folded into one synthetic key, and the
-accepted T-Invest reference layer keeps a typed `InstrumentUid` distinct from other uid kinds
-(`consensus_record_uid_never_becomes_instrument_uid`). So `InstrumentIdentityDto` publishes
-that identity unchanged. Identity is `provider` + `uid`: the uid is meaningful inside a
-provider namespace, which is why every market route takes both, and `figi`/`ticker`/
-`class_code` are aliases for display and lookup, never the identity. A Vox-minted
-`instrument_id` would be a second identity to keep in sync and buys nothing today — one
-adapter is registered, and the domain already normalizes across providers by carrying the
-provider in the identity. It becomes justified only when two providers list the same economic
-instrument and Vox must assert they are one thing, and it would then belong to the domain, not
-to this transport. A schema test fails the build if any published schema grows an
-`instrument_id` property.
+**Execution target identity is canonical Vox identity.** Public `ExecutionScope` is
+`provider`, `environment`, `broker_connection_id`, `account_id`, `trading_mode`. Provider
+broker-account identifiers remain read-side metadata. The scope key includes the connection
+so two connections exposing the same account cannot collide. Public order commands name an
+opaque `instrument_id`; provider UID/FIGI stay inside adapters. Market and account read
+models may still carry `instrument_uid` as broker-fact metadata because they are already
+inside a provider-named scope.
+
+**Instrument catalogue identity remains the domain's.** `InstrumentIdentityDto` still
+publishes `vox-domain::InstrumentIdentity` (`provider` + `uid`, with FIGI/ticker/class code
+as aliases). That is lookup identity, not the capital-command target.
 
 **Market data is a projection, not a second broker client.** `MarketDataQueries` reads what
 the accepted #8 adapter layer already acquired and republishes it provider-neutrally: quote,
