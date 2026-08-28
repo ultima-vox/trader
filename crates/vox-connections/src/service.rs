@@ -1,0 +1,854 @@
+use std::collections::BTreeSet;
+
+use async_trait::async_trait;
+use thiserror::Error;
+
+use crate::model::{
+    AccountTarget, AuditRecord, BindingId, BrokerAccessLevel, BrokerAccount, BrokerAccountBinding,
+    BrokerAccountStatus, BrokerAccountType, BrokerConnection, BrokerEnvironment,
+    ConnectionCapability, ConnectionHealth, ConnectionHealthReason, ConnectionHealthState,
+    ConnectionId, CredentialClass, CredentialRef, CredentialScope, CredentialStatus,
+    ExecutionAuthorization, ExecutionAuthorizationMode, ModelError, Permission, ProviderId, Role,
+    RoleId, UserId, VoxAccountId, safe_text,
+};
+use crate::repository::{ConnectionRepository, RepositoryError};
+use crate::secret::{CredentialContext, SecretBytes, SecretStore, SecretStoreError};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SecurityContext {
+    pub actor: UserId,
+    pub correlation_id: String,
+    pub now_unix_ms: i64,
+}
+
+impl SecurityContext {
+    pub fn new(
+        actor: UserId,
+        correlation_id: impl Into<String>,
+        now_unix_ms: i64,
+    ) -> Result<Self, ModelError> {
+        Ok(Self {
+            actor,
+            correlation_id: safe_text(correlation_id, "correlation_id", 256)?,
+            now_unix_ms,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateConnectionRequest {
+    pub provider: ProviderId,
+    pub environment: BrokerEnvironment,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderAccountFact {
+    pub provider_account_id: String,
+    pub display_name: Option<String>,
+    pub account_type: BrokerAccountType,
+    pub status: BrokerAccountStatus,
+    pub access_level: BrokerAccessLevel,
+    pub opened_at_unix_ms: Option<i64>,
+    pub closed_at_unix_ms: Option<i64>,
+    pub accessible: bool,
+    pub capabilities: BTreeSet<ConnectionCapability>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderDiscovery {
+    pub credential_class: CredentialClass,
+    pub credential_scope: CredentialScope,
+    pub connection_capabilities: BTreeSet<ConnectionCapability>,
+    pub accounts: Vec<ProviderAccountFact>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderErrorKind {
+    InvalidCredential,
+    InsufficientPermission,
+    WrongEnvironment,
+    ProviderUnavailable,
+    ExpiredOrInactive,
+    AccountAccessChanged,
+    UnsupportedProvider,
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+#[error("provider validation failed: {kind:?}: {safe_message}")]
+pub struct ProviderError {
+    pub kind: ProviderErrorKind,
+    pub safe_message: String,
+}
+
+#[async_trait]
+pub trait BrokerProviderPort: Send + Sync {
+    async fn validate_and_discover(
+        &self,
+        provider: &ProviderId,
+        environment: BrokerEnvironment,
+        credential: &SecretBytes,
+    ) -> Result<ProviderDiscovery, ProviderError>;
+}
+
+#[derive(Debug)]
+pub struct ResolvedConnection {
+    pub target: AccountTarget,
+    pub credential_ref: CredentialRef,
+    pub credential: SecretBytes,
+    pub capabilities: BTreeSet<ConnectionCapability>,
+    pub execution_authorization: ExecutionAuthorizationMode,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CredentialRotationOutcome {
+    pub connection: BrokerConnection,
+    pub reconnect_required: bool,
+}
+
+pub struct ConnectionService<R, S, P> {
+    repository: R,
+    secret_store: S,
+    provider: P,
+}
+
+impl<R, S, P> ConnectionService<R, S, P>
+where
+    R: ConnectionRepository,
+    S: SecretStore,
+    P: BrokerProviderPort,
+{
+    #[must_use]
+    pub const fn new(repository: R, secret_store: S, provider: P) -> Self {
+        Self {
+            repository,
+            secret_store,
+            provider,
+        }
+    }
+
+    pub async fn create_connection(
+        &self,
+        security: &SecurityContext,
+        request: CreateConnectionRequest,
+        credential: SecretBytes,
+    ) -> Result<BrokerConnection, ServiceError> {
+        self.require(security, Permission::ManageCredentials)?;
+        let label = safe_text(request.label, "connection_label", 128)?;
+        let context = CredentialContext {
+            provider: request.provider.clone(),
+            environment: request.environment,
+        };
+        let discovery = self
+            .provider
+            .validate_and_discover(&request.provider, request.environment, &credential)
+            .await?;
+        validate_discovery(&discovery)?;
+
+        let connection_id = ConnectionId::new();
+        let credential_ref = CredentialRef::new();
+        let fingerprint =
+            self.secret_store
+                .put(&credential_ref, &context, credential, security.now_unix_ms)?;
+        let connection = BrokerConnection {
+            id: connection_id.clone(),
+            provider: request.provider,
+            environment: request.environment,
+            credential_ref: credential_ref.clone(),
+            label,
+            credential_fingerprint: fingerprint,
+            credential_status: CredentialStatus::Valid,
+            credential_class: discovery.credential_class,
+            credential_scope: discovery.credential_scope,
+            enabled: true,
+            health: ConnectionHealth {
+                state: ConnectionHealthState::Healthy,
+                checked_at_unix_ms: Some(security.now_unix_ms),
+                provider: context.provider.clone(),
+                environment: context.environment,
+                reason_code: ConnectionHealthReason::None,
+                safe_detail: None,
+                retryable: false,
+            },
+            capabilities: discovery.connection_capabilities,
+            created_at_unix_ms: security.now_unix_ms,
+            updated_at_unix_ms: security.now_unix_ms,
+        };
+        if let Err(error) = self.repository.insert_connection(&connection) {
+            let _ignored = self.secret_store.delete(&credential_ref);
+            return Err(error.into());
+        }
+        let accounts = materialize_accounts(&connection, discovery.accounts, security.now_unix_ms);
+        if let Err(error) = self.repository.replace_accounts(&connection_id, &accounts) {
+            let _ignored = self.repository.delete_connection(&connection_id);
+            let _ignored = self.secret_store.delete(&credential_ref);
+            return Err(error.into());
+        }
+        for account in &accounts {
+            let authorization = ExecutionAuthorization {
+                connection_id: connection_id.clone(),
+                provider_account_id: account.provider_account_id.clone(),
+                mode: ExecutionAuthorizationMode::Disabled,
+                changed_by: security.actor.clone(),
+                changed_at_unix_ms: security.now_unix_ms,
+            };
+            self.repository.put_authorization(&authorization)?;
+        }
+        self.audit(
+            security,
+            "CONNECTION_CREATED",
+            connection_id.as_str(),
+            None,
+            Some("ENABLED"),
+        )?;
+        self.audit(
+            security,
+            "CREDENTIAL_ADDED",
+            credential_ref.as_str(),
+            None,
+            Some("VALID"),
+        )?;
+        Ok(connection)
+    }
+
+    pub fn list_connections(
+        &self,
+        security: &SecurityContext,
+    ) -> Result<Vec<BrokerConnection>, ServiceError> {
+        self.require(security, Permission::ViewConnectionMetadata)?;
+        self.repository.list_connections().map_err(Into::into)
+    }
+
+    pub async fn revalidate(
+        &self,
+        security: &SecurityContext,
+        connection_id: &ConnectionId,
+    ) -> Result<BrokerConnection, ServiceError> {
+        self.require(security, Permission::DiscoverAccounts)?;
+        let mut connection = self.connection(connection_id)?;
+        if !connection.enabled {
+            return Err(ServiceError::ConnectionDisabled);
+        }
+        let context = credential_context(&connection);
+        let credential = self
+            .secret_store
+            .get(&connection.credential_ref, &context)?;
+        match self
+            .provider
+            .validate_and_discover(&connection.provider, connection.environment, &credential)
+            .await
+        {
+            Ok(discovery) => {
+                validate_discovery(&discovery)?;
+                let accounts =
+                    materialize_accounts(&connection, discovery.accounts, security.now_unix_ms);
+                let old_accounts = self.repository.accounts(connection_id)?;
+                connection.capabilities = discovery.connection_capabilities;
+                connection.credential_status = CredentialStatus::Valid;
+                connection.credential_class = discovery.credential_class;
+                connection.credential_scope = discovery.credential_scope;
+                connection.health = ConnectionHealth {
+                    state: if access_removed(&old_accounts, &accounts) {
+                        ConnectionHealthState::AccountAccessChanged
+                    } else {
+                        ConnectionHealthState::Healthy
+                    },
+                    checked_at_unix_ms: Some(security.now_unix_ms),
+                    provider: connection.provider.clone(),
+                    environment: connection.environment,
+                    reason_code: if access_removed(&old_accounts, &accounts) {
+                        ConnectionHealthReason::AccountAccessChanged
+                    } else {
+                        ConnectionHealthReason::None
+                    },
+                    safe_detail: None,
+                    retryable: false,
+                };
+                connection.updated_at_unix_ms = security.now_unix_ms;
+                self.repository.replace_accounts(connection_id, &accounts)?;
+            }
+            Err(error) => {
+                connection.credential_status = match error.kind {
+                    ProviderErrorKind::ExpiredOrInactive => CredentialStatus::ExpiredOrInactive,
+                    ProviderErrorKind::InvalidCredential | ProviderErrorKind::WrongEnvironment => {
+                        CredentialStatus::Invalid
+                    }
+                    _ => connection.credential_status,
+                };
+                connection.health = health_from_provider_error(
+                    &error,
+                    &connection.provider,
+                    connection.environment,
+                    security.now_unix_ms,
+                );
+                connection.updated_at_unix_ms = security.now_unix_ms;
+                self.repository.update_connection(&connection)?;
+                self.audit(
+                    security,
+                    "CONNECTION_REVALIDATION_FAILED",
+                    connection_id.as_str(),
+                    None,
+                    Some(health_name(connection.health.state)),
+                )?;
+                return Err(error.into());
+            }
+        }
+        self.repository.update_connection(&connection)?;
+        self.audit(
+            security,
+            "CONNECTION_REVALIDATED",
+            connection_id.as_str(),
+            None,
+            Some(health_name(connection.health.state)),
+        )?;
+        Ok(connection)
+    }
+
+    pub async fn rotate_credential(
+        &self,
+        security: &SecurityContext,
+        connection_id: &ConnectionId,
+        new_credential: SecretBytes,
+    ) -> Result<CredentialRotationOutcome, ServiceError> {
+        self.require(security, Permission::ManageCredentials)?;
+        let mut connection = self.connection(connection_id)?;
+        let discovery = self
+            .provider
+            .validate_and_discover(
+                &connection.provider,
+                connection.environment,
+                &new_credential,
+            )
+            .await?;
+        validate_discovery(&discovery)?;
+        let context = credential_context(&connection);
+        let previous_fingerprint = connection.credential_fingerprint.clone();
+        connection.credential_fingerprint = self.secret_store.rotate(
+            &connection.credential_ref,
+            &context,
+            new_credential,
+            security.now_unix_ms,
+        )?;
+        connection.capabilities = discovery.connection_capabilities;
+        connection.credential_status = CredentialStatus::Valid;
+        connection.credential_class = discovery.credential_class;
+        connection.credential_scope = discovery.credential_scope;
+        connection.health = ConnectionHealth {
+            state: ConnectionHealthState::Healthy,
+            checked_at_unix_ms: Some(security.now_unix_ms),
+            provider: connection.provider.clone(),
+            environment: connection.environment,
+            reason_code: ConnectionHealthReason::None,
+            safe_detail: None,
+            retryable: false,
+        };
+        connection.updated_at_unix_ms = security.now_unix_ms;
+        let accounts = materialize_accounts(&connection, discovery.accounts, security.now_unix_ms);
+        self.repository.replace_accounts(connection_id, &accounts)?;
+        self.repository.update_connection(&connection)?;
+        self.audit(
+            security,
+            "CREDENTIAL_ROTATED_RECONNECT_REQUIRED",
+            connection_id.as_str(),
+            Some(&previous_fingerprint),
+            Some(&connection.credential_fingerprint),
+        )?;
+        Ok(CredentialRotationOutcome {
+            connection,
+            reconnect_required: true,
+        })
+    }
+
+    pub fn disable_connection(
+        &self,
+        security: &SecurityContext,
+        connection_id: &ConnectionId,
+    ) -> Result<BrokerConnection, ServiceError> {
+        self.require(security, Permission::DisableDeleteConnection)?;
+        let mut connection = self.connection(connection_id)?;
+        connection.enabled = false;
+        connection.health = ConnectionHealth {
+            state: ConnectionHealthState::Disabled,
+            checked_at_unix_ms: Some(security.now_unix_ms),
+            provider: connection.provider.clone(),
+            environment: connection.environment,
+            reason_code: ConnectionHealthReason::DisabledByOperator,
+            safe_detail: Some("disabled by authorized operator".to_owned()),
+            retryable: false,
+        };
+        connection.credential_status = CredentialStatus::Disabled;
+        connection.updated_at_unix_ms = security.now_unix_ms;
+        self.repository.update_connection(&connection)?;
+        self.secret_store.disable(&connection.credential_ref)?;
+        self.audit(
+            security,
+            "CREDENTIAL_DISABLED",
+            connection.credential_ref.as_str(),
+            Some("VALID"),
+            Some("DISABLED"),
+        )?;
+        self.audit(
+            security,
+            "CONNECTION_DISABLED",
+            connection_id.as_str(),
+            Some("ENABLED"),
+            Some("DISABLED"),
+        )?;
+        Ok(connection)
+    }
+
+    pub fn delete_connection(
+        &self,
+        security: &SecurityContext,
+        connection_id: &ConnectionId,
+    ) -> Result<(), ServiceError> {
+        self.require(security, Permission::DisableDeleteConnection)?;
+        let connection = self.connection(connection_id)?;
+        if connection.enabled {
+            return Err(ServiceError::DisableBeforeDelete);
+        }
+        self.audit(
+            security,
+            "CONNECTION_DELETED",
+            connection_id.as_str(),
+            Some("DISABLED"),
+            Some("DELETED"),
+        )?;
+        self.secret_store.delete(&connection.credential_ref)?;
+        self.repository.delete_connection(connection_id)?;
+        Ok(())
+    }
+
+    pub fn bind_account(
+        &self,
+        security: &SecurityContext,
+        connection_id: &ConnectionId,
+        provider_account_id: impl Into<String>,
+        vox_account_id: VoxAccountId,
+    ) -> Result<BrokerAccountBinding, ServiceError> {
+        self.require(security, Permission::BindAccounts)?;
+        let connection = self.connection(connection_id)?;
+        let provider_account_id = safe_text(provider_account_id, "provider_account_id", 256)?;
+        let account = self
+            .repository
+            .accounts(connection_id)?
+            .into_iter()
+            .find(|account| account.provider_account_id == provider_account_id)
+            .ok_or(ServiceError::AccountNotFound)?;
+        if !account.accessible {
+            return Err(ServiceError::AccountUnavailable);
+        }
+        let binding = BrokerAccountBinding {
+            id: BindingId::new(),
+            connection_id: connection_id.clone(),
+            provider: connection.provider,
+            environment: connection.environment,
+            provider_account_id,
+            vox_account_id,
+            enabled: true,
+            created_at_unix_ms: security.now_unix_ms,
+            updated_at_unix_ms: security.now_unix_ms,
+        };
+        self.repository.put_binding(&binding)?;
+        self.audit(
+            security,
+            "ACCOUNT_BOUND",
+            binding.id.as_str(),
+            None,
+            Some(connection_id.as_str()),
+        )?;
+        Ok(binding)
+    }
+
+    pub fn unbind_account(
+        &self,
+        security: &SecurityContext,
+        binding_id: &BindingId,
+    ) -> Result<(), ServiceError> {
+        self.require(security, Permission::BindAccounts)?;
+        self.repository.delete_binding(binding_id)?;
+        self.audit(
+            security,
+            "ACCOUNT_UNBOUND",
+            binding_id.as_str(),
+            Some("BOUND"),
+            Some("UNBOUND"),
+        )
+    }
+
+    pub fn replace_role(
+        &self,
+        security: &SecurityContext,
+        mut role: Role,
+    ) -> Result<(), ServiceError> {
+        self.require(security, Permission::SecurityAdmin)?;
+        role.name = safe_text(role.name, "role_name", 128)?;
+        self.repository.put_role(&role)?;
+        self.audit(
+            security,
+            "ROLE_PERMISSIONS_CHANGED",
+            role.id.as_str(),
+            None,
+            Some("REPLACED"),
+        )
+    }
+
+    pub fn grant_role(
+        &self,
+        security: &SecurityContext,
+        user_id: &UserId,
+        role_id: &RoleId,
+    ) -> Result<(), ServiceError> {
+        self.require(security, Permission::SecurityAdmin)?;
+        self.repository.grant_role(user_id, role_id)?;
+        self.audit(
+            security,
+            "ROLE_ASSIGNED",
+            user_id.as_str(),
+            None,
+            Some(role_id.as_str()),
+        )
+    }
+
+    pub fn disable_binding(
+        &self,
+        security: &SecurityContext,
+        binding_id: &BindingId,
+    ) -> Result<(), ServiceError> {
+        self.require(security, Permission::BindAccounts)?;
+        self.repository
+            .set_binding_enabled(binding_id, false, security.now_unix_ms)?;
+        self.audit(
+            security,
+            "ACCOUNT_BINDING_DISABLED",
+            binding_id.as_str(),
+            Some("ENABLED"),
+            Some("DISABLED"),
+        )
+    }
+
+    pub fn set_execution_authorization(
+        &self,
+        security: &SecurityContext,
+        connection_id: &ConnectionId,
+        provider_account_id: &str,
+        mode: ExecutionAuthorizationMode,
+    ) -> Result<ExecutionAuthorization, ServiceError> {
+        let connection = self.connection(connection_id)?;
+        match (connection.environment, mode) {
+            (BrokerEnvironment::Production, ExecutionAuthorizationMode::AutomatedAllowed) => {
+                self.require(security, Permission::EnableAutomatedProductionExecution)?
+            }
+            (BrokerEnvironment::Production, ExecutionAuthorizationMode::ManualAllowed) => {
+                self.require(security, Permission::SubmitProductionManualOrders)?
+            }
+            (
+                BrokerEnvironment::Sandbox,
+                ExecutionAuthorizationMode::ManualAllowed
+                | ExecutionAuthorizationMode::AutomatedAllowed,
+            ) => {
+                self.require(security, Permission::SubmitSandboxOrders)?;
+            }
+            (_, ExecutionAuthorizationMode::Disabled) => {
+                self.require(security, Permission::BindAccounts)?;
+            }
+        }
+        if !connection.enabled || connection.health.state != ConnectionHealthState::Healthy {
+            return Err(ServiceError::ConnectionUnavailable);
+        }
+        let account = self
+            .repository
+            .accounts(connection_id)?
+            .into_iter()
+            .find(|account| account.provider_account_id == provider_account_id)
+            .ok_or(ServiceError::AccountNotFound)?;
+        if !account.accessible {
+            return Err(ServiceError::AccountUnavailable);
+        }
+        if mode != ExecutionAuthorizationMode::Disabled
+            && !account
+                .capabilities
+                .contains(&match connection.environment {
+                    BrokerEnvironment::Production => {
+                        ConnectionCapability::ProductionOrdersProviderAllowed
+                    }
+                    BrokerEnvironment::Sandbox => ConnectionCapability::SandboxOrders,
+                })
+        {
+            return Err(ServiceError::ProviderDoesNotAllowProductionOrders);
+        }
+        let previous = self
+            .repository
+            .authorization(connection_id, provider_account_id)?
+            .map(|value| value.mode)
+            .unwrap_or(ExecutionAuthorizationMode::Disabled);
+        let authorization = ExecutionAuthorization {
+            connection_id: connection_id.clone(),
+            provider_account_id: provider_account_id.to_owned(),
+            mode,
+            changed_by: security.actor.clone(),
+            changed_at_unix_ms: security.now_unix_ms,
+        };
+        self.repository.put_authorization(&authorization)?;
+        self.audit(
+            security,
+            "EXECUTION_AUTHORIZATION_CHANGED",
+            connection_id.as_str(),
+            Some(authorization_name(previous)),
+            Some(authorization_name(mode)),
+        )?;
+        Ok(authorization)
+    }
+
+    pub fn resolve_bound_connection(
+        &self,
+        connection_id: &ConnectionId,
+        provider_account_id: &str,
+        vox_account_id: &VoxAccountId,
+    ) -> Result<ResolvedConnection, ServiceError> {
+        let connection = self.connection(connection_id)?;
+        if !connection.enabled || connection.health.state != ConnectionHealthState::Healthy {
+            return Err(ServiceError::ConnectionUnavailable);
+        }
+        let account = self
+            .repository
+            .accounts(connection_id)?
+            .into_iter()
+            .find(|account| account.provider_account_id == provider_account_id)
+            .ok_or(ServiceError::AccountNotFound)?;
+        if !account.accessible {
+            return Err(ServiceError::AccountUnavailable);
+        }
+        let binding_exists = self
+            .repository
+            .bindings(connection_id)?
+            .into_iter()
+            .any(|binding| {
+                binding.provider_account_id == provider_account_id
+                    && &binding.vox_account_id == vox_account_id
+                    && binding.enabled
+            });
+        if !binding_exists {
+            return Err(ServiceError::AccountBindingMismatch);
+        }
+        let authorization = self
+            .repository
+            .authorization(connection_id, provider_account_id)?
+            .map(|value| value.mode)
+            .unwrap_or(ExecutionAuthorizationMode::Disabled);
+        let credential = self
+            .secret_store
+            .get(&connection.credential_ref, &credential_context(&connection))?;
+        Ok(ResolvedConnection {
+            target: AccountTarget {
+                connection_id: connection.id,
+                provider: connection.provider,
+                environment: connection.environment,
+                provider_account_id: provider_account_id.to_owned(),
+                vox_account_id: vox_account_id.clone(),
+            },
+            credential_ref: connection.credential_ref,
+            credential,
+            capabilities: account.capabilities,
+            execution_authorization: authorization,
+        })
+    }
+
+    fn connection(&self, id: &ConnectionId) -> Result<BrokerConnection, ServiceError> {
+        self.repository
+            .connection(id)?
+            .ok_or(ServiceError::ConnectionNotFound)
+    }
+
+    fn require(
+        &self,
+        security: &SecurityContext,
+        permission: Permission,
+    ) -> Result<(), ServiceError> {
+        if self
+            .repository
+            .permissions(&security.actor)?
+            .contains(&permission)
+        {
+            Ok(())
+        } else {
+            Err(ServiceError::PermissionDenied(permission))
+        }
+    }
+
+    fn audit(
+        &self,
+        security: &SecurityContext,
+        action: &str,
+        target_ref: &str,
+        previous_state: Option<&str>,
+        new_state: Option<&str>,
+    ) -> Result<(), ServiceError> {
+        let previous_state = previous_state
+            .map(|value| safe_text(value, "audit_previous_state", 256))
+            .transpose()?;
+        let new_state = new_state
+            .map(|value| safe_text(value, "audit_new_state", 256))
+            .transpose()?;
+        self.repository.append_audit(&AuditRecord {
+            actor: security.actor.clone(),
+            action: safe_text(action, "audit_action", 128)?,
+            target_ref: safe_text(target_ref, "audit_target", 256)?,
+            previous_state,
+            new_state,
+            correlation_id: security.correlation_id.clone(),
+            occurred_at_unix_ms: security.now_unix_ms,
+        })?;
+        Ok(())
+    }
+}
+
+fn validate_discovery(discovery: &ProviderDiscovery) -> Result<(), ServiceError> {
+    let mut identities = BTreeSet::new();
+    for account in &discovery.accounts {
+        safe_text(
+            account.provider_account_id.clone(),
+            "provider_account_id",
+            256,
+        )?;
+        if !identities.insert(account.provider_account_id.clone()) {
+            return Err(ServiceError::DuplicateProviderAccount);
+        }
+        if let Some(name) = &account.display_name {
+            safe_text(name.clone(), "account_display_name", 256)?;
+        }
+    }
+    Ok(())
+}
+
+fn materialize_accounts(
+    connection: &BrokerConnection,
+    accounts: Vec<ProviderAccountFact>,
+    now_unix_ms: i64,
+) -> Vec<BrokerAccount> {
+    accounts
+        .into_iter()
+        .map(|account| BrokerAccount {
+            connection_id: connection.id.clone(),
+            provider: connection.provider.clone(),
+            environment: connection.environment,
+            provider_account_id: account.provider_account_id,
+            display_name: account.display_name,
+            account_type: account.account_type,
+            status: account.status,
+            access_level: account.access_level,
+            opened_at_unix_ms: account.opened_at_unix_ms,
+            closed_at_unix_ms: account.closed_at_unix_ms,
+            accessible: account.accessible,
+            capabilities: account.capabilities,
+            discovered_at_unix_ms: now_unix_ms,
+        })
+        .collect()
+}
+
+fn access_removed(previous: &[BrokerAccount], current: &[BrokerAccount]) -> bool {
+    previous
+        .iter()
+        .filter(|account| account.accessible)
+        .any(|old| {
+            !current
+                .iter()
+                .any(|new| new.provider_account_id == old.provider_account_id && new.accessible)
+        })
+}
+
+fn credential_context(connection: &BrokerConnection) -> CredentialContext {
+    CredentialContext {
+        provider: connection.provider.clone(),
+        environment: connection.environment,
+    }
+}
+
+fn health_from_provider_error(
+    error: &ProviderError,
+    provider: &ProviderId,
+    environment: BrokerEnvironment,
+    now_unix_ms: i64,
+) -> ConnectionHealth {
+    let state = match error.kind {
+        ProviderErrorKind::InvalidCredential | ProviderErrorKind::ExpiredOrInactive => {
+            ConnectionHealthState::InvalidCredential
+        }
+        ProviderErrorKind::InsufficientPermission => ConnectionHealthState::InsufficientPermission,
+        ProviderErrorKind::AccountAccessChanged => ConnectionHealthState::AccountAccessChanged,
+        ProviderErrorKind::WrongEnvironment
+        | ProviderErrorKind::ProviderUnavailable
+        | ProviderErrorKind::UnsupportedProvider => ConnectionHealthState::ProviderUnavailable,
+    };
+    ConnectionHealth {
+        state,
+        checked_at_unix_ms: Some(now_unix_ms),
+        provider: provider.clone(),
+        environment,
+        reason_code: match error.kind {
+            ProviderErrorKind::InvalidCredential => ConnectionHealthReason::InvalidCredential,
+            ProviderErrorKind::ExpiredOrInactive => ConnectionHealthReason::ExpiredOrInactive,
+            ProviderErrorKind::InsufficientPermission => ConnectionHealthReason::PermissionDenied,
+            ProviderErrorKind::WrongEnvironment => ConnectionHealthReason::WrongEnvironment,
+            ProviderErrorKind::ProviderUnavailable | ProviderErrorKind::UnsupportedProvider => {
+                ConnectionHealthReason::ProviderUnavailable
+            }
+            ProviderErrorKind::AccountAccessChanged => ConnectionHealthReason::AccountAccessChanged,
+        },
+        safe_detail: Some(error.safe_message.clone()),
+        retryable: matches!(error.kind, ProviderErrorKind::ProviderUnavailable),
+    }
+}
+
+fn authorization_name(mode: ExecutionAuthorizationMode) -> &'static str {
+    match mode {
+        ExecutionAuthorizationMode::Disabled => "DISABLED",
+        ExecutionAuthorizationMode::ManualAllowed => "MANUAL_ALLOWED",
+        ExecutionAuthorizationMode::AutomatedAllowed => "AUTOMATED_ALLOWED",
+    }
+}
+
+fn health_name(state: ConnectionHealthState) -> &'static str {
+    match state {
+        ConnectionHealthState::Unknown => "UNKNOWN",
+        ConnectionHealthState::Validating => "VALIDATING",
+        ConnectionHealthState::Healthy => "HEALTHY",
+        ConnectionHealthState::InvalidCredential => "INVALID_CREDENTIAL",
+        ConnectionHealthState::InsufficientPermission => "INSUFFICIENT_PERMISSION",
+        ConnectionHealthState::ProviderUnavailable => "PROVIDER_UNAVAILABLE",
+        ConnectionHealthState::AccountAccessChanged => "ACCOUNT_ACCESS_CHANGED",
+        ConnectionHealthState::Disabled => "DISABLED",
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ServiceError {
+    #[error("permission denied: {0:?}")]
+    PermissionDenied(Permission),
+    #[error("connection not found")]
+    ConnectionNotFound,
+    #[error("account not found")]
+    AccountNotFound,
+    #[error("account unavailable")]
+    AccountUnavailable,
+    #[error("connection disabled")]
+    ConnectionDisabled,
+    #[error("connection unavailable")]
+    ConnectionUnavailable,
+    #[error("connection must be disabled before deletion")]
+    DisableBeforeDelete,
+    #[error("account binding does not match explicit target")]
+    AccountBindingMismatch,
+    #[error("provider credential does not allow requested execution")]
+    ProviderDoesNotAllowProductionOrders,
+    #[error("provider returned duplicate account identity")]
+    DuplicateProviderAccount,
+    #[error(transparent)]
+    Model(#[from] ModelError),
+    #[error(transparent)]
+    Repository(#[from] RepositoryError),
+    #[error(transparent)]
+    SecretStore(#[from] SecretStoreError),
+    #[error(transparent)]
+    Provider(#[from] ProviderError),
+}

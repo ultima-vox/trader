@@ -2967,6 +2967,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "vox-connections"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "ring",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "vox-core"
 version = "0.1.0"
 dependencies = [
@@ -3017,6 +3032,7 @@ dependencies = [
  "tonic",
  "tracing",
  "uuid",
+ "vox-connections",
  "vox-domain",
  "vox-tinvest",
 ]
@@ -3045,7 +3061,9 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "vox-connections",
  "vox-domain",
+ "zeroize",
 ]
 
 [[package]]

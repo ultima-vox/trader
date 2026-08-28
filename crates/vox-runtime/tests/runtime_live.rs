@@ -822,9 +822,10 @@ async fn complete_runtime_qualification_in_sandbox() -> Result<(), BoxError> {
         .ok_or("open sandbox account is required")?;
     let (instrument_uid, limit_price) = qualification_instrument(&client).await?;
     let path = runtime_path();
-    let scope = RuntimeScope::new(
+    let scope = RuntimeScope::new_bound(
         Provider::TInvest,
         RuntimeEnvironment::Sandbox,
+        "vox-account:sandbox-qualification",
         account.account_id,
         OpaqueRef::new("connection:sandbox-qualification")?,
         OpaqueRef::new("credential:environment")?,
@@ -1204,9 +1205,10 @@ async fn runtime_idle_soak_in_sandbox() -> Result<(), BoxError> {
         .ok_or("open sandbox account is required")?;
     let (_instrument_uid, _limit_price) = qualification_instrument(&client).await?;
     let path = runtime_path();
-    let scope = RuntimeScope::new(
+    let scope = RuntimeScope::new_bound(
         Provider::TInvest,
         RuntimeEnvironment::Sandbox,
+        "vox-account:sandbox-soak",
         account.account_id,
         OpaqueRef::new("connection:sandbox-soak")?,
         OpaqueRef::new("credential:environment")?,

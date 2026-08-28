@@ -6,6 +6,7 @@ pub mod reference;
 pub mod account;
 pub mod account_qualification;
 pub mod canonical;
+pub mod connection_provider;
 pub mod execution;
 pub mod execution_dispatch;
 pub mod execution_qualification;

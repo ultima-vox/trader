@@ -1377,9 +1377,10 @@ async fn corrupt_checkpoint_rebuilds_but_corrupt_unknown_evidence_fails_closed()
 }
 
 fn scope() -> Result<RuntimeScope, vox_runtime::ModelError> {
-    RuntimeScope::new(
+    RuntimeScope::new_bound(
         Provider::TInvest,
         RuntimeEnvironment::Sandbox,
+        "vox-account-1",
         "account-1",
         OpaqueRef::new("connection:primary")?,
         OpaqueRef::new("credential:primary")?,
