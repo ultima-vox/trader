@@ -235,6 +235,7 @@ where
             .await
             .map_err(map_broker_error)?;
         facts
+            .instruments
             .iter()
             .map(|fact| PositionDto::from_bound_fact(&binding, fact))
             .collect()
@@ -402,7 +403,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Mutex;
     use vox_runtime::{
-        BrokerAccount, OperationsPage, OrderFact, PortfolioFact, PositionFact, Provider,
+        BrokerAccount, OperationsPage, OrderFact, PortfolioFact, PositionsFact, Provider,
         RuntimeEnvironment, StopFact,
     };
 
@@ -410,7 +411,7 @@ mod tests {
         last_scope: Mutex<Option<RuntimeScope>>,
         accounts: Mutex<Vec<BrokerAccount>>,
         portfolio: Mutex<PortfolioFact>,
-        positions: Mutex<Vec<PositionFact>>,
+        positions: Mutex<PositionsFact>,
     }
 
     impl FakeReads {
@@ -445,10 +446,7 @@ mod tests {
                 .clone())
         }
 
-        async fn positions(
-            &self,
-            scope: &RuntimeScope,
-        ) -> Result<Vec<PositionFact>, BrokerPortError> {
+        async fn positions(&self, scope: &RuntimeScope) -> Result<PositionsFact, BrokerPortError> {
             self.remember(scope);
             Ok(self
                 .positions
@@ -522,10 +520,12 @@ mod tests {
             }]),
             portfolio: Mutex::new(PortfolioFact {
                 account_id: broker_account_id.into(),
-                currencies: BTreeMap::new(),
+                total_portfolio_valuation: None,
+                total_currency_valuation: None,
+                cash_balances: BTreeMap::new(),
                 broker_observed_at_unix_ms: Some(1),
             }),
-            positions: Mutex::new(Vec::new()),
+            positions: Mutex::new(PositionsFact::default()),
         });
         Ok(AccountReadAdapter::new(
             Arc::new(resolver),

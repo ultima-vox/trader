@@ -3,36 +3,42 @@ use std::error::Error;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::{Mutex, mpsc};
 use vox_domain::{
-    Environment, ExecutionPriceConvention, FixedPoint, MutationGuard, OrderSide,
-    RegularOrderCommand, RegularOrderType, TimeInForce,
+    CancelStopOrderCommand, Environment, ExecutionPriceConvention, FixedPoint, MutationGuard,
+    OrderSide, PositionSide, ProtectionLeg, ProtectionLegCommand, RegularOrderCommand,
+    RegularOrderType, StopLossProtection, TimeInForce,
 };
 use vox_runtime::{
-    BrokerAccount, BrokerEvent, BrokerEventClass, BrokerIdentityLinks, BrokerPortError,
-    BrokerReadPort, BrokerResultClass, CredentialResolution, CredentialResolverPort, ExecutionPort,
-    ExecutionResult, ExecutionStreamPort, HealthReadPort, InMemoryMetrics, JournalState,
-    MutationKind, MutationRecord, OpaqueRef, OperationFact, OperationsPage, OrderFact,
-    PortfolioFact, Provider, ReconciliationConfig, RuntimeConfig, RuntimeCoordinator,
-    RuntimeEnvironment, RuntimeScope, RuntimeState, RuntimeStore, SqliteRuntimeStore, StopFact,
-    StreamKind, StreamSignal,
+    BrokerAccount, BrokerEvent, BrokerEventClass, BrokerExecutionState, BrokerIdentityLinks,
+    BrokerPortError, BrokerReadPort, BrokerResultClass, CredentialResolution,
+    CredentialResolverPort, ExecutionPort, ExecutionResult, ExecutionStreamPort, HealthReadPort,
+    InMemoryMetrics, JournalState, MoneyFact, MutationRecord, OpaqueRef, OperationFact,
+    OperationsPage, OrderExecutionStatus, OrderFact, PortfolioFact, Provider, ProviderStatusCause,
+    ReconciliationConfig, RuntimeConfig, RuntimeCoordinator, RuntimeEnvironment,
+    RuntimeExecutionCommand, RuntimeScope, RuntimeState, RuntimeStore, SqliteRuntimeStore,
+    StopExecutionStatus, StopFact, StreamKind, StreamSignal,
 };
 use vox_tinvest::account::AccountReadClient;
 use vox_tinvest::execution::{
-    CanonicalExecutionStreamEvent, canonical_orders, canonical_stop_orders, regular_order_request,
+    CanonicalExecutionStreamEvent, canonical_orders, canonical_stop_orders,
 };
+use vox_tinvest::execution_dispatch::ExecutionRoute;
 use vox_tinvest::execution_stream::{
     ExecutionStreamConfig, ExecutionStreamEvent, ExecutionStreamKind, ExecutionStreamSupervisor,
 };
 use vox_tinvest::generated::v1;
+use vox_tinvest::runtime_execution::{
+    RuntimeExecutionAdapterError, TInvestRuntimeExecutionAdapter, authoritative_rejection,
+};
 use vox_tinvest::{GrpcCredential, GrpcError, GrpcErrorKind, SecretToken, TInvestGrpcClient};
 
 type BoxError = Box<dyn Error + Send + Sync>;
-const RUNTIME_QUALIFICATION_ROWS: [&str; 16] = [
+const RUNTIME_QUALIFICATION_ROWS: [&str; 17] = [
     "runtime_startup_ownership",
     "connecting",
     "initial_authoritative_reconciliation",
@@ -43,6 +49,7 @@ const RUNTIME_QUALIFICATION_ROWS: [&str; 16] = [
     "position_snapshot_reconciliation",
     "regular_order_reconciliation",
     "stop_protection_reconciliation",
+    "post_stop_unknown_recovery",
     "duplicate_event_readback_dedupe",
     "stream_gap_reconciliation_recovery",
     "graceful_shutdown_restart",
@@ -89,23 +96,15 @@ impl BrokerReadPort for SandboxReads {
             .sandbox_portfolio(scope.broker_account_id.clone())
             .await
             .map_err(|error| port_error("OperationsService", "GetSandboxPortfolio", error))?;
-        let mut currencies = BTreeMap::new();
-        for (name, value) in [
-            ("portfolio", portfolio.total_amount_portfolio),
-            ("currencies", portfolio.total_amount_currencies),
-        ] {
-            if let Some(value) = value {
-                currencies.insert(
-                    value.currency.unwrap_or_else(|| name.to_owned()),
-                    format!("{:?}", value.amount),
-                );
-            }
-        }
+        let total_portfolio_valuation = portfolio.total_amount_portfolio.map(money_fact);
+        let total_currency_valuation = portfolio.total_amount_currencies.map(money_fact);
         Ok(PortfolioFact {
             account_id: portfolio
                 .account_id
                 .unwrap_or_else(|| scope.broker_account_id.clone()),
-            currencies,
+            total_portfolio_valuation,
+            total_currency_valuation,
+            cash_balances: BTreeMap::new(),
             broker_observed_at_unix_ms: None,
         })
     }
@@ -113,11 +112,23 @@ impl BrokerReadPort for SandboxReads {
     async fn positions(
         &self,
         scope: &RuntimeScope,
-    ) -> Result<Vec<vox_runtime::PositionFact>, BrokerPortError> {
+    ) -> Result<vox_runtime::PositionsFact, BrokerPortError> {
         let positions = AccountReadClient::new(self.client.clone())
             .sandbox_positions(scope.broker_account_id.clone())
             .await
             .map_err(|error| port_error("OperationsService", "GetSandboxPositions", error))?;
+        let cash_balances = positions
+            .money
+            .iter()
+            .filter_map(|money| {
+                money.currency.clone().map(|currency| {
+                    (
+                        currency,
+                        money.amount.fixed_point().total_nanos().to_string(),
+                    )
+                })
+            })
+            .collect();
         let mut facts = Vec::new();
         for position in positions.securities {
             if let Some(instrument_uid) = position.identity.instrument_uid {
@@ -134,7 +145,10 @@ impl BrokerReadPort for SandboxReads {
                 facts.push(position_fact(scope, instrument_uid, position.balance));
             }
         }
-        Ok(facts)
+        Ok(vox_runtime::PositionsFact {
+            instruments: facts,
+            cash_balances,
+        })
     }
 
     async fn active_orders(&self, scope: &RuntimeScope) -> Result<Vec<OrderFact>, BrokerPortError> {
@@ -179,14 +193,12 @@ impl BrokerReadPort for SandboxReads {
                     message: "stop omitted broker identity".into(),
                     retry_after: None,
                 })?;
-                let active = stop.status == v1::StopOrderStatusOption::StopOrderStatusActive as i32;
                 Ok(StopFact {
                     account_id: scope.broker_account_id.clone(),
                     broker_stop_order_id: id,
-                    logical_request_id: None,
                     instrument_uid: stop.instrument_uid.unwrap_or_default(),
-                    active,
-                    terminal: !active,
+                    status: stop_status(stop.status),
+                    status_cause: None,
                 })
             })
             .collect()
@@ -287,70 +299,68 @@ impl BrokerReadPort for SandboxReads {
 }
 
 struct SandboxExecution {
-    client: TInvestGrpcClient,
-    instrument_uid: String,
-    limit_price: FixedPoint,
+    adapter: TInvestRuntimeExecutionAdapter,
+    force_unknown_once: AtomicBool,
 }
 
 #[async_trait]
 impl ExecutionPort for SandboxExecution {
     async fn dispatch_once(
         &self,
-        scope: &RuntimeScope,
+        _scope: &RuntimeScope,
+        command: &RuntimeExecutionCommand,
         mutation: &MutationRecord,
     ) -> Result<ExecutionResult, BrokerPortError> {
-        if mutation.kind != MutationKind::PostOrder {
-            return Ok(ExecutionResult::Rejected {
-                broker_evidence_ref: "runtime-live:unsupported-kind".into(),
-            });
-        }
-        let request = regular_order_request(&RegularOrderCommand {
-            account_id: scope.broker_account_id.clone(),
-            instrument_id: self.instrument_uid.clone(),
-            client_request_id: mutation.logical_request_id.clone(),
-            quantity_lots: 1,
-            price: Some(self.limit_price),
-            price_convention: ExecutionPriceConvention::SettlementCurrency,
-            side: OrderSide::Buy,
-            order_type: RegularOrderType::Limit,
-            time_in_force: Some(TimeInForce::Day),
-            confirm_margin_trade: false,
-        })
-        .map_err(|error| port_error("OrdersService", "PostSandboxOrder", error))?;
-        let response = self
-            .client
-            .post_sandbox_order(
-                MutationGuard::new(Environment::Sandbox)
-                    .authorize_mutation()
-                    .map_err(|error| port_error("Runtime", "authorize_mutation", error))?,
-                request,
-            )
-            .await
-            .map_err(|error| grpc_port_error("OrdersService", "PostSandboxOrder", error))?;
-        let broker_order_id = nonempty(response.body.order_id).ok_or_else(|| BrokerPortError {
-            service: "OrdersService",
-            method: "PostSandboxOrder",
-            class: BrokerResultClass::Permanent,
-            message: "acknowledgement omitted broker order identity".into(),
-            retry_after: None,
-        })?;
-        let evidence = format!(
-            "request_id={}; broker_order_id={broker_order_id}",
-            response.metadata.request_id
-        );
-        if mutation.redacted_request_evidence.contains("fault=unknown") {
-            Ok(ExecutionResult::UnknownAfterDispatch {
-                broker_evidence_ref: Some(evidence),
-            })
-        } else {
-            Ok(ExecutionResult::Acknowledged {
-                broker_evidence_ref: evidence,
-                links: BrokerIdentityLinks {
-                    logical_request_id: mutation.logical_request_id.clone(),
-                    broker_order_id: Some(broker_order_id),
-                    ..BrokerIdentityLinks::default()
-                },
-            })
+        match self.adapter.dispatch_once(command).await {
+            Ok(acknowledgement) => {
+                let evidence = format!(
+                    "request_id={}; broker_identity_present={}",
+                    acknowledgement.transport_request_id,
+                    acknowledgement.broker_order_id.is_some()
+                        || acknowledgement.replacement_broker_order_id.is_some()
+                        || acknowledgement.broker_stop_order_id.is_some()
+                );
+                if self.force_unknown_once.swap(false, Ordering::SeqCst) {
+                    return Ok(ExecutionResult::UnknownAfterDispatch {
+                        broker_evidence_ref: Some(evidence),
+                    });
+                }
+                Ok(ExecutionResult::Acknowledged {
+                    broker_evidence_ref: evidence,
+                    links: BrokerIdentityLinks {
+                        logical_request_id: mutation.logical_request_id.clone(),
+                        broker_order_id: acknowledgement.broker_order_id,
+                        replacement_broker_order_id: acknowledgement.replacement_broker_order_id,
+                        broker_stop_order_id: acknowledgement.broker_stop_order_id,
+                        provider_operation_ids: acknowledgement
+                            .provider_operation_id
+                            .into_iter()
+                            .collect(),
+                        broker_fill_ids: BTreeSet::new(),
+                    },
+                })
+            }
+            Err(RuntimeExecutionAdapterError::Validation(error)) => Ok(ExecutionResult::Rejected {
+                broker_evidence_ref: format!("pre-dispatch:{error}"),
+            }),
+            Err(RuntimeExecutionAdapterError::Authorization(error)) => {
+                Ok(ExecutionResult::Rejected {
+                    broker_evidence_ref: format!("pre-dispatch:{error}"),
+                })
+            }
+            Err(RuntimeExecutionAdapterError::Transport(error))
+                if authoritative_rejection(&error) =>
+            {
+                Ok(ExecutionResult::Rejected {
+                    broker_evidence_ref: format!(
+                        "provider-rejection:{}",
+                        error.metadata.request_id
+                    ),
+                })
+            }
+            Err(RuntimeExecutionAdapterError::Transport(error)) => {
+                Err(grpc_port_error("Execution", "dispatch_once", error))
+            }
         }
     }
 }
@@ -401,6 +411,7 @@ impl SandboxStreams {
                 broker_order_id: None,
                 broker_stop_order_id: None,
                 logical_request_id: None,
+                execution_state: None,
                 runtime_epoch,
             }))
             .await?;
@@ -540,6 +551,7 @@ impl ExecutionStreamPort for SandboxStreams {
                                     broker_order_id: None,
                                     broker_stop_order_id: None,
                                     logical_request_id: None,
+                                    execution_state: None,
                                     runtime_epoch,
                                 }))
                                 .await
@@ -586,6 +598,7 @@ impl ExecutionStreamPort for SandboxStreams {
                                     broker_order_id: None,
                                     broker_stop_order_id: None,
                                     logical_request_id: None,
+                                    execution_state: None,
                                     runtime_epoch,
                                 }))
                                 .await
@@ -630,6 +643,7 @@ impl ExecutionStreamPort for SandboxStreams {
                                     broker_order_id: None,
                                     broker_stop_order_id: None,
                                     logical_request_id: None,
+                                    execution_state: None,
                                     runtime_epoch,
                                 }))
                                 .await
@@ -821,13 +835,17 @@ async fn complete_runtime_qualification_in_sandbox() -> Result<(), BoxError> {
         snapshot_starts: snapshot_starts.clone(),
     });
     let execution = Arc::new(SandboxExecution {
-        client: client.clone(),
-        instrument_uid,
-        limit_price,
+        adapter: TInvestRuntimeExecutionAdapter::new(
+            client.clone(),
+            ExecutionRoute::Sandbox,
+            false,
+        ),
+        force_unknown_once: AtomicBool::new(false),
     });
     let streams = Arc::new(SandboxStreams::new(client.clone()));
     let metrics = Arc::new(InMemoryMetrics::default());
     let mut broker_order_ids = BTreeSet::new();
+    let mut broker_stop_order_ids = BTreeSet::new();
     let mut logical_request_ids = BTreeSet::new();
     let mut ledger = LiveLedger::default();
 
@@ -881,9 +899,8 @@ async fn complete_runtime_qualification_in_sandbox() -> Result<(), BoxError> {
         logical_request_ids.insert(acknowledged_id.clone());
         let receipt = coordinator
             .dispatch(
+                live_order_command(&scope, &instrument_uid, limit_price, &acknowledged_id),
                 acknowledged_id.clone(),
-                MutationKind::PostOrder,
-                "quantity_lots=1; order_type=LIMIT; price=redacted",
                 uuid::Uuid::new_v4().to_string(),
             )
             .await?;
@@ -948,18 +965,59 @@ async fn complete_runtime_qualification_in_sandbox() -> Result<(), BoxError> {
             "regular_order_reconciliation",
             "linked active broker order converged without replay",
         );
-        ledger.qualified(
-            "stop_protection_reconciliation",
-            format!("active_stops={}; #10 relative/absolute trailing identities remain accepted", restart_report.active_stop_count),
-        );
+
+        wait_ready(&restarted).await?;
+        let stop_logical_id = uuid::Uuid::new_v4().to_string();
+        logical_request_ids.insert(stop_logical_id.clone());
+        let stop_receipt = restarted
+            .dispatch(
+                live_fixed_stop_command(
+                    &scope,
+                    &instrument_uid,
+                    limit_price,
+                    &stop_logical_id,
+                ),
+                stop_logical_id.clone(),
+                uuid::Uuid::new_v4().to_string(),
+            )
+            .await?;
+        require(
+            stop_receipt.state == JournalState::Acknowledged,
+            "real sandbox stop was not acknowledged",
+        )?;
+        let broker_stop_order_id = restarted_store
+            .all_identity_links(&scope.key())?
+            .into_iter()
+            .find(|links| links.logical_request_id == stop_logical_id)
+            .and_then(|links| links.broker_stop_order_id)
+            .ok_or("durable sandbox stop identity missing")?;
+        broker_stop_order_ids.insert(broker_stop_order_id.clone());
+        let active_stops = canonical_stop_orders(
+            client
+                .get_sandbox_stop_orders(v1::GetStopOrdersRequest {
+                    account_id: scope.broker_account_id.clone(),
+                    status: v1::StopOrderStatusOption::StopOrderStatusActive as i32,
+                    from: None,
+                    to: None,
+                })
+                .await?
+                .body,
+        )?;
+        require(
+            active_stops.iter().any(|stop| {
+                stop.broker_stop_order_id.as_deref() == Some(&broker_stop_order_id)
+            }),
+            "real sandbox stop absent from GetSandboxStopOrders",
+        )?;
+        wait_ready(&restarted).await?;
 
         let unknown_id = uuid::Uuid::new_v4().to_string();
         logical_request_ids.insert(unknown_id.clone());
+        execution.force_unknown_once.store(true, Ordering::SeqCst);
         let unknown = restarted
             .dispatch(
+                live_order_command(&scope, &instrument_uid, limit_price, &unknown_id),
                 unknown_id.clone(),
-                MutationKind::PostOrder,
-                "quantity_lots=1; order_type=LIMIT; fault=unknown",
                 uuid::Uuid::new_v4().to_string(),
             )
             .await;
@@ -996,6 +1054,48 @@ async fn complete_runtime_qualification_in_sandbox() -> Result<(), BoxError> {
             "unknown_restart_authoritative_resolution_no_replay",
             "GetSandboxOrderState by REQUEST identity resolved UNKNOWN; no mutation replay",
         );
+        require(
+            resolved_report.active_stop_count > 0,
+            "real linked stop missing after runtime restart",
+        )?;
+        resolved
+            .dispatch(
+                RuntimeExecutionCommand::CancelStopOrder(CancelStopOrderCommand {
+                    account_id: scope.broker_account_id.clone(),
+                    broker_stop_order_id: broker_stop_order_id.clone(),
+                }),
+                uuid::Uuid::new_v4().to_string(),
+                uuid::Uuid::new_v4().to_string(),
+            )
+            .await?;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let active_after_cancel = canonical_stop_orders(
+            client
+                .get_sandbox_stop_orders(v1::GetStopOrdersRequest {
+                    account_id: scope.broker_account_id.clone(),
+                    status: v1::StopOrderStatusOption::StopOrderStatusActive as i32,
+                    from: None,
+                    to: None,
+                })
+                .await?
+                .body,
+        )?;
+        require(
+            active_after_cancel.iter().all(|stop| {
+                stop.broker_stop_order_id.as_deref() != Some(&broker_stop_order_id)
+            }),
+            "cancelled sandbox stop remains active",
+        )?;
+        ledger.qualified(
+            "stop_protection_reconciliation",
+            format!(
+                "real PostSandboxStopOrder id={broker_stop_order_id}; GetSandboxStopOrders readback; restart preserved link; CancelSandboxStopOrder; active_remnants=0"
+            ),
+        );
+        ledger.gated(
+            "post_stop_unknown_recovery",
+            "PROVIDER_LIMITATION: no official request-identity readback or documented replay guarantee; live ambiguity not injected; deterministic chaos proves UNKNOWN/HALTED and no replay",
+        );
 
         let epoch = resolved.health().await.runtime_epoch;
         let event = BrokerEvent {
@@ -1005,6 +1105,7 @@ async fn complete_runtime_qualification_in_sandbox() -> Result<(), BoxError> {
             broker_order_id: broker_order_ids.iter().next().cloned(),
             broker_stop_order_id: None,
             logical_request_id: None,
+            execution_state: None,
             runtime_epoch: epoch,
         };
         require(
@@ -1060,19 +1161,26 @@ async fn complete_runtime_qualification_in_sandbox() -> Result<(), BoxError> {
         &logical_request_ids,
     )
     .await;
-    match &cleanup {
-        Ok(detail) => ledger.qualified("cleanup_readback", detail),
-        Err(error) => ledger.failed("cleanup_readback", error),
+    let stop_cleanup =
+        cleanup_stops(&client, &scope.broker_account_id, &broker_stop_order_ids).await;
+    match (&cleanup, &stop_cleanup) {
+        (Ok(orders), Ok(stops)) => {
+            ledger.qualified("cleanup_readback", format!("{orders}; {stops}"));
+        }
+        (Err(error), _) | (_, Err(error)) => ledger.failed("cleanup_readback", error),
     }
     cleanup_path(&path);
     if let Err(error) = &result {
         ledger.fail_missing(error);
     } else if let Err(error) = &cleanup {
         ledger.fail_missing(error);
+    } else if let Err(error) = &stop_cleanup {
+        ledger.fail_missing(error);
     }
     ledger.finish()?;
     result?;
     cleanup?;
+    stop_cleanup?;
     Ok(())
 }
 
@@ -1094,7 +1202,7 @@ async fn runtime_idle_soak_in_sandbox() -> Result<(), BoxError> {
         .into_iter()
         .find(|account| account.status == v1::AccountStatus::Open as i32)
         .ok_or("open sandbox account is required")?;
-    let (instrument_uid, limit_price) = qualification_instrument(&client).await?;
+    let (_instrument_uid, _limit_price) = qualification_instrument(&client).await?;
     let path = runtime_path();
     let scope = RuntimeScope::new(
         Provider::TInvest,
@@ -1114,9 +1222,8 @@ async fn runtime_idle_soak_in_sandbox() -> Result<(), BoxError> {
             snapshot_starts: Arc::new(AtomicU64::new(0)),
         }),
         Arc::new(SandboxExecution {
-            client,
-            instrument_uid,
-            limit_price,
+            adapter: TInvestRuntimeExecutionAdapter::new(client, ExecutionRoute::Sandbox, false),
+            force_unknown_once: AtomicBool::new(false),
         }),
         streams,
         metrics.clone(),
@@ -1350,6 +1457,10 @@ fn stream_signal(
                     broker_order_id: Some(broker_order_id),
                     broker_stop_order_id: None,
                     logical_request_id: order.client_request_id,
+                    execution_state: Some(BrokerExecutionState::Order {
+                        status: order_status(order.execution_status),
+                        status_cause: order.status_cause.map(|code| ProviderStatusCause { code }),
+                    }),
                     runtime_epoch,
                 })
             })
@@ -1363,6 +1474,10 @@ fn stream_signal(
                     broker_order_id: None,
                     broker_stop_order_id: Some(broker_stop_order_id),
                     logical_request_id: None,
+                    execution_state: Some(BrokerExecutionState::Stop {
+                        status: stop_status(stop.status),
+                        status_cause: None,
+                    }),
                     runtime_epoch,
                 })
             })
@@ -1379,12 +1494,6 @@ fn order_fact(
     scope: &RuntimeScope,
     order: vox_tinvest::execution::CanonicalOrderState,
 ) -> Result<OrderFact, BrokerPortError> {
-    let status = v1::OrderExecutionReportStatus::try_from(order.execution_status).ok();
-    let active = matches!(
-        status,
-        Some(v1::OrderExecutionReportStatus::ExecutionReportStatusNew)
-            | Some(v1::OrderExecutionReportStatus::ExecutionReportStatusPartiallyfill)
-    );
     Ok(OrderFact {
         account_id: scope.broker_account_id.clone(),
         broker_order_id: order.broker_order_id.ok_or_else(|| BrokerPortError {
@@ -1396,8 +1505,188 @@ fn order_fact(
         })?,
         logical_request_id: order.client_request_id,
         instrument_uid: order.instrument_uid.unwrap_or_default(),
-        active,
-        terminal: !active,
+        status: order_status(order.execution_status),
+        status_cause: None,
+    })
+}
+
+async fn cleanup_stops(
+    client: &TInvestGrpcClient,
+    account_id: &str,
+    expected: &BTreeSet<String>,
+) -> Result<String, BoxError> {
+    let active = canonical_stop_orders(
+        client
+            .get_sandbox_stop_orders(v1::GetStopOrdersRequest {
+                account_id: account_id.to_owned(),
+                status: v1::StopOrderStatusOption::StopOrderStatusActive as i32,
+                from: None,
+                to: None,
+            })
+            .await?
+            .body,
+    )?;
+    let cleanup_ids = active
+        .into_iter()
+        .filter_map(|stop| stop.broker_stop_order_id)
+        .filter(|id| expected.contains(id))
+        .collect::<BTreeSet<_>>();
+    for stop_order_id in &cleanup_ids {
+        let result = client
+            .cancel_sandbox_stop_order(
+                MutationGuard::new(Environment::Sandbox).authorize_mutation()?,
+                v1::CancelStopOrderRequest {
+                    account_id: account_id.to_owned(),
+                    stop_order_id: stop_order_id.clone(),
+                },
+            )
+            .await;
+        if let Err(error) = result
+            && !provider_not_found(&error)
+        {
+            return Err(error.into());
+        }
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let remaining = canonical_stop_orders(
+        client
+            .get_sandbox_stop_orders(v1::GetStopOrdersRequest {
+                account_id: account_id.to_owned(),
+                status: v1::StopOrderStatusOption::StopOrderStatusActive as i32,
+                from: None,
+                to: None,
+            })
+            .await?
+            .body,
+    )?;
+    require(
+        remaining.iter().all(|stop| {
+            stop.broker_stop_order_id
+                .as_ref()
+                .is_none_or(|id| !expected.contains(id))
+        }),
+        "qualification stop remnants remain active",
+    )?;
+    Ok(format!(
+        "owned_stops_canceled={}; active_stop_readback=0",
+        cleanup_ids.len()
+    ))
+}
+
+fn order_status(value: i32) -> OrderExecutionStatus {
+    match v1::OrderExecutionReportStatus::try_from(value) {
+        Ok(v1::OrderExecutionReportStatus::ExecutionReportStatusNew) => OrderExecutionStatus::New,
+        Ok(v1::OrderExecutionReportStatus::ExecutionReportStatusPartiallyfill) => {
+            OrderExecutionStatus::PartiallyFilled
+        }
+        Ok(v1::OrderExecutionReportStatus::ExecutionReportStatusFill) => {
+            OrderExecutionStatus::Filled
+        }
+        Ok(v1::OrderExecutionReportStatus::ExecutionReportStatusCancelled) => {
+            OrderExecutionStatus::Cancelled
+        }
+        Ok(v1::OrderExecutionReportStatus::ExecutionReportStatusRejected) => {
+            OrderExecutionStatus::Rejected
+        }
+        _ => OrderExecutionStatus::UnknownProviderStatus(value),
+    }
+}
+
+fn stop_status(value: i32) -> StopExecutionStatus {
+    match v1::StopOrderStatusOption::try_from(value) {
+        Ok(v1::StopOrderStatusOption::StopOrderStatusActive) => StopExecutionStatus::Active,
+        Ok(v1::StopOrderStatusOption::StopOrderStatusExecuted) => StopExecutionStatus::Executed,
+        Ok(v1::StopOrderStatusOption::StopOrderStatusCanceled) => StopExecutionStatus::Canceled,
+        Ok(v1::StopOrderStatusOption::StopOrderStatusExpired) => StopExecutionStatus::Expired,
+        _ => StopExecutionStatus::UnknownProviderStatus(value),
+    }
+}
+
+#[test]
+fn provider_status_projection_preserves_terminal_meaning_and_unknown_wire_values() {
+    assert_eq!(
+        order_status(v1::OrderExecutionReportStatus::ExecutionReportStatusFill as i32),
+        OrderExecutionStatus::Filled
+    );
+    assert_eq!(
+        order_status(v1::OrderExecutionReportStatus::ExecutionReportStatusCancelled as i32),
+        OrderExecutionStatus::Cancelled
+    );
+    assert_eq!(
+        order_status(v1::OrderExecutionReportStatus::ExecutionReportStatusRejected as i32),
+        OrderExecutionStatus::Rejected
+    );
+    assert_eq!(
+        order_status(77_777),
+        OrderExecutionStatus::UnknownProviderStatus(77_777)
+    );
+    assert_eq!(
+        stop_status(v1::StopOrderStatusOption::StopOrderStatusExecuted as i32),
+        StopExecutionStatus::Executed
+    );
+    assert_eq!(
+        stop_status(v1::StopOrderStatusOption::StopOrderStatusCanceled as i32),
+        StopExecutionStatus::Canceled
+    );
+    assert_eq!(
+        stop_status(v1::StopOrderStatusOption::StopOrderStatusExpired as i32),
+        StopExecutionStatus::Expired
+    );
+    assert_eq!(
+        stop_status(88_888),
+        StopExecutionStatus::UnknownProviderStatus(88_888)
+    );
+}
+
+fn money_fact(value: vox_tinvest::canonical::CanonicalMoney) -> MoneyFact {
+    MoneyFact {
+        currency: value.currency.unwrap_or_default(),
+        amount_nanos: value.amount.fixed_point().total_nanos().to_string(),
+    }
+}
+
+fn live_order_command(
+    scope: &RuntimeScope,
+    instrument_uid: &str,
+    limit_price: FixedPoint,
+    client_request_id: &str,
+) -> RuntimeExecutionCommand {
+    RuntimeExecutionCommand::RegularOrder(RegularOrderCommand {
+        account_id: scope.broker_account_id.clone(),
+        instrument_id: instrument_uid.to_owned(),
+        client_request_id: client_request_id.to_owned(),
+        quantity_lots: 1,
+        price: Some(limit_price),
+        price_convention: ExecutionPriceConvention::SettlementCurrency,
+        side: OrderSide::Buy,
+        order_type: RegularOrderType::Limit,
+        time_in_force: Some(TimeInForce::Day),
+        confirm_margin_trade: false,
+    })
+}
+
+fn live_fixed_stop_command(
+    scope: &RuntimeScope,
+    instrument_uid: &str,
+    reference_price: FixedPoint,
+    client_request_id: &str,
+) -> RuntimeExecutionCommand {
+    let trigger_price = FixedPoint::from_total_nanos(reference_price.total_nanos() / 2);
+    RuntimeExecutionCommand::PostStopOrder(ProtectionLegCommand {
+        account_id: scope.broker_account_id.clone(),
+        instrument_id: instrument_uid.to_owned(),
+        client_request_id: client_request_id.to_owned(),
+        quantity_lots: 1,
+        position_side: PositionSide::Long,
+        price_convention: ExecutionPriceConvention::SettlementCurrency,
+        reference_price,
+        expire_at_unix_seconds: None,
+        expire_at_nanos: None,
+        confirm_margin_trade: false,
+        leg: ProtectionLeg::StopLoss(StopLossProtection::Fixed {
+            trigger_price,
+            limit_price: None,
+        }),
     })
 }
 
@@ -1473,10 +1762,6 @@ fn now_unix_ms() -> i64 {
         .unwrap_or(i64::MAX)
 }
 
-fn nonempty(value: String) -> Option<String> {
-    (!value.trim().is_empty()).then_some(value)
-}
-
 fn require(condition: bool, message: &'static str) -> Result<(), BoxError> {
     if condition {
         Ok(())
@@ -1486,21 +1771,34 @@ fn require(condition: bool, message: &'static str) -> Result<(), BoxError> {
 }
 
 #[derive(Default)]
-struct LiveLedger(BTreeMap<&'static str, Result<String, String>>);
+struct LiveLedger(BTreeMap<&'static str, LiveOutcome>);
+
+enum LiveOutcome {
+    Qualified(String),
+    Gated(String),
+    Failed(String),
+}
 
 impl LiveLedger {
     fn qualified(&mut self, row: &'static str, detail: impl core::fmt::Display) {
-        self.0.insert(row, Ok(detail.to_string()));
+        self.0
+            .insert(row, LiveOutcome::Qualified(detail.to_string()));
+    }
+
+    fn gated(&mut self, row: &'static str, detail: impl core::fmt::Display) {
+        self.0.insert(row, LiveOutcome::Gated(detail.to_string()));
     }
 
     fn failed(&mut self, row: &'static str, error: impl core::fmt::Display) {
-        self.0.insert(row, Err(error.to_string()));
+        self.0.insert(row, LiveOutcome::Failed(error.to_string()));
     }
 
     fn fail_missing(&mut self, error: impl core::fmt::Display) {
         let detail = format!("dependent qualification aborted: {error}");
         for row in RUNTIME_QUALIFICATION_ROWS {
-            self.0.entry(row).or_insert_with(|| Err(detail.clone()));
+            self.0
+                .entry(row)
+                .or_insert_with(|| LiveOutcome::Failed(detail.clone()));
         }
     }
 
@@ -1508,10 +1806,13 @@ impl LiveLedger {
         let mut failures = Vec::new();
         for row in RUNTIME_QUALIFICATION_ROWS {
             match self.0.get(row) {
-                Some(Ok(detail)) => {
+                Some(LiveOutcome::Qualified(detail)) => {
                     println!("RUNTIME_QUALIFICATION {row}: QUALIFIED; {detail}");
                 }
-                Some(Err(detail)) => {
+                Some(LiveOutcome::Gated(detail)) => {
+                    println!("RUNTIME_QUALIFICATION {row}: GATED; {detail}");
+                }
+                Some(LiveOutcome::Failed(detail)) => {
                     println!("RUNTIME_QUALIFICATION {row}: FAILED; {detail}");
                     failures.push(row);
                 }

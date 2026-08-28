@@ -9,8 +9,8 @@ use super::money::Decimal;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use vox_runtime::{
-    BrokerAccount, OperationFact, OperationsPage, OrderFact, PortfolioFact, PositionFact,
-    ReconciliationCheckpoint, StopFact,
+    BrokerAccount, MoneyFact, OperationFact, OperationsPage, OrderExecutionStatus, OrderFact,
+    PortfolioFact, PositionFact, ReconciliationCheckpoint, StopExecutionStatus, StopFact,
 };
 
 use crate::binding::AccountBinding;
@@ -51,12 +51,21 @@ pub struct CurrencyBalanceDto {
     pub amount: Decimal,
 }
 
-/// Portfolio as the broker reports it: currency balances and when they were observed.
-///
-/// Valuation, P&L, exposure and margin are **not** here. #22 owns them.
+/// One aggregate broker valuation, exact. Not a spendable cash balance.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
+pub struct MoneyValuationDto {
+    #[schema(example = "rub")]
+    pub currency: String,
+    pub amount: Decimal,
+}
+
+/// Portfolio aggregates and authoritative cash balances remain separate.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct PortfolioDto {
     pub account_id: String,
+    pub total_portfolio_valuation: Option<MoneyValuationDto>,
+    pub total_currency_valuation: Option<MoneyValuationDto>,
+    /// Actual currency balances from GetPositions, never inferred from portfolio aggregates.
     pub balances: Vec<CurrencyBalanceDto>,
     pub broker_observed_at_unix_ms: Option<i64>,
 }
@@ -67,25 +76,46 @@ impl PortfolioDto {
         value: &PortfolioFact,
     ) -> Result<Self, ApiError> {
         require_broker_account(binding, &value.account_id)?;
-        let mut balances = Vec::with_capacity(value.currencies.len());
-        for (currency, amount) in &value.currencies {
+        let mut balances = Vec::with_capacity(value.cash_balances.len());
+        for (currency, amount_nanos) in &value.cash_balances {
             balances.push(CurrencyBalanceDto {
                 currency: currency.clone(),
-                amount: Decimal::from_exact_string(amount).map_err(|error| {
-                    ApiError::new(
-                        ErrorCategory::Internal,
-                        "INVALID_BROKER_DECIMAL",
-                        format!("portfolio amount for {currency} is not an exact decimal: {error}"),
-                    )
-                })?,
+                amount: decimal_from_nanos(amount_nanos, "cash balance", currency)?,
             });
         }
         Ok(Self {
             account_id: binding.account_id().to_owned(),
+            total_portfolio_valuation: value
+                .total_portfolio_valuation
+                .as_ref()
+                .map(money_valuation)
+                .transpose()?,
+            total_currency_valuation: value
+                .total_currency_valuation
+                .as_ref()
+                .map(money_valuation)
+                .transpose()?,
             balances,
             broker_observed_at_unix_ms: value.broker_observed_at_unix_ms,
         })
     }
+}
+
+fn money_valuation(value: &MoneyFact) -> Result<MoneyValuationDto, ApiError> {
+    Ok(MoneyValuationDto {
+        currency: value.currency.clone(),
+        amount: decimal_from_nanos(&value.amount_nanos, "valuation", &value.currency)?,
+    })
+}
+
+fn decimal_from_nanos(value: &str, kind: &str, currency: &str) -> Result<Decimal, ApiError> {
+    Decimal::from_total_nanos_string(value).map_err(|error| {
+        ApiError::new(
+            ErrorCategory::Internal,
+            "INVALID_BROKER_DECIMAL",
+            format!("{kind} for {currency} is not exact total nanos: {error}"),
+        )
+    })
 }
 
 /// A position as the broker reports it: instrument and quantity, nothing derived.
@@ -113,7 +143,35 @@ impl PositionDto {
     }
 }
 
-/// An order identity and its liveness. Price and quantity are not in the read model yet.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
+#[serde(
+    tag = "status",
+    content = "wire_value",
+    rename_all = "SCREAMING_SNAKE_CASE"
+)]
+pub enum OrderExecutionStatusDto {
+    New,
+    PartiallyFilled,
+    Filled,
+    Cancelled,
+    Rejected,
+    UnknownProviderStatus(i32),
+}
+
+impl From<OrderExecutionStatus> for OrderExecutionStatusDto {
+    fn from(value: OrderExecutionStatus) -> Self {
+        match value {
+            OrderExecutionStatus::New => Self::New,
+            OrderExecutionStatus::PartiallyFilled => Self::PartiallyFilled,
+            OrderExecutionStatus::Filled => Self::Filled,
+            OrderExecutionStatus::Cancelled => Self::Cancelled,
+            OrderExecutionStatus::Rejected => Self::Rejected,
+            OrderExecutionStatus::UnknownProviderStatus(wire) => Self::UnknownProviderStatus(wire),
+        }
+    }
+}
+
+/// Order identity and exact provider execution status.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct OrderDto {
     pub account_id: String,
@@ -121,8 +179,8 @@ pub struct OrderDto {
     /// Vox-side identity of the command that created it, when it was ours.
     pub logical_request_id: Option<String>,
     pub instrument_uid: String,
-    pub active: bool,
-    pub terminal: bool,
+    pub status: OrderExecutionStatusDto,
+    pub status_cause_code: Option<i32>,
 }
 
 impl OrderDto {
@@ -133,21 +191,46 @@ impl OrderDto {
             broker_order_id: value.broker_order_id.clone(),
             logical_request_id: value.logical_request_id.clone(),
             instrument_uid: value.instrument_uid.clone(),
-            active: value.active,
-            terminal: value.terminal,
+            status: value.status.into(),
+            status_cause_code: value.status_cause.as_ref().map(|cause| cause.code),
         })
     }
 }
 
-/// A stop order identity and its liveness. Trigger levels are not in the read model yet.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
+#[serde(
+    tag = "status",
+    content = "wire_value",
+    rename_all = "SCREAMING_SNAKE_CASE"
+)]
+pub enum StopExecutionStatusDto {
+    Active,
+    Executed,
+    Canceled,
+    Expired,
+    UnknownProviderStatus(i32),
+}
+
+impl From<StopExecutionStatus> for StopExecutionStatusDto {
+    fn from(value: StopExecutionStatus) -> Self {
+        match value {
+            StopExecutionStatus::Active => Self::Active,
+            StopExecutionStatus::Executed => Self::Executed,
+            StopExecutionStatus::Canceled => Self::Canceled,
+            StopExecutionStatus::Expired => Self::Expired,
+            StopExecutionStatus::UnknownProviderStatus(wire) => Self::UnknownProviderStatus(wire),
+        }
+    }
+}
+
+/// Stop identity and exact provider status. Provider readback has no logical request identity.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct StopOrderDto {
     pub account_id: String,
     pub broker_stop_order_id: String,
-    pub logical_request_id: Option<String>,
     pub instrument_uid: String,
-    pub active: bool,
-    pub terminal: bool,
+    pub status: StopExecutionStatusDto,
+    pub status_cause_code: Option<i32>,
 }
 
 impl StopOrderDto {
@@ -156,10 +239,9 @@ impl StopOrderDto {
         Ok(Self {
             account_id: binding.account_id().to_owned(),
             broker_stop_order_id: value.broker_stop_order_id.clone(),
-            logical_request_id: value.logical_request_id.clone(),
             instrument_uid: value.instrument_uid.clone(),
-            active: value.active,
-            terminal: value.terminal,
+            status: value.status.into(),
+            status_cause_code: value.status_cause.as_ref().map(|cause| cause.code),
         })
     }
 }
@@ -262,5 +344,87 @@ impl From<&ReconciliationCheckpoint> for ReconciliationDto {
             operations_complete: value.operations_complete,
             complete: value.complete(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use vox_runtime::{ProviderStatusCause, StopExecutionStatus};
+
+    use super::*;
+
+    fn binding() -> Result<AccountBinding, crate::binding::BindingError> {
+        AccountBinding::new("account:one", "connection:one", "broker-one")
+    }
+
+    #[test]
+    fn portfolio_valuations_never_become_fake_cash_balances()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dto = PortfolioDto::from_bound_fact(
+            &binding()?,
+            &PortfolioFact {
+                account_id: "broker-one".into(),
+                total_portfolio_valuation: Some(MoneyFact {
+                    currency: "RUB".into(),
+                    amount_nanos: "100000000001".into(),
+                }),
+                total_currency_valuation: Some(MoneyFact {
+                    currency: "RUB".into(),
+                    amount_nanos: "25000000002".into(),
+                }),
+                cash_balances: BTreeMap::new(),
+                broker_observed_at_unix_ms: Some(1),
+            },
+        )?;
+        assert_eq!(
+            dto.total_portfolio_valuation
+                .as_ref()
+                .map(|value| value.amount.as_str()),
+            Some("100.000000001")
+        );
+        assert_eq!(
+            dto.total_currency_valuation
+                .as_ref()
+                .map(|value| value.amount.as_str()),
+            Some("25.000000002")
+        );
+        assert!(dto.balances.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn public_status_projection_keeps_terminal_meaning_and_unknown_wire_value()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let order = OrderDto::from_bound_fact(
+            &binding()?,
+            &OrderFact {
+                account_id: "broker-one".into(),
+                broker_order_id: "order-one".into(),
+                logical_request_id: Some("request-one".into()),
+                instrument_uid: "instrument-one".into(),
+                status: OrderExecutionStatus::Rejected,
+                status_cause: Some(ProviderStatusCause { code: 15 }),
+            },
+        )?;
+        assert_eq!(order.status, OrderExecutionStatusDto::Rejected);
+        assert_eq!(order.status_cause_code, Some(15));
+
+        let stop = StopOrderDto::from_bound_fact(
+            &binding()?,
+            &StopFact {
+                account_id: "broker-one".into(),
+                broker_stop_order_id: "stop-one".into(),
+                instrument_uid: "instrument-one".into(),
+                status: StopExecutionStatus::UnknownProviderStatus(88_888),
+                status_cause: None,
+            },
+        )?;
+        assert_eq!(
+            stop.status,
+            StopExecutionStatusDto::UnknownProviderStatus(88_888)
+        );
+        Ok(())
     }
 }

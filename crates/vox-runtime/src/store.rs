@@ -10,12 +10,12 @@ use serde::de::DeserializeOwned;
 
 use crate::model::{
     BrokerEvent, BrokerIdentityLinks, DerivedPositionExpectation, JournalState, MutationRecord,
-    ReasonCode, ReconciliationCheckpoint, RuntimeAuditRecord, RuntimeScope, RuntimeState,
-    StateTransition, StoreCounts,
+    ReasonCode, ReconciliationCheckpoint, ReconciliationDisposition, RuntimeAuditRecord,
+    RuntimeScope, RuntimeState, StateTransition, StoreCounts,
 };
 use crate::ports::{RuntimeStore, StoreError};
 
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 const SOFTWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const MIGRATION_V1: &str = r#"
@@ -161,6 +161,34 @@ BEGIN
         LIMIT -1 OFFSET 20000
     );
 END;
+"#;
+
+const MIGRATION_V3: &str = r#"
+UPDATE mutation_journal
+SET redacted_request_evidence =
+    '{"command_kind":' || mutation_kind ||
+    ',"instrument_ref":null,"quantity_lots":null,"price_present":false,"protection_kind":null}';
+CREATE TABLE broker_identity_links_v3 (
+    logical_request_id TEXT PRIMARY KEY REFERENCES mutation_journal(logical_request_id) ON DELETE RESTRICT,
+    scope_key TEXT NOT NULL REFERENCES runtime_instance(scope_key) ON DELETE RESTRICT,
+    broker_order_id TEXT,
+    replacement_broker_order_id TEXT,
+    broker_stop_order_id TEXT,
+    updated_at_unix_ms INTEGER NOT NULL,
+    runtime_epoch INTEGER NOT NULL
+);
+INSERT INTO broker_identity_links_v3
+SELECT logical_request_id, scope_key, broker_order_id, replacement_broker_order_id,
+       broker_stop_order_id, updated_at_unix_ms, runtime_epoch
+FROM broker_identity_links;
+DROP TABLE broker_identity_links;
+ALTER TABLE broker_identity_links_v3 RENAME TO broker_identity_links;
+CREATE INDEX broker_identity_order_idx
+    ON broker_identity_links(scope_key, broker_order_id);
+CREATE INDEX broker_identity_replacement_idx
+    ON broker_identity_links(scope_key, replacement_broker_order_id);
+CREATE INDEX broker_identity_stop_idx
+    ON broker_identity_links(scope_key, broker_stop_order_id);
 "#;
 
 struct StoreInner {
@@ -430,6 +458,12 @@ impl RuntimeStore for SqliteRuntimeStore {
     fn insert_mutation(&self, record: &MutationRecord) -> Result<(), StoreError> {
         let connection = self.connection()?;
         verify_epoch_connection(&connection, &record.scope_key, record.runtime_epoch)?;
+        let request_evidence = encode(&record.request_evidence)?;
+        let disposition = record
+            .reconciliation_disposition
+            .as_ref()
+            .map(encode)
+            .transpose()?;
         connection
             .execute(
                 "INSERT INTO mutation_journal (
@@ -443,12 +477,12 @@ impl RuntimeStore for SqliteRuntimeStore {
                     record.scope_key,
                     encode(&record.kind)?,
                     encode(&record.state)?,
-                    record.redacted_request_evidence,
+                    request_evidence,
                     record.broker_evidence_ref,
                     record.created_at_unix_ms,
                     record.updated_at_unix_ms,
                     record.correlation_id,
-                    record.reconciliation_disposition,
+                    disposition,
                     to_i64(record.runtime_epoch)?,
                 ],
             )
@@ -475,7 +509,7 @@ impl RuntimeStore for SqliteRuntimeStore {
             &[JournalState::NotDispatched],
             JournalState::UnknownAfterDispatch,
             None,
-            Some("durably fenced before single transport attempt"),
+            None,
             runtime_epoch,
             now_unix_ms,
         )
@@ -489,7 +523,7 @@ impl RuntimeStore for SqliteRuntimeStore {
         expected: &[JournalState],
         target: JournalState,
         broker_evidence_ref: Option<&str>,
-        disposition: Option<&str>,
+        disposition: Option<&ReconciliationDisposition>,
         runtime_epoch: u64,
         now_unix_ms: i64,
     ) -> Result<MutationRecord, StoreError> {
@@ -503,9 +537,13 @@ impl RuntimeStore for SqliteRuntimeStore {
         }
         record.state = target;
         record.broker_evidence_ref = broker_evidence_ref.map(str::to_owned);
-        record.reconciliation_disposition = disposition.map(str::to_owned);
+        record.reconciliation_disposition = disposition.cloned();
         record.updated_at_unix_ms = now_unix_ms;
         record.runtime_epoch = runtime_epoch;
+        record = record
+            .validated()
+            .map_err(|error| StoreError::Corrupt(error.to_string()))?;
+        let encoded_disposition = disposition.map(encode).transpose()?;
         let changed = transaction
             .execute(
                 "UPDATE mutation_journal SET state=?2, broker_evidence_ref=?3,
@@ -515,7 +553,7 @@ impl RuntimeStore for SqliteRuntimeStore {
                     logical_request_id,
                     encode(&target)?,
                     broker_evidence_ref,
-                    disposition,
+                    encoded_disposition,
                     now_unix_ms,
                     to_i64(runtime_epoch)?,
                 ],
@@ -537,7 +575,7 @@ impl RuntimeStore for SqliteRuntimeStore {
                 correlation_id: record.correlation_id.clone(),
                 redacted_detail: format!(
                     "logical_request_id={logical_request_id}; disposition={}",
-                    disposition.unwrap_or("none")
+                    disposition.map_or_else(|| "none".into(), |value| format!("{value:?}"))
                 ),
                 observed_at_unix_ms: now_unix_ms,
             },
@@ -696,6 +734,11 @@ impl RuntimeStore for SqliteRuntimeStore {
             {
                 return Err(StoreError::InvalidMutationTransition);
             }
+            let disposition = record
+                .reconciliation_disposition
+                .as_ref()
+                .map(encode)
+                .transpose()?;
             let changed = transaction
                 .execute(
                     "UPDATE mutation_journal SET state=?2, broker_evidence_ref=?3,
@@ -706,7 +749,7 @@ impl RuntimeStore for SqliteRuntimeStore {
                         record.logical_request_id,
                         encode(&record.state)?,
                         record.broker_evidence_ref,
-                        record.reconciliation_disposition,
+                        disposition,
                         record.updated_at_unix_ms,
                         to_i64(checkpoint.runtime_epoch)?,
                         checkpoint.scope_key,
@@ -732,10 +775,10 @@ impl RuntimeStore for SqliteRuntimeStore {
                     redacted_detail: format!(
                         "logical_request_id={}; disposition={}",
                         record.logical_request_id,
-                        record
-                            .reconciliation_disposition
-                            .as_deref()
-                            .unwrap_or("authoritative broker evidence")
+                        record.reconciliation_disposition.as_ref().map_or_else(
+                            || "authoritative broker evidence".into(),
+                            |value| format!("{value:?}"),
+                        )
                     ),
                     observed_at_unix_ms: record.updated_at_unix_ms,
                 },
@@ -1018,6 +1061,17 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
             .execute_batch(MIGRATION_V2)
             .map_err(persistence)?;
         transaction
+            .pragma_update(None, "user_version", 2)
+            .map_err(persistence)?;
+        transaction.commit().map_err(persistence)?;
+        version = 2;
+    }
+    if version == 2 {
+        let transaction = connection.transaction().map_err(persistence)?;
+        transaction
+            .execute_batch(MIGRATION_V3)
+            .map_err(persistence)?;
+        transaction
             .pragma_update(None, "user_version", SCHEMA_VERSION)
             .map_err(persistence)?;
         transaction.commit().map_err(persistence)?;
@@ -1044,18 +1098,25 @@ fn load_mutation(
 }
 
 fn mutation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MutationRecord> {
-    Ok(MutationRecord {
+    MutationRecord {
         logical_request_id: row.get(0)?,
         scope_key: row.get(1)?,
         kind: decode_sql(row.get::<_, String>(2)?)?,
         state: decode_sql(row.get::<_, String>(3)?)?,
-        redacted_request_evidence: row.get(4)?,
+        request_evidence: decode_sql(row.get::<_, String>(4)?)?,
         broker_evidence_ref: row.get(5)?,
         created_at_unix_ms: row.get(6)?,
         updated_at_unix_ms: row.get(7)?,
         correlation_id: row.get(8)?,
-        reconciliation_disposition: row.get(9)?,
+        reconciliation_disposition: row
+            .get::<_, Option<String>>(9)?
+            .map(decode_sql)
+            .transpose()?,
         runtime_epoch: to_u64_sql(row.get(10)?)?,
+    }
+    .validated()
+    .map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
     })
 }
 
@@ -1233,7 +1294,7 @@ fn persistence(error: impl core::fmt::Display) -> StoreError {
 mod tests {
     use std::fs;
 
-    use crate::model::{MutationKind, OpaqueRef, Provider, RuntimeEnvironment};
+    use crate::model::{MutationEvidence, MutationKind, OpaqueRef, Provider, RuntimeEnvironment};
 
     use super::*;
 
@@ -1242,6 +1303,16 @@ mod tests {
             "vox-runtime-{name}-{}.sqlite",
             uuid::Uuid::new_v4()
         ))
+    }
+
+    fn evidence(kind: MutationKind) -> MutationEvidence {
+        MutationEvidence {
+            command_kind: kind,
+            instrument_ref: Some("instrument-1".into()),
+            quantity_lots: Some(1),
+            price_present: true,
+            protection_kind: None,
+        }
     }
 
     fn scope() -> Result<RuntimeScope, crate::model::ModelError> {
@@ -1296,7 +1367,7 @@ mod tests {
             &scope,
             "request-1",
             MutationKind::PostOrder,
-            "quantity=1; instrument=present",
+            evidence(MutationKind::PostOrder),
             "correlation-1",
             first_epoch,
             1,
@@ -1331,7 +1402,7 @@ mod tests {
             &scope,
             "request-unique",
             MutationKind::PostOrder,
-            "quantity=1",
+            evidence(MutationKind::PostOrder),
             "correlation",
             epoch,
             1,
@@ -1348,7 +1419,8 @@ mod tests {
     }
 
     #[test]
-    fn v1_to_v2_migration_preserves_unresolved_unknown() -> Result<(), Box<dyn std::error::Error>> {
+    fn v2_to_v3_migration_preserves_unknown_without_legacy_evidence()
+    -> Result<(), Box<dyn std::error::Error>> {
         let path = path("migration-unknown");
         let scope = scope()?;
         {
@@ -1358,7 +1430,7 @@ mod tests {
                 &scope,
                 "migration-unknown",
                 MutationKind::PostOrder,
-                "quantity=1",
+                evidence(MutationKind::PostOrder),
                 "migration-correlation",
                 epoch,
                 1,
@@ -1369,16 +1441,71 @@ mod tests {
         {
             let connection = Connection::open(&path)?;
             connection.execute_batch(
-                "DROP TRIGGER runtime_audit_capacity;
-                 DROP TRIGGER processed_broker_event_capacity;
-                 DROP TRIGGER mutation_journal_capacity;
-                 PRAGMA user_version=1;",
+                "UPDATE mutation_journal
+                     SET redacted_request_evidence='quantity=1; token=must-not-survive';
+                 PRAGMA user_version=2;",
             )?;
         }
         let migrated = SqliteRuntimeStore::open(&path)?;
         assert_eq!(migrated.configuration()?.user_version, SCHEMA_VERSION);
-        assert_eq!(migrated.unresolved_mutations(&scope.key())?.len(), 1);
+        let unresolved = migrated.unresolved_mutations(&scope.key())?;
+        assert_eq!(unresolved.len(), 1);
+        assert_eq!(
+            unresolved[0].request_evidence,
+            MutationEvidence {
+                command_kind: MutationKind::PostOrder,
+                instrument_ref: None,
+                quantity_lots: None,
+                price_present: false,
+                protection_kind: None,
+            }
+        );
+        let stored_evidence: String = migrated.connection()?.query_row(
+            "SELECT redacted_request_evidence FROM mutation_journal
+             WHERE logical_request_id='migration-unknown'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(!stored_evidence.contains("must-not-survive"));
         drop(migrated);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("runtime.lock"));
+        Ok(())
+    }
+
+    #[test]
+    fn post_and_cancel_mutations_can_link_same_broker_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let path = path("shared-broker-identity");
+        let scope = scope()?;
+        let store = SqliteRuntimeStore::open(&path)?;
+        let epoch = store.acquire_ownership(&scope, "owner", 1)?;
+        for (id, kind) in [
+            ("post-request", MutationKind::PostStopOrder),
+            ("cancel-request", MutationKind::CancelStopOrder),
+        ] {
+            store.insert_mutation(&MutationRecord::prepared(
+                &scope,
+                id,
+                kind,
+                evidence(kind),
+                format!("correlation-{id}"),
+                epoch,
+                1,
+            )?)?;
+            store.upsert_identity_links(
+                &scope.key(),
+                &BrokerIdentityLinks {
+                    logical_request_id: id.into(),
+                    broker_stop_order_id: Some("shared-stop-id".into()),
+                    ..BrokerIdentityLinks::default()
+                },
+                epoch,
+                2,
+            )?;
+        }
+        assert_eq!(store.all_identity_links(&scope.key())?.len(), 2);
+        drop(store);
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(path.with_extension("runtime.lock"));
         Ok(())
