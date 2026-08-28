@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
+use vox_domain::ProtectionLeg;
+pub use vox_domain::RuntimeExecutionCommand;
 
 pub const EXECUTION_QUEUE_CAPACITY: usize = 256;
 pub const STREAM_QUEUE_CAPACITY: usize = 1_024;
@@ -22,6 +24,7 @@ pub enum RuntimeEnvironment {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(try_from = "RuntimeScopeUnchecked")]
 pub struct RuntimeScope {
     pub provider: Provider,
     pub environment: RuntimeEnvironment,
@@ -71,7 +74,7 @@ impl RuntimeScope {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct OpaqueRef(String);
 
@@ -94,6 +97,39 @@ impl OpaqueRef {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct RuntimeScopeUnchecked {
+    provider: Provider,
+    environment: RuntimeEnvironment,
+    broker_account_id: String,
+    connection_ref: OpaqueRef,
+    credential_ref: OpaqueRef,
+}
+
+impl TryFrom<RuntimeScopeUnchecked> for RuntimeScope {
+    type Error = ModelError;
+
+    fn try_from(value: RuntimeScopeUnchecked) -> Result<Self, Self::Error> {
+        Self::new(
+            value.provider,
+            value.environment,
+            value.broker_account_id,
+            value.connection_ref,
+            value.credential_ref,
+        )
+    }
+}
+
+impl<'de> Deserialize<'de> for OpaqueRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -176,6 +212,152 @@ pub enum MutationKind {
     ProtectionLeg,
 }
 
+pub(crate) trait RuntimeExecutionCommandExt {
+    fn kind(&self) -> MutationKind;
+    fn account_id(&self) -> &str;
+    fn request_identity(&self) -> Option<&str>;
+    fn evidence(&self) -> MutationEvidence;
+}
+
+impl RuntimeExecutionCommandExt for RuntimeExecutionCommand {
+    fn kind(&self) -> MutationKind {
+        match self {
+            Self::RegularOrder(_) => MutationKind::PostOrder,
+            Self::PostOrderAsync(_) => MutationKind::PostOrderAsync,
+            Self::ReplaceOrder(_) => MutationKind::ReplaceOrder,
+            Self::CancelOrder(_) => MutationKind::CancelOrder,
+            Self::PostStopOrder(_) => MutationKind::PostStopOrder,
+            Self::CancelStopOrder(_) => MutationKind::CancelStopOrder,
+            Self::ProtectionLeg(_) => MutationKind::ProtectionLeg,
+        }
+    }
+
+    fn account_id(&self) -> &str {
+        match self {
+            Self::RegularOrder(command) | Self::PostOrderAsync(command) => &command.account_id,
+            Self::ReplaceOrder(command) => &command.account_id,
+            Self::CancelOrder(command) => &command.account_id,
+            Self::PostStopOrder(command) | Self::ProtectionLeg(command) => &command.account_id,
+            Self::CancelStopOrder(command) => &command.account_id,
+        }
+    }
+
+    fn request_identity(&self) -> Option<&str> {
+        match self {
+            Self::RegularOrder(command) | Self::PostOrderAsync(command) => {
+                Some(&command.client_request_id)
+            }
+            Self::ReplaceOrder(command) => Some(&command.replacement_request_id),
+            Self::PostStopOrder(command) | Self::ProtectionLeg(command) => {
+                Some(&command.client_request_id)
+            }
+            Self::CancelOrder(_) | Self::CancelStopOrder(_) => None,
+        }
+    }
+
+    fn evidence(&self) -> MutationEvidence {
+        match self {
+            Self::RegularOrder(command) | Self::PostOrderAsync(command) => MutationEvidence {
+                command_kind: self.kind(),
+                instrument_ref: Some(command.instrument_id.clone()),
+                quantity_lots: Some(command.quantity_lots),
+                price_present: command.price.is_some(),
+                protection_kind: None,
+            },
+            Self::ReplaceOrder(command) => MutationEvidence {
+                command_kind: self.kind(),
+                instrument_ref: None,
+                quantity_lots: Some(command.quantity_lots),
+                price_present: true,
+                protection_kind: None,
+            },
+            Self::CancelOrder(_) | Self::CancelStopOrder(_) => MutationEvidence {
+                command_kind: self.kind(),
+                instrument_ref: None,
+                quantity_lots: None,
+                price_present: false,
+                protection_kind: None,
+            },
+            Self::PostStopOrder(command) | Self::ProtectionLeg(command) => MutationEvidence {
+                command_kind: self.kind(),
+                instrument_ref: Some(command.instrument_id.clone()),
+                quantity_lots: Some(command.quantity_lots),
+                price_present: match &command.leg {
+                    ProtectionLeg::StopLoss(stop) => match stop {
+                        vox_domain::StopLossProtection::Fixed { .. } => true,
+                        vox_domain::StopLossProtection::Trailing {
+                            activation_price, ..
+                        } => activation_price.is_some(),
+                    },
+                    ProtectionLeg::TakeProfit(take_profit) => {
+                        take_profit.trigger_price.is_some() || take_profit.limit_price.is_some()
+                    }
+                },
+                protection_kind: Some(match command.leg {
+                    ProtectionLeg::StopLoss(_) => ProtectionKind::StopLoss,
+                    ProtectionLeg::TakeProfit(_) => ProtectionKind::TakeProfit,
+                }),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ProtectionKind {
+    StopLoss,
+    TakeProfit,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "MutationEvidenceUnchecked")]
+pub struct MutationEvidence {
+    pub command_kind: MutationKind,
+    pub instrument_ref: Option<String>,
+    pub quantity_lots: Option<i64>,
+    pub price_present: bool,
+    pub protection_kind: Option<ProtectionKind>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct MutationEvidenceUnchecked {
+    command_kind: MutationKind,
+    instrument_ref: Option<String>,
+    quantity_lots: Option<i64>,
+    price_present: bool,
+    protection_kind: Option<ProtectionKind>,
+}
+
+impl TryFrom<MutationEvidenceUnchecked> for MutationEvidence {
+    type Error = ModelError;
+
+    fn try_from(value: MutationEvidenceUnchecked) -> Result<Self, Self::Error> {
+        Self {
+            command_kind: value.command_kind,
+            instrument_ref: value.instrument_ref,
+            quantity_lots: value.quantity_lots,
+            price_present: value.price_present,
+            protection_kind: value.protection_kind,
+        }
+        .validate()
+    }
+}
+
+impl MutationEvidence {
+    fn validate(self) -> Result<Self, ModelError> {
+        if let Some(value) = &self.instrument_ref {
+            validate_safe_text(value, "instrument_ref", 256)?;
+        }
+        if self.quantity_lots.is_some_and(|value| value <= 0) {
+            return Err(ModelError::InvalidField("quantity_lots"));
+        }
+        let encoded = serde_json::to_string(&self)
+            .map_err(|_| ModelError::InvalidField("mutation_evidence"))?;
+        validate_redacted(encoded)?;
+        Ok(self)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum JournalState {
@@ -200,15 +382,16 @@ impl JournalState {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "MutationRecordUnchecked")]
 pub struct MutationRecord {
     pub scope_key: String,
     pub logical_request_id: String,
     pub kind: MutationKind,
     pub state: JournalState,
-    pub redacted_request_evidence: String,
+    pub request_evidence: MutationEvidence,
     pub broker_evidence_ref: Option<String>,
     pub correlation_id: String,
-    pub reconciliation_disposition: Option<String>,
+    pub reconciliation_disposition: Option<ReconciliationDisposition>,
     pub created_at_unix_ms: i64,
     pub updated_at_unix_ms: i64,
     pub runtime_epoch: u64,
@@ -219,25 +402,111 @@ impl MutationRecord {
         scope: &RuntimeScope,
         logical_request_id: impl Into<String>,
         kind: MutationKind,
-        redacted_request_evidence: impl Into<String>,
+        request_evidence: MutationEvidence,
         correlation_id: impl Into<String>,
         runtime_epoch: u64,
         now_unix_ms: i64,
     ) -> Result<Self, ModelError> {
+        let request_evidence = request_evidence.validate()?;
+        if request_evidence.command_kind != kind {
+            return Err(ModelError::InvalidField("request_evidence.command_kind"));
+        }
         Ok(Self {
-            scope_key: scope.key(),
-            logical_request_id: required(logical_request_id.into(), "logical_request_id")?,
+            scope_key: required(scope.key(), "scope_key")?,
+            logical_request_id: validate_safe_text_owned(
+                logical_request_id.into(),
+                "logical_request_id",
+                256,
+            )?,
             kind,
             state: JournalState::NotDispatched,
-            redacted_request_evidence: validate_redacted(redacted_request_evidence.into())?,
+            request_evidence,
             broker_evidence_ref: None,
-            correlation_id: required(correlation_id.into(), "correlation_id")?,
+            correlation_id: validate_safe_text_owned(correlation_id.into(), "correlation_id", 256)?,
             reconciliation_disposition: None,
             created_at_unix_ms: now_unix_ms,
             updated_at_unix_ms: now_unix_ms,
             runtime_epoch,
         })
     }
+
+    pub(crate) fn validated(self) -> Result<Self, ModelError> {
+        MutationRecordUnchecked {
+            scope_key: self.scope_key,
+            logical_request_id: self.logical_request_id,
+            kind: self.kind,
+            state: self.state,
+            request_evidence: self.request_evidence,
+            broker_evidence_ref: self.broker_evidence_ref,
+            correlation_id: self.correlation_id,
+            reconciliation_disposition: self.reconciliation_disposition,
+            created_at_unix_ms: self.created_at_unix_ms,
+            updated_at_unix_ms: self.updated_at_unix_ms,
+            runtime_epoch: self.runtime_epoch,
+        }
+        .try_into()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct MutationRecordUnchecked {
+    scope_key: String,
+    logical_request_id: String,
+    kind: MutationKind,
+    state: JournalState,
+    request_evidence: MutationEvidence,
+    broker_evidence_ref: Option<String>,
+    correlation_id: String,
+    reconciliation_disposition: Option<ReconciliationDisposition>,
+    created_at_unix_ms: i64,
+    updated_at_unix_ms: i64,
+    runtime_epoch: u64,
+}
+
+impl TryFrom<MutationRecordUnchecked> for MutationRecord {
+    type Error = ModelError;
+
+    fn try_from(value: MutationRecordUnchecked) -> Result<Self, Self::Error> {
+        let scope_key = validate_safe_text_owned(value.scope_key, "scope_key", 1_024)?;
+        let logical_request_id =
+            validate_safe_text_owned(value.logical_request_id, "logical_request_id", 256)?;
+        let correlation_id = validate_safe_text_owned(value.correlation_id, "correlation_id", 256)?;
+        let request_evidence = value.request_evidence.validate()?;
+        if request_evidence.command_kind != value.kind {
+            return Err(ModelError::InvalidField("request_evidence.command_kind"));
+        }
+        Ok(Self {
+            scope_key,
+            logical_request_id,
+            kind: value.kind,
+            state: value.state,
+            request_evidence,
+            broker_evidence_ref: value
+                .broker_evidence_ref
+                .map(|evidence| validate_safe_text_owned(evidence, "broker_evidence_ref", 2_048))
+                .transpose()?,
+            correlation_id,
+            reconciliation_disposition: value.reconciliation_disposition,
+            created_at_unix_ms: value.created_at_unix_ms,
+            updated_at_unix_ms: value.updated_at_unix_ms,
+            runtime_epoch: value.runtime_epoch,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "outcome", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ReconciliationDisposition {
+    OrderAccepted,
+    OrderActiveNew,
+    OrderActivePartial,
+    OrderFilled,
+    OrderCancelled,
+    OrderRejected,
+    StopActive,
+    StopExecuted,
+    StopCanceled,
+    StopExpired,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -268,8 +537,70 @@ pub struct PositionFact {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PortfolioFact {
     pub account_id: String,
-    pub currencies: BTreeMap<String, String>,
+    pub total_portfolio_valuation: Option<MoneyFact>,
+    pub total_currency_valuation: Option<MoneyFact>,
+    pub cash_balances: BTreeMap<String, String>,
     pub broker_observed_at_unix_ms: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PositionsFact {
+    pub instruments: Vec<PositionFact>,
+    pub cash_balances: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MoneyFact {
+    pub currency: String,
+    pub amount_nanos: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    content = "wire_value",
+    rename_all = "SCREAMING_SNAKE_CASE"
+)]
+pub enum OrderExecutionStatus {
+    New,
+    PartiallyFilled,
+    Filled,
+    Cancelled,
+    Rejected,
+    UnknownProviderStatus(i32),
+}
+
+impl OrderExecutionStatus {
+    #[must_use]
+    pub const fn active(self) -> bool {
+        matches!(self, Self::New | Self::PartiallyFilled)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    content = "wire_value",
+    rename_all = "SCREAMING_SNAKE_CASE"
+)]
+pub enum StopExecutionStatus {
+    Active,
+    Executed,
+    Canceled,
+    Expired,
+    UnknownProviderStatus(i32),
+}
+
+impl StopExecutionStatus {
+    #[must_use]
+    pub const fn active(self) -> bool {
+        matches!(self, Self::Active)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProviderStatusCause {
+    pub code: i32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -278,18 +609,17 @@ pub struct OrderFact {
     pub broker_order_id: String,
     pub logical_request_id: Option<String>,
     pub instrument_uid: String,
-    pub active: bool,
-    pub terminal: bool,
+    pub status: OrderExecutionStatus,
+    pub status_cause: Option<ProviderStatusCause>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StopFact {
     pub account_id: String,
     pub broker_stop_order_id: String,
-    pub logical_request_id: Option<String>,
     pub instrument_uid: String,
-    pub active: bool,
-    pub terminal: bool,
+    pub status: StopExecutionStatus,
+    pub status_cause: Option<ProviderStatusCause>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -339,7 +669,21 @@ pub struct BrokerEvent {
     pub broker_order_id: Option<String>,
     pub broker_stop_order_id: Option<String>,
     pub logical_request_id: Option<String>,
+    pub execution_state: Option<BrokerExecutionState>,
     pub runtime_epoch: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum BrokerExecutionState {
+    Order {
+        status: OrderExecutionStatus,
+        status_cause: Option<ProviderStatusCause>,
+    },
+    Stop {
+        status: StopExecutionStatus,
+        status_cause: Option<ProviderStatusCause>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -456,6 +800,28 @@ pub enum ModelError {
     SecretLikeOpaqueReference,
     #[error("request evidence must be bounded, structured and redacted")]
     UnsafeRequestEvidence,
+    #[error("invalid {0}")]
+    InvalidField(&'static str),
+}
+
+fn validate_safe_text(
+    value: &str,
+    field: &'static str,
+    maximum_length: usize,
+) -> Result<(), ModelError> {
+    if value.trim().is_empty() || value.len() > maximum_length {
+        return Err(ModelError::InvalidField(field));
+    }
+    validate_redacted(value.to_owned()).map(|_| ())
+}
+
+fn validate_safe_text_owned(
+    value: String,
+    field: &'static str,
+    maximum_length: usize,
+) -> Result<String, ModelError> {
+    validate_safe_text(&value, field, maximum_length)?;
+    Ok(value)
 }
 
 fn required(value: String, field: &'static str) -> Result<String, ModelError> {
@@ -496,18 +862,93 @@ mod tests {
             OpaqueRef::new("credential:primary")?,
         )?;
         assert_eq!(scope.redacted_account_id(), "***1234");
+        let serialized = r#"{"command_kind":"POST_ORDER","instrument_ref":"Bearer abc","quantity_lots":1,"price_present":true,"protection_kind":null}"#;
+        assert!(serde_json::from_str::<MutationEvidence>(serialized).is_err());
         assert!(
-            MutationRecord::prepared(
-                &scope,
-                "request-1",
-                MutationKind::PostOrder,
-                "authorization: Bearer abc",
-                "correlation-1",
-                1,
-                1,
-            )
+            MutationEvidence {
+                command_kind: MutationKind::PostOrder,
+                instrument_ref: Some("Bearer abc".into()),
+                quantity_lots: Some(1),
+                price_present: true,
+                protection_kind: None,
+            }
+            .validate()
             .is_err()
         );
+        assert!(serde_json::from_str::<OpaqueRef>(r#""token=abc""#).is_err());
+        let _ = scope;
+        Ok(())
+    }
+
+    #[test]
+    fn serde_cannot_bypass_constructor_invariants() -> Result<(), Box<dyn std::error::Error>> {
+        assert!(serde_json::from_str::<OpaqueRef>(r#""""#).is_err());
+        assert!(serde_json::from_str::<OpaqueRef>(r#""Bearer abc""#).is_err());
+        assert!(serde_json::from_str::<OpaqueRef>(r#""secret=value""#).is_err());
+        let scope_json = r#"{
+            "provider":"T_INVEST",
+            "environment":"SANDBOX",
+            "broker_account_id":"",
+            "connection_ref":"connection:primary",
+            "credential_ref":"credential:primary"
+        }"#;
+        assert!(serde_json::from_str::<RuntimeScope>(scope_json).is_err());
+
+        let scope = RuntimeScope::new(
+            Provider::TInvest,
+            RuntimeEnvironment::Sandbox,
+            "account-1",
+            OpaqueRef::new("connection:primary")?,
+            OpaqueRef::new("credential:primary")?,
+        )?;
+        let record = MutationRecord::prepared(
+            &scope,
+            "request-1",
+            MutationKind::PostOrder,
+            MutationEvidence {
+                command_kind: MutationKind::PostOrder,
+                instrument_ref: Some("instrument-1".into()),
+                quantity_lots: Some(1),
+                price_present: true,
+                protection_kind: None,
+            },
+            "correlation-1",
+            1,
+            1,
+        )?;
+        let mut value = serde_json::to_value(record)?;
+        value["request_evidence"]["instrument_ref"] = serde_json::json!("token=secret");
+        assert!(serde_json::from_value::<MutationRecord>(value.clone()).is_err());
+        value["request_evidence"]["instrument_ref"] = serde_json::json!("x".repeat(300));
+        assert!(serde_json::from_value::<MutationRecord>(value).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn portfolio_aggregates_cash_and_unknown_statuses_remain_distinct()
+    -> Result<(), serde_json::Error> {
+        let portfolio = PortfolioFact {
+            account_id: "account-1".into(),
+            total_portfolio_valuation: Some(MoneyFact {
+                currency: "RUB".into(),
+                amount_nanos: "100000000000".into(),
+            }),
+            total_currency_valuation: Some(MoneyFact {
+                currency: "RUB".into(),
+                amount_nanos: "25000000000".into(),
+            }),
+            cash_balances: [("RUB".into(), "20000000000".into())].into_iter().collect(),
+            broker_observed_at_unix_ms: Some(1),
+        };
+        assert_ne!(
+            portfolio.total_portfolio_valuation,
+            portfolio.total_currency_valuation
+        );
+        assert_eq!(portfolio.cash_balances["RUB"], "20000000000");
+        let unknown = OrderExecutionStatus::UnknownProviderStatus(77_777);
+        let decoded: OrderExecutionStatus =
+            serde_json::from_str(&serde_json::to_string(&unknown)?)?;
+        assert_eq!(decoded, unknown);
         Ok(())
     }
 

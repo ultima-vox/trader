@@ -7,9 +7,10 @@ use async_trait::async_trait;
 use thiserror::Error;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore, mpsc};
 
+use crate::model::RuntimeExecutionCommandExt;
 use crate::model::{
-    EXECUTION_QUEUE_CAPACITY, JournalState, MutationKind, MutationRecord, ReasonCode,
-    RuntimeAuditRecord, RuntimeHealth, RuntimeScope, RuntimeState, STREAM_QUEUE_CAPACITY,
+    EXECUTION_QUEUE_CAPACITY, JournalState, MutationRecord, ReasonCode, RuntimeAuditRecord,
+    RuntimeExecutionCommand, RuntimeHealth, RuntimeScope, RuntimeState, STREAM_QUEUE_CAPACITY,
     StateTransition, StreamHealth, StreamKind, StreamState,
 };
 use crate::policy::RuntimeStateMachine;
@@ -57,6 +58,9 @@ pub struct RuntimeCoordinator<R, E, X, C, S, M> {
     health: RwLock<RuntimeHealth>,
     command_slots: Arc<Semaphore>,
     reconciliation_guard: Mutex<()>,
+    reconciliation_dirty: AtomicBool,
+    reconciliation_running: AtomicBool,
+    coalesced_reconciliation_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     stream_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     stream_sender: Mutex<Option<mpsc::Sender<StreamSignal>>>,
 }
@@ -120,6 +124,9 @@ where
             health: RwLock::new(health),
             command_slots: Arc::new(Semaphore::new(EXECUTION_QUEUE_CAPACITY)),
             reconciliation_guard: Mutex::new(()),
+            reconciliation_dirty: AtomicBool::new(false),
+            reconciliation_running: AtomicBool::new(false),
+            coalesced_reconciliation_task: Mutex::new(None),
             stream_task: Mutex::new(None),
             stream_sender: Mutex::new(None),
         })
@@ -248,12 +255,25 @@ where
 
     pub async fn dispatch(
         &self,
+        command: RuntimeExecutionCommand,
         logical_request_id: impl Into<String>,
-        kind: MutationKind,
-        redacted_request_evidence: impl Into<String>,
         correlation_id: impl Into<String>,
     ) -> Result<DispatchReceipt, RuntimeError> {
         self.ensure_execution_allowed().await?;
+        let logical_request_id = logical_request_id.into();
+        if command.account_id() != self.scope.broker_account_id {
+            return Err(RuntimeError::Safety(
+                "execution command account does not match runtime scope".into(),
+            ));
+        }
+        if command
+            .request_identity()
+            .is_some_and(|identity| identity != logical_request_id)
+        {
+            return Err(RuntimeError::Safety(
+                "execution command request identity does not match runtime logical identity".into(),
+            ));
+        }
         let permit = self
             .command_slots
             .clone()
@@ -265,13 +285,7 @@ where
             (EXECUTION_QUEUE_CAPACITY - self.command_slots.available_permits()) as f64,
         );
         let result = self
-            .dispatch_with_permit(
-                permit,
-                logical_request_id.into(),
-                kind,
-                redacted_request_evidence.into(),
-                correlation_id.into(),
-            )
+            .dispatch_with_permit(permit, command, logical_request_id, correlation_id.into())
             .await;
         self.metrics.set_gauge(
             MetricName::RuntimeCommandQueueDepth,
@@ -284,9 +298,8 @@ where
     async fn dispatch_with_permit(
         &self,
         _permit: OwnedSemaphorePermit,
+        command: RuntimeExecutionCommand,
         logical_request_id: String,
-        kind: MutationKind,
-        redacted_request_evidence: String,
         correlation_id: String,
     ) -> Result<DispatchReceipt, RuntimeError> {
         let epoch = self.current_epoch()?;
@@ -294,8 +307,8 @@ where
         let prepared = MutationRecord::prepared(
             &self.scope,
             logical_request_id.clone(),
-            kind,
-            redacted_request_evidence,
+            command.kind(),
+            command.evidence(),
             correlation_id,
             epoch,
             now,
@@ -323,10 +336,13 @@ where
             environment = ?self.scope.environment,
             account_scope = %self.scope.redacted_account_id(),
             logical_request_id = %logical_request_id,
-            mutation_kind = ?kind,
+            mutation_kind = ?command.kind(),
         );
 
-        let result = self.execution.dispatch_once(&self.scope, &fenced).await;
+        let result = self
+            .execution
+            .dispatch_once(&self.scope, &command, &fenced)
+            .await;
         match result {
             Ok(ExecutionResult::Acknowledged {
                 broker_evidence_ref,
@@ -350,7 +366,7 @@ where
                         &logical_request_id,
                         JournalState::Acknowledged,
                         Some(&broker_evidence_ref),
-                        "authoritative broker acknowledgement",
+                        None,
                     )
                     .await?;
                 Ok(receipt(record))
@@ -363,7 +379,7 @@ where
                         &logical_request_id,
                         JournalState::Rejected,
                         Some(&broker_evidence_ref),
-                        "authoritative broker rejection",
+                        None,
                     )
                     .await?;
                 Ok(receipt(record))
@@ -376,7 +392,7 @@ where
                         &logical_request_id,
                         JournalState::UnknownAfterDispatch,
                         broker_evidence_ref.as_deref(),
-                        "transport outcome ambiguous; mutation not replayed",
+                        None,
                     )
                     .await?;
                 }
@@ -408,13 +424,13 @@ where
         logical_request_id: &str,
         target: JournalState,
         broker_evidence_ref: Option<&str>,
-        disposition: &str,
+        disposition: Option<&crate::model::ReconciliationDisposition>,
     ) -> Result<MutationRecord, RuntimeError> {
         let epoch = self.current_epoch()?;
         let scope_key = self.scope.key();
         let logical_request_id = logical_request_id.to_owned();
         let broker_evidence_ref = broker_evidence_ref.map(str::to_owned);
-        let disposition = disposition.to_owned();
+        let disposition = disposition.cloned();
         let result = store_call(self.store.clone(), move |store| {
             store.transition_mutation(
                 &scope_key,
@@ -422,7 +438,7 @@ where
                 &[JournalState::UnknownAfterDispatch],
                 target,
                 broker_evidence_ref.as_deref(),
-                Some(&disposition),
+                disposition.as_ref(),
                 epoch,
                 now_unix_ms_store()?,
             )
@@ -483,6 +499,10 @@ where
             task.abort();
             let _ = task.await;
         }
+        if let Some(task) = self.coalesced_reconciliation_task.lock().await.take() {
+            task.abort();
+            let _ = task.await;
+        }
         self.connected.store(false, Ordering::SeqCst);
         self.transition(
             RuntimeState::Stopped,
@@ -509,6 +529,8 @@ where
         if state != RuntimeState::Ready
             || !self.execution_authorized.load(Ordering::SeqCst)
             || !self.connected.load(Ordering::SeqCst)
+            || self.reconciliation_dirty.load(Ordering::SeqCst)
+            || self.reconciliation_running.load(Ordering::SeqCst)
         {
             return Err(RuntimeError::ExecutionGateClosed);
         }
@@ -800,7 +822,7 @@ where
                         | crate::model::BrokerEventClass::Position
                         | crate::model::BrokerEventClass::Portfolio
                 ) {
-                    self.force_reconciliation(
+                    self.request_coalesced_reconciliation(
                         ReasonCode::ReconciliationStarted,
                         "capital-state stream event requires authoritative unary refresh",
                     )
@@ -826,6 +848,83 @@ where
                 }
             }
         }
+        Ok(())
+    }
+
+    async fn request_coalesced_reconciliation(
+        self: &Arc<Self>,
+        reason_code: ReasonCode,
+        detail: &str,
+    ) -> Result<(), RuntimeError> {
+        self.reconciliation_dirty.store(true, Ordering::SeqCst);
+        if self
+            .reconciliation_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Ok(());
+        }
+        self.transition(RuntimeState::Reconciling, reason_code, detail)
+            .await?;
+        let coordinator = Arc::downgrade(self);
+        let task = tokio::spawn(async move {
+            let Some(coordinator) = coordinator.upgrade() else {
+                return;
+            };
+            loop {
+                coordinator
+                    .reconciliation_dirty
+                    .store(false, Ordering::SeqCst);
+                let report = match coordinator.reconcile_locked().await {
+                    Ok(report) => report,
+                    Err(_) => {
+                        coordinator
+                            .reconciliation_running
+                            .store(false, Ordering::SeqCst);
+                        return;
+                    }
+                };
+                if coordinator.reconciliation_dirty.load(Ordering::SeqCst) {
+                    continue;
+                }
+                if coordinator
+                    .apply_reconciliation_report(&report)
+                    .await
+                    .is_err()
+                {
+                    coordinator
+                        .reconciliation_running
+                        .store(false, Ordering::SeqCst);
+                    return;
+                }
+                coordinator
+                    .reconciliation_running
+                    .store(false, Ordering::SeqCst);
+                if !coordinator.reconciliation_dirty.load(Ordering::SeqCst)
+                    || coordinator
+                        .reconciliation_running
+                        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_err()
+                {
+                    return;
+                }
+                if coordinator
+                    .transition(
+                        RuntimeState::Reconciling,
+                        ReasonCode::ReconciliationStarted,
+                        "capital state changed during authoritative refresh",
+                    )
+                    .await
+                    .is_err()
+                {
+                    coordinator
+                        .reconciliation_running
+                        .store(false, Ordering::SeqCst);
+                    return;
+                }
+            }
+        });
+        *self.coalesced_reconciliation_task.lock().await = Some(task);
         Ok(())
     }
 

@@ -2236,6 +2236,23 @@
           }
         }
       },
+      "MoneyValuationDto": {
+        "type": "object",
+        "description": "One aggregate broker valuation, exact. Not a spendable cash balance.",
+        "required": [
+          "currency",
+          "amount"
+        ],
+        "properties": {
+          "currency": {
+            "type": "string",
+            "example": "rub"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Decimal"
+          }
+        }
+      },
       "MutationDecisionDto": {
         "type": "string",
         "description": "Whether the client may submit, must reconcile first, or must not submit at all.\nDecided by the backend; the browser never derives it.",
@@ -2442,13 +2459,12 @@
       },
       "OrderDto": {
         "type": "object",
-        "description": "An order identity and its liveness. Price and quantity are not in the read model yet.",
+        "description": "Order identity and exact provider execution status.",
         "required": [
           "account_id",
           "broker_order_id",
           "instrument_uid",
-          "active",
-          "terminal"
+          "status"
         ],
         "properties": {
           "account_id": {
@@ -2467,13 +2483,110 @@
           "instrument_uid": {
             "type": "string"
           },
-          "active": {
-            "type": "boolean"
+          "status": {
+            "$ref": "#/components/schemas/OrderExecutionStatusDto"
           },
-          "terminal": {
-            "type": "boolean"
+          "status_cause_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
           }
         }
+      },
+      "OrderExecutionStatusDto": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "NEW"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "PARTIALLY_FILLED"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "FILLED"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "CANCELLED"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "REJECTED"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "wire_value",
+              "status"
+            ],
+            "properties": {
+              "wire_value": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "UNKNOWN_PROVIDER_STATUS"
+                ]
+              }
+            }
+          }
+        ]
       },
       "OrderSideDto": {
         "type": "string",
@@ -2493,7 +2606,7 @@
       },
       "PortfolioDto": {
         "type": "object",
-        "description": "Portfolio as the broker reports it: currency balances and when they were observed.\n\nValuation, P&L, exposure and margin are **not** here. #22 owns them.",
+        "description": "Portfolio aggregates and authoritative cash balances remain separate.",
         "required": [
           "account_id",
           "balances"
@@ -2502,11 +2615,32 @@
           "account_id": {
             "type": "string"
           },
+          "total_portfolio_valuation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MoneyValuationDto"
+              }
+            ]
+          },
+          "total_currency_valuation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MoneyValuationDto"
+              }
+            ]
+          },
           "balances": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/CurrencyBalanceDto"
-            }
+            },
+            "description": "Actual currency balances from GetPositions, never inferred from portfolio aggregates."
           },
           "broker_observed_at_unix_ms": {
             "type": [
@@ -3335,15 +3469,93 @@
           }
         }
       },
+      "StopExecutionStatusDto": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "ACTIVE"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "EXECUTED"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "CANCELED"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "EXPIRED"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "wire_value",
+              "status"
+            ],
+            "properties": {
+              "wire_value": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "UNKNOWN_PROVIDER_STATUS"
+                ]
+              }
+            }
+          }
+        ]
+      },
       "StopOrderDto": {
         "type": "object",
-        "description": "A stop order identity and its liveness. Trigger levels are not in the read model yet.",
+        "description": "Stop identity and exact provider status. Provider readback has no logical request identity.",
         "required": [
           "account_id",
           "broker_stop_order_id",
           "instrument_uid",
-          "active",
-          "terminal"
+          "status"
         ],
         "properties": {
           "account_id": {
@@ -3352,20 +3564,18 @@
           "broker_stop_order_id": {
             "type": "string"
           },
-          "logical_request_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "instrument_uid": {
             "type": "string"
           },
-          "active": {
-            "type": "boolean"
+          "status": {
+            "$ref": "#/components/schemas/StopExecutionStatusDto"
           },
-          "terminal": {
-            "type": "boolean"
+          "status_cause_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
           }
         }
       },

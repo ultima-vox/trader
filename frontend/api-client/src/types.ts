@@ -83,7 +83,7 @@ export type ClientMessage = {
   /** Client-generated id, echoed on every event of this subscription. */
   subscription_id: string;
   topic: Topic;
-  scope?: unknown | ExecutionScope;
+  scope?: null | ExecutionScope;
   /** Required for market topics. Provider uid inside a provider-named feed. */
   instrument_uid?: string | null;
   type: "SUBSCRIBE";
@@ -205,6 +205,12 @@ export type MarketFreshness = {
   age_ms: number;
 };
 
+/** One aggregate broker valuation, exact. Not a spendable cash balance. */
+export type MoneyValuationDto = {
+  currency: string;
+  amount: Decimal;
+};
+
 /** Whether the client may submit, must reconcile first, or must not submit at all. Decided by the backend; the browser never derives it. */
 export type MutationDecisionDto = "SUBMIT" | "RECONCILE" | "DO_NOT_SUBMIT";
 
@@ -256,19 +262,34 @@ export type OrderBookDto = {
   asks: Array<DepthLevelDto>;
   /** Best bid first. */
   bids: Array<DepthLevelDto>;
-  spread_absolute?: unknown | Decimal;
+  spread_absolute?: null | Decimal;
   freshness: MarketFreshness;
 };
 
-/** An order identity and its liveness. Price and quantity are not in the read model yet. */
+/** Order identity and exact provider execution status. */
 export type OrderDto = {
   account_id: string;
   broker_order_id: string;
   /** Vox-side identity of the command that created it, when it was ours. */
   logical_request_id?: string | null;
   instrument_uid: string;
-  active: boolean;
-  terminal: boolean;
+  status: OrderExecutionStatusDto;
+  status_cause_code?: number | null;
+};
+
+export type OrderExecutionStatusDto = {
+  status: "NEW";
+} | {
+  status: "PARTIALLY_FILLED";
+} | {
+  status: "FILLED";
+} | {
+  status: "CANCELLED";
+} | {
+  status: "REJECTED";
+} | {
+  wire_value: number;
+  status: "UNKNOWN_PROVIDER_STATUS";
 };
 
 /** Which side of the market a command takes. The side is the action, never a mode. */
@@ -276,9 +297,12 @@ export type OrderSideDto = "BUY" | "SELL";
 
 export type OrderTypeDto = "LIMIT" | "MARKET" | "BEST_PRICE";
 
-/** Portfolio as the broker reports it: currency balances and when they were observed. Valuation, P&L, exposure and margin are **not** here. #22 owns them. */
+/** Portfolio aggregates and authoritative cash balances remain separate. */
 export type PortfolioDto = {
   account_id: string;
+  total_portfolio_valuation?: null | MoneyValuationDto;
+  total_currency_valuation?: null | MoneyValuationDto;
+  /** Actual currency balances from GetPositions, never inferred from portfolio aggregates. */
   balances: Array<CurrencyBalanceDto>;
   broker_observed_at_unix_ms?: number | null;
 };
@@ -296,10 +320,10 @@ export type PriceConventionDto = "SETTLEMENT_CURRENCY" | "POINTS";
 
 /** Stop loss and take profit are independent and both optional. */
 export type ProtectionPlanDto = {
-  stop_loss_trigger_price?: unknown | Decimal;
-  stop_loss_trailing?: unknown | TrailingDistanceDto;
-  take_profit_trigger_price?: unknown | Decimal;
-  take_profit_limit_price?: unknown | Decimal;
+  stop_loss_trigger_price?: null | Decimal;
+  stop_loss_trailing?: null | TrailingDistanceDto;
+  take_profit_trigger_price?: null | Decimal;
+  take_profit_limit_price?: null | Decimal;
 };
 
 /** The canonical protection lifecycle, all ten states. Two of them carry data and are the two an operator most needs to see: a position that filled only partly and is therefore only partly protected, and protection that failed after the position was already open. `STALE` is deliberately absent: staleness is the age of the last broker answer, carried by stream health, not a lifecycle state. */
@@ -322,13 +346,13 @@ export type ProviderDto = "T_INVEST";
 /** Last price and the top of book, with the day's range. Absent fields mean the provider did not supply them for this instrument, which is a different thing from a zero and must not be rendered as one. */
 export type QuoteDto = {
   instrument_uid: string;
-  last?: unknown | Decimal;
-  bid?: unknown | Decimal;
-  ask?: unknown | Decimal;
-  change_absolute?: unknown | Decimal;
-  change_percent?: unknown | Decimal;
-  day_high?: unknown | Decimal;
-  day_low?: unknown | Decimal;
+  last?: null | Decimal;
+  bid?: null | Decimal;
+  ask?: null | Decimal;
+  change_absolute?: null | Decimal;
+  change_percent?: null | Decimal;
+  day_high?: null | Decimal;
+  day_low?: null | Decimal;
   /** Traded volume in instrument units. */
   volume_units?: number | null;
   freshness: MarketFreshness;
@@ -363,7 +387,7 @@ export type ReplaceOrderRequest = {
   broker_order_id?: string | null;
   logical_request_id?: string | null;
   quantity_lots: number;
-  price?: unknown | Decimal;
+  price?: null | Decimal;
 };
 
 /** Everything the shell needs to answer "can I trade right now, and if not why". */
@@ -406,7 +430,7 @@ export type ServerEvent = {
   as_of_unix_ms: number;
   /** Runtime ownership epoch this event belongs to. */
   runtime_epoch: number;
-  scope?: unknown | ExecutionScope;
+  scope?: null | ExecutionScope;
   payload: EventPayload;
   type: "SNAPSHOT";
 } | {
@@ -416,7 +440,7 @@ export type ServerEvent = {
   runtime_epoch: number;
   /** Monotonic per-subscription sequence, so a gap is detectable. */
   sequence: number;
-  scope?: unknown | ExecutionScope;
+  scope?: null | ExecutionScope;
   payload: EventPayload;
   type: "UPDATE";
 } | {
@@ -450,14 +474,26 @@ export type SessionDto = {
   freshness: MarketFreshness;
 };
 
-/** A stop order identity and its liveness. Trigger levels are not in the read model yet. */
+export type StopExecutionStatusDto = {
+  status: "ACTIVE";
+} | {
+  status: "EXECUTED";
+} | {
+  status: "CANCELED";
+} | {
+  status: "EXPIRED";
+} | {
+  wire_value: number;
+  status: "UNKNOWN_PROVIDER_STATUS";
+};
+
+/** Stop identity and exact provider status. Provider readback has no logical request identity. */
 export type StopOrderDto = {
   account_id: string;
   broker_stop_order_id: string;
-  logical_request_id?: string | null;
   instrument_uid: string;
-  active: boolean;
-  terminal: boolean;
+  status: StopExecutionStatusDto;
+  status_cause_code?: number | null;
 };
 
 /** Health of one broker stream, including how old its last event is. */
@@ -486,10 +522,10 @@ export type SubmitOrderRequest = {
   side: OrderSideDto;
   order_type: OrderTypeDto;
   quantity_lots: number;
-  price?: unknown | Decimal;
+  price?: null | Decimal;
   price_convention: PriceConventionDto;
   time_in_force: TimeInForceDto;
-  protection?: unknown | ProtectionPlanDto;
+  protection?: null | ProtectionPlanDto;
 };
 
 /** Establish or replace protection legs on an existing position. Not a bulk migration. */
@@ -508,7 +544,7 @@ export type SubmitStopOrderRequest = {
   side: OrderSideDto;
   quantity_lots: number;
   trigger_price: Decimal;
-  limit_price?: unknown | Decimal;
+  limit_price?: null | Decimal;
 };
 
 /** Why a subscription is in its current status. */

@@ -8,8 +8,8 @@ use tokio::sync::mpsc;
 use crate::model::{
     BrokerAccount, BrokerEvent, BrokerIdentityLinks, DerivedPositionExpectation, JournalState,
     MutationRecord, OperationsPage, OrderFact, PortfolioFact, ReasonCode, ReconciliationCheckpoint,
-    RuntimeAuditRecord, RuntimeHealth, RuntimeScope, StateTransition, StopFact, StoreCounts,
-    StreamKind,
+    ReconciliationDisposition, RuntimeAuditRecord, RuntimeExecutionCommand, RuntimeHealth,
+    RuntimeScope, StateTransition, StopFact, StoreCounts, StreamKind,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -59,7 +59,7 @@ pub trait BrokerReadPort: Send + Sync {
     async fn positions(
         &self,
         scope: &RuntimeScope,
-    ) -> Result<Vec<crate::model::PositionFact>, BrokerPortError>;
+    ) -> Result<crate::model::PositionsFact, BrokerPortError>;
     async fn active_orders(&self, scope: &RuntimeScope) -> Result<Vec<OrderFact>, BrokerPortError>;
     async fn stop_orders(
         &self,
@@ -101,6 +101,7 @@ pub trait ExecutionPort: Send + Sync {
     async fn dispatch_once(
         &self,
         scope: &RuntimeScope,
+        command: &RuntimeExecutionCommand,
         mutation: &MutationRecord,
     ) -> Result<ExecutionResult, BrokerPortError>;
 }
@@ -157,7 +158,7 @@ pub trait RuntimeStore: Clone + Send + Sync + 'static {
         expected: &[JournalState],
         target: JournalState,
         broker_evidence_ref: Option<&str>,
-        disposition: Option<&str>,
+        disposition: Option<&ReconciliationDisposition>,
         runtime_epoch: u64,
         now_unix_ms: i64,
     ) -> Result<MutationRecord, StoreError>;

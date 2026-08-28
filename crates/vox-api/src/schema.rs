@@ -9,8 +9,9 @@ use utoipa::OpenApi;
 use utoipa::openapi::OpenApi as OpenApiDoc;
 
 use crate::contract::account::{
-    BrokerAccountDto, CurrencyBalanceDto, OperationDto, OperationsPageDto, OrderDto, PortfolioDto,
-    PositionDto, ReconciliationDto, StopOrderDto,
+    BrokerAccountDto, CurrencyBalanceDto, MoneyValuationDto, OperationDto, OperationsPageDto,
+    OrderDto, OrderExecutionStatusDto, PortfolioDto, PositionDto, ReconciliationDto,
+    StopExecutionStatusDto, StopOrderDto,
 };
 use crate::contract::capability::{Capability, CapabilitySet, UnavailableCapability};
 use crate::contract::execution::{
@@ -76,7 +77,8 @@ use crate::transport::http;
         SystemHealthDto, RuntimeHealthDto, RuntimeStateDto, ReasonCodeDto, SafetyConditionDto,
         StreamHealthDto, StreamKindDto, StreamStateDto,
         ExecutionScope, ProviderDto, BrokerEnvironment, TradingMode,
-        BrokerAccountDto, PortfolioDto, CurrencyBalanceDto, PositionDto, OrderDto, StopOrderDto,
+        BrokerAccountDto, PortfolioDto, CurrencyBalanceDto, MoneyValuationDto, PositionDto,
+        OrderDto, OrderExecutionStatusDto, StopOrderDto, StopExecutionStatusDto,
         OperationDto, OperationsPageDto, ReconciliationDto,
         SubmitOrderRequest, CancelOrderRequest, ReplaceOrderRequest, SubmitStopOrderRequest,
         SubmitProtectionRequest, MutationReceiptDto, MutationKindDto,

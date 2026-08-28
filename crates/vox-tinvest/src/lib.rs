@@ -16,6 +16,7 @@ pub mod market_stream;
 pub mod operations;
 pub mod operations_stream;
 pub mod reports;
+pub mod runtime_execution;
 
 mod grpc;
 mod rest;
