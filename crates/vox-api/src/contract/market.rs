@@ -140,7 +140,9 @@ pub struct TradeTickDto {
 }
 
 /// Candle interval. Only intervals the provider actually serves appear here.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CandleIntervalDto {
     OneMinute,

@@ -158,7 +158,18 @@ async fn handle_client_message(
             subscription_id,
             topic,
             scope,
-        } => subscribe(state, subscriptions, subscription_id, topic, scope).await,
+            instrument_uid,
+        } => {
+            subscribe(
+                state,
+                subscriptions,
+                subscription_id,
+                topic,
+                scope,
+                instrument_uid,
+            )
+            .await
+        }
     }
 }
 
@@ -168,6 +179,7 @@ async fn subscribe(
     subscription_id: String,
     topic: Topic,
     scope: Option<ExecutionScope>,
+    instrument_uid: Option<String>,
 ) -> Vec<ServerEvent> {
     // Only the topics whose read model exists may be accepted.
     if let Some(existing) = subscriptions.get(&subscription_id) {
@@ -184,17 +196,8 @@ async fn subscribe(
     match topic {
         Topic::RuntimeHealth => {}
         Topic::Quotes | Topic::OrderBook | Topic::Trades => {
-            if state.market_data.is_none() {
-                return vec![unavailable(
-                    subscription_id,
-                    "no market-data projection is attached to this process",
-                )];
-            }
-            // The read model exists but nothing pushes it yet.
-            return vec![unavailable(
-                subscription_id,
-                "live market data needs the streaming projection over the #8 provider layer",
-            )];
+            return market_snapshot(state, subscriptions, subscription_id, topic, instrument_uid)
+                .await;
         }
         Topic::Positions | Topic::Orders | Topic::Stops | Topic::Operations | Topic::Portfolio => {
             if state.accounts.is_none() {
@@ -263,6 +266,84 @@ async fn subscribe(
             payload: EventPayload::RuntimeHealth(health),
         },
     ]
+}
+
+async fn market_snapshot(
+    state: &AppState,
+    subscriptions: &mut HashMap<String, Subscription>,
+    subscription_id: String,
+    topic: Topic,
+    instrument_uid: Option<String>,
+) -> Vec<ServerEvent> {
+    let Ok(port) = state.market_data_port() else {
+        return vec![unavailable(
+            subscription_id,
+            "no market-data projection is attached to this process",
+        )];
+    };
+    let Some(instrument_uid) = instrument_uid.filter(|value| !value.trim().is_empty()) else {
+        return vec![ServerEvent::Error {
+            schema_version: STREAM_SCHEMA_VERSION,
+            subscription_id: Some(subscription_id),
+            code: "INSTRUMENT_REQUIRED".to_owned(),
+            message: "a market topic needs instrument_uid".to_owned(),
+            correlation_id: uuid::Uuid::new_v4().to_string(),
+        }];
+    };
+    let payload = match topic {
+        Topic::Quotes => match port.quote(state.provider, &instrument_uid).await {
+            Ok(quote) => EventPayload::Quote(quote),
+            Err(error) => return vec![market_error(subscription_id, error)],
+        },
+        Topic::OrderBook => match port.order_book(state.provider, &instrument_uid, 20).await {
+            Ok(book) => EventPayload::OrderBook(book),
+            Err(error) => return vec![market_error(subscription_id, error)],
+        },
+        Topic::Trades => match port.trades(state.provider, &instrument_uid, 100).await {
+            Ok(trades) => EventPayload::Trades(trades),
+            Err(error) => return vec![market_error(subscription_id, error)],
+        },
+        _ => {
+            return vec![unavailable(
+                subscription_id,
+                "this topic is not a market projection topic",
+            )];
+        }
+    };
+    subscriptions.insert(
+        subscription_id.clone(),
+        Subscription {
+            topic,
+            scope: None,
+            sequence: 0,
+        },
+    );
+    vec![
+        ServerEvent::Status {
+            schema_version: STREAM_SCHEMA_VERSION,
+            subscription_id: subscription_id.clone(),
+            status: SubscriptionStatus::Active,
+            detail: None,
+        },
+        ServerEvent::Snapshot {
+            schema_version: STREAM_SCHEMA_VERSION,
+            subscription_id,
+            as_of_unix_ms: now_unix_ms(),
+            runtime_epoch: 0,
+            scope: None,
+            payload,
+        },
+    ]
+}
+
+fn market_error(subscription_id: String, error: crate::error::ApiError) -> ServerEvent {
+    ServerEvent::Error {
+        schema_version: STREAM_SCHEMA_VERSION,
+        subscription_id: Some(subscription_id),
+        code: error.code,
+        message: error.message,
+        correlation_id: error.correlation_id,
+    }
 }
 
 fn unavailable(subscription_id: String, detail: &str) -> ServerEvent {
@@ -402,6 +483,48 @@ mod tests {
         };
         assert_eq!(sequence_of(&first), 1);
         assert_eq!(sequence_of(&second), 2);
+    }
+
+    #[tokio::test]
+    async fn a_market_topic_with_a_projection_gets_a_quote_snapshot()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::contract::runtime::StreamStateDto;
+        use crate::market_project::{SnapshotMarketProjection, quote_from_last_price};
+        use std::sync::Arc;
+        use vox_domain::FixedPoint;
+        let projection = SnapshotMarketProjection::new();
+        projection.publish_quote(quote_from_last_price(
+            "uid-sber",
+            FixedPoint::from_units_nano(272, 550_000_000)?,
+            1_000,
+            StreamStateDto::Active,
+        ));
+        let state = AppState::detached(ProviderDto::TInvest, BrokerEnvironment::Sandbox)
+            .with_market_data(Arc::new(projection));
+        let mut subs = HashMap::new();
+        let events = handle_client_message(
+            "{\"type\":\"SUBSCRIBE\",\"subscription_id\":\"q-1\",\"topic\":\"QUOTES\",\"instrument_uid\":\"uid-sber\"}",
+            &state,
+            &mut subs,
+        )
+        .await;
+        assert!(
+            matches!(
+                events.as_slice(),
+                [
+                    ServerEvent::Status {
+                        status: SubscriptionStatus::Active,
+                        ..
+                    },
+                    ServerEvent::Snapshot {
+                        payload: EventPayload::Quote(_),
+                        ..
+                    }
+                ]
+            ),
+            "expected active snapshot, got {events:?}"
+        );
+        Ok(())
     }
 
     fn sample_health() -> crate::contract::runtime::RuntimeHealthDto {

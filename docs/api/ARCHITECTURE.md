@@ -75,18 +75,16 @@ inside a provider-named scope.
 publishes `vox-domain::InstrumentIdentity` (`provider` + `uid`, with FIGI/ticker/class code
 as aliases). That is lookup identity, not the capital-command target.
 
-**Market data is a projection, not a second broker client.** `MarketDataQueries` reads what
-the accepted #8 adapter layer already acquired and republishes it provider-neutrally: quote,
-order book, tape, candles, session and the instrument catalogue. Three facts are contract, not
-decoration. Every record carries `MarketFreshness` (`stream`, `observed_at_unix_ms`, `age_ms`),
-because a price without an age is a claim the operator cannot check, and a stale quote stays
-visible with its age instead of vanishing. Every optional price is absent when the provider did
-not supply it, which is a different thing from zero and must never render as one. A candle
-states `closed`, so a still-forming bar is never read as settled. `InstrumentSummaryDto`
-carries `lot_size` and `min_price_increment` so the order ticket validates against provider
-metadata instead of guessing. No projection is attached in this slice: the six routes and the
-`QUOTES`/`ORDER_BOOK`/`TRADES` stream topics answer `CAPABILITY_UNAVAILABLE` naming their
-owner.
+**Market data is a projection, not a second broker client.** `SnapshotMarketProjection`
+stores facts already acquired by the #8 adapter and republishes them provider-neutrally:
+quote, order book, tape, candles, session and the instrument catalogue. Mapping functions
+(`quote_from_last_price`, `order_book_from_levels`, `trade_from_canonical`,
+`trading_status_from_provider`) take #8 field shapes (`FixedPoint`, uid, wire status)
+without importing protobuf. Every record carries `MarketFreshness`. An inconsistent book is
+refused. A missing instrument is `MARKET_FACT_NOT_FOUND`, never a zero price. Default
+`vox-server` does not attach an empty projection, so unattached `MARKET_DATA` stays
+`CAPABILITY_UNAVAILABLE`. When attached, `QUOTES`/`ORDER_BOOK`/`TRADES` WebSocket
+subscriptions emit a typed snapshot from the store.
 
 **One document, generated.** `docs/api/openapi.json` is produced by
 `cargo run -p vox-api --bin openapi -- docs/api/openapi.json` and served at

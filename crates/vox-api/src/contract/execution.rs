@@ -326,6 +326,55 @@ fn nonempty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
+/// Replace a live regular order. Identifies the original with exactly one target.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
+pub struct ReplaceOrderRequest {
+    pub scope: ExecutionScope,
+    pub instrument_id: String,
+    pub client_request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub broker_order_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logical_request_id: Option<String>,
+    pub quantity_lots: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price: Option<Decimal>,
+}
+
+impl ReplaceOrderRequest {
+    pub fn target(&self) -> Result<CancelTarget, ApiError> {
+        CancelOrderRequest {
+            scope: self.scope.clone(),
+            client_request_id: self.client_request_id.clone(),
+            broker_order_id: self.broker_order_id.clone(),
+            logical_request_id: self.logical_request_id.clone(),
+        }
+        .target()
+    }
+}
+
+/// Submit a stop order. Trigger is exact; limit price is optional.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
+pub struct SubmitStopOrderRequest {
+    pub scope: ExecutionScope,
+    pub instrument_id: String,
+    pub client_request_id: String,
+    pub side: OrderSideDto,
+    pub quantity_lots: i64,
+    pub trigger_price: Decimal,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit_price: Option<Decimal>,
+}
+
+/// Establish or replace protection legs on an existing position. Not a bulk migration.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
+pub struct SubmitProtectionRequest {
+    pub scope: ExecutionScope,
+    pub instrument_id: String,
+    pub client_request_id: String,
+    pub plan: ProtectionPlanDto,
+}
+
 /// The receipt of a capital-affecting command.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct MutationReceiptDto {

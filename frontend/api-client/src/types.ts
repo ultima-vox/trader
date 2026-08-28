@@ -84,6 +84,8 @@ export type ClientMessage = {
   subscription_id: string;
   topic: Topic;
   scope?: unknown | ExecutionScope;
+  /** Required for market topics. Provider uid inside a provider-named feed. */
+  instrument_uid?: string | null;
   type: "SUBSCRIBE";
 } | {
   subscription_id: string;
@@ -118,6 +120,30 @@ export type ErrorCategory = "VALIDATION" | "AUTHENTICATION" | "PERMISSION" | "NO
 export type EventPayload = {
   data: RuntimeHealthDto;
   topic: "RUNTIME_HEALTH";
+} | {
+  data: QuoteDto;
+  topic: "QUOTE";
+} | {
+  data: OrderBookDto;
+  topic: "ORDER_BOOK";
+} | {
+  data: Array<TradeTickDto>;
+  topic: "TRADES";
+} | {
+  data: Array<PositionDto>;
+  topic: "POSITIONS";
+} | {
+  data: Array<OrderDto>;
+  topic: "ORDERS";
+} | {
+  data: Array<StopOrderDto>;
+  topic: "STOPS";
+} | {
+  data: Array<OperationDto>;
+  topic: "OPERATIONS";
+} | {
+  data: PortfolioDto;
+  topic: "PORTFOLIO";
 };
 
 /** The immutable target of a read or a capital-affecting command. `broker_connection_id` is the application connection identity, never a credential. `account_id` is the canonical Vox account/binding identity. Provider broker-account identifiers are read-side metadata, not this key. */
@@ -329,6 +355,17 @@ export type ReconciliationDto = {
   complete: boolean;
 };
 
+/** Replace a live regular order. Identifies the original with exactly one target. */
+export type ReplaceOrderRequest = {
+  scope: ExecutionScope;
+  instrument_id: string;
+  client_request_id: string;
+  broker_order_id?: string | null;
+  logical_request_id?: string | null;
+  quantity_lots: number;
+  price?: unknown | Decimal;
+};
+
 /** Everything the shell needs to answer "can I trade right now, and if not why". */
 export type RuntimeHealthDto = {
   state: RuntimeStateDto;
@@ -453,6 +490,25 @@ export type SubmitOrderRequest = {
   price_convention: PriceConventionDto;
   time_in_force: TimeInForceDto;
   protection?: unknown | ProtectionPlanDto;
+};
+
+/** Establish or replace protection legs on an existing position. Not a bulk migration. */
+export type SubmitProtectionRequest = {
+  scope: ExecutionScope;
+  instrument_id: string;
+  client_request_id: string;
+  plan: ProtectionPlanDto;
+};
+
+/** Submit a stop order. Trigger is exact; limit price is optional. */
+export type SubmitStopOrderRequest = {
+  scope: ExecutionScope;
+  instrument_id: string;
+  client_request_id: string;
+  side: OrderSideDto;
+  quantity_lots: number;
+  trigger_price: Decimal;
+  limit_price?: unknown | Decimal;
 };
 
 /** Why a subscription is in its current status. */

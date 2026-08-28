@@ -8,6 +8,8 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use super::account::{OperationDto, OrderDto, PortfolioDto, PositionDto, StopOrderDto};
+use super::market::{OrderBookDto, QuoteDto, TradeTickDto};
 use super::runtime::RuntimeHealthDto;
 use super::scope::ExecutionScope;
 
@@ -51,6 +53,9 @@ pub enum ClientMessage {
         /// Required for every account-scoped topic.
         #[serde(skip_serializing_if = "Option::is_none")]
         scope: Option<ExecutionScope>,
+        /// Required for market topics. Provider uid inside a provider-named feed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instrument_uid: Option<String>,
     },
     Unsubscribe {
         subscription_id: String,
@@ -80,6 +85,14 @@ pub enum SubscriptionStatus {
 #[serde(tag = "topic", content = "data", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum EventPayload {
     RuntimeHealth(RuntimeHealthDto),
+    Quote(QuoteDto),
+    OrderBook(OrderBookDto),
+    Trades(Vec<TradeTickDto>),
+    Positions(Vec<PositionDto>),
+    Orders(Vec<OrderDto>),
+    Stops(Vec<StopOrderDto>),
+    Operations(Vec<OperationDto>),
+    Portfolio(PortfolioDto),
 }
 
 /// What the server sends.
@@ -146,6 +159,7 @@ mod tests {
             subscription_id: "s-1".to_owned(),
             topic: Topic::RuntimeHealth,
             scope: None,
+            instrument_uid: None,
         };
         let json = serde_json::to_string(&msg)?;
         assert!(json.contains("\"type\":\"SUBSCRIBE\""), "{json}");

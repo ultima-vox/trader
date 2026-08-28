@@ -16,7 +16,8 @@ use crate::contract::capability::{Capability, CapabilitySet, UnavailableCapabili
 use crate::contract::execution::{
     CancelOrderRequest, JournalStateDto, MutationDecisionDto, MutationKindDto, MutationReceiptDto,
     OrderSideDto, OrderTypeDto, PriceConventionDto, ProtectionPlanDto, ProtectionStateDto,
-    SubmitOrderRequest, TimeInForceDto, TrailingDistanceDto, TrailingModeDto,
+    ReplaceOrderRequest, SubmitOrderRequest, SubmitProtectionRequest, SubmitStopOrderRequest,
+    TimeInForceDto, TrailingDistanceDto, TrailingModeDto,
 };
 use crate::contract::instrument::InstrumentIdentityDto;
 use crate::contract::market::{
@@ -48,7 +49,9 @@ use crate::transport::http;
         http::system_health,
         http::capabilities,
         http::runtime_health,
+        http::runtime_scopes,
         http::reconciliation,
+        http::mutations,
         http::accounts,
         http::portfolio,
         http::positions,
@@ -57,6 +60,10 @@ use crate::transport::http;
         http::operations,
         http::submit_order,
         http::cancel_order,
+        http::replace_order,
+        http::submit_stop_order,
+        http::cancel_stop_order,
+        http::submit_protection,
         http::instruments,
         http::quote,
         http::order_book,
@@ -71,7 +78,8 @@ use crate::transport::http;
         ExecutionScope, ProviderDto, BrokerEnvironment, TradingMode,
         BrokerAccountDto, PortfolioDto, CurrencyBalanceDto, PositionDto, OrderDto, StopOrderDto,
         OperationDto, OperationsPageDto, ReconciliationDto,
-        SubmitOrderRequest, CancelOrderRequest, MutationReceiptDto, MutationKindDto,
+        SubmitOrderRequest, CancelOrderRequest, ReplaceOrderRequest, SubmitStopOrderRequest,
+        SubmitProtectionRequest, MutationReceiptDto, MutationKindDto,
         JournalStateDto, MutationDecisionDto, OrderSideDto, OrderTypeDto, TimeInForceDto,
         PriceConventionDto, ProtectionPlanDto, ProtectionStateDto, TrailingDistanceDto,
         TrailingModeDto, Decimal,

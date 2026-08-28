@@ -26,6 +26,8 @@ use crate::error::ApiError;
 #[async_trait]
 pub trait RuntimeQueries: Send + Sync {
     async fn health(&self) -> Result<RuntimeHealthDto, ApiError>;
+    /// Scopes the operator may select. Empty until #17 bindings exist.
+    async fn scopes(&self) -> Result<Vec<ExecutionScope>, ApiError>;
 }
 
 /// The per-account read side, owned by #9 and #11.
@@ -43,6 +45,7 @@ pub trait AccountQueries: Send + Sync {
         limit: u16,
     ) -> Result<OperationsPageDto, ApiError>;
     async fn reconciliation(&self, scope: &ExecutionScope) -> Result<ReconciliationDto, ApiError>;
+    async fn mutations(&self, scope: &ExecutionScope) -> Result<Vec<MutationReceiptDto>, ApiError>;
 }
 
 /// Capital-affecting commands, owned by #10 and gated by #17 authorization and #11 readiness.
@@ -60,6 +63,22 @@ pub trait ExecutionCommands: Send + Sync {
         &self,
         scope: &ExecutionScope,
         logical_request_id: &str,
+    ) -> Result<MutationReceiptDto, ApiError>;
+    async fn replace_order(
+        &self,
+        request: crate::contract::execution::ReplaceOrderRequest,
+    ) -> Result<MutationReceiptDto, ApiError>;
+    async fn submit_stop_order(
+        &self,
+        request: crate::contract::execution::SubmitStopOrderRequest,
+    ) -> Result<MutationReceiptDto, ApiError>;
+    async fn cancel_stop_order(
+        &self,
+        request: crate::contract::execution::CancelOrderRequest,
+    ) -> Result<MutationReceiptDto, ApiError>;
+    async fn submit_protection(
+        &self,
+        request: crate::contract::execution::SubmitProtectionRequest,
     ) -> Result<MutationReceiptDto, ApiError>;
 }
 
