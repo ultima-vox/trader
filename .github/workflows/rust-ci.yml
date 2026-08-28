@@ -8,7 +8,9 @@ on:
       - "rust-toolchain.toml"
       - "rustfmt.toml"
       - "crates/**"
-      - "docs/rust-foundation.md"
+      - "docs/**"
+      - "architecture/**"
+      - "qualification/**"
       - "ARCHITECTURE.md"
       - "RUST_MIGRATION_PLAN.md"
       - ".github/workflows/rust-ci.yml"
@@ -33,21 +35,34 @@ jobs:
     timeout-minutes: 30
     env:
       BASH_ENV: /dev/null
-      CARGO_HOME: /tmp/vox-cargo-${{ github.run_id }}
-      CARGO_TARGET_DIR: /tmp/vox-target-${{ github.run_id }}
-      RUSTUP_HOME: /tmp/vox-rustup-${{ github.run_id }}
+      # This runner reaches static.rust-lang.org and crates.io unreliably: HTTP/2
+      # multiplexing stalls and TLS handshakes are cut. Keep the transport simple
+      # and patient, and download nothing that is already on the machine.
+      CARGO_HTTP_MULTIPLEXING: false
+      CARGO_HTTP_LOW_SPEED_LIMIT: 1
+      CARGO_HTTP_TIMEOUT: 120
+      CARGO_NET_RETRY: 5
+      # The build tree is per-run and disposable; the toolchain is not. It
+      # lives on the disk, not on /tmp: that is a 7.8G RAM-backed tmpfs here,
+      # and a debug build of the whole workspace with all targets does not fit.
+      CARGO_TARGET_DIR: /var/tmp/vox-target-${{ github.run_id }}
     defaults:
       run:
         shell: 'bash --noprofile --norc -e -o pipefail "{0}"'
     steps:
-      - name: Remove stale Vox CI artifacts
+      - name: Remove stale Vox build trees
         run: |
           set -euo pipefail
           shopt -s nullglob
-          for candidate in /tmp/vox-cargo-* /tmp/vox-rustup-* /tmp/vox-target-*; do
+          # /tmp/vox-cargo-* and /tmp/vox-rustup-* are throwaway toolchain homes
+          # from the old per-run install; sweep them out too.
+          for candidate in /tmp/vox-cargo-* /tmp/vox-rustup-* /tmp/vox-target-* /var/tmp/vox-target-*; do
             resolved="$(realpath -e -- "$candidate")"
+            if [[ "$resolved" == "$CARGO_TARGET_DIR" ]]; then
+              continue
+            fi
             case "$resolved" in
-              /tmp/vox-cargo-[0-9]*|/tmp/vox-rustup-[0-9]*|/tmp/vox-target-[0-9]*)
+              /tmp/vox-cargo-[0-9]*|/tmp/vox-rustup-[0-9]*|/tmp/vox-target-[0-9]*|/var/tmp/vox-target-[0-9]*)
                 rm -rf -- "$resolved"
                 ;;
               *)
@@ -57,36 +72,103 @@ jobs:
             esac
           done
       - uses: actions/checkout@v5
-      - name: Install pinned Rust toolchain
+      - name: Use the pinned Rust toolchain
         run: |
           set -euo pipefail
-          if [[ ! -x "$CARGO_HOME/bin/rustup" ]]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --profile minimal --default-toolchain none
-          fi
-          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          # The toolchain lives in the runner's home and survives the job. A job
+          # that re-downloaded it every run failed whenever the network to
+          # static.rust-lang.org was cut, which is most of the time here.
+          export RUSTUP_HOME="$HOME/.rustup"
+          export CARGO_HOME="$HOME/.cargo"
           export PATH="$CARGO_HOME/bin:$PATH"
-          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
-          rustup default 1.97.1
+
+          # One source of truth for the version: the file cargo itself obeys.
+          channel="$(sed -n 's/^channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | tr -d '\r' | head -n 1)"
+          if [[ -z "$channel" ]]; then
+            echo "rust-toolchain.toml declares no channel" >&2
+            exit 1
+          fi
+
+          if [[ ! -x "$CARGO_HOME/bin/rustup" ]]; then
+            rustup_init="$RUNNER_TEMP/rustup-init"
+            curl -4 --proto '=https' --tlsv1.2 --retry 5 \
+              --retry-all-errors --retry-delay 5 -sSfL \
+              --connect-timeout 15 --max-time 300 \
+              https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init \
+              -o "$rustup_init"
+            chmod +x "$rustup_init"
+            "$rustup_init" -y --no-modify-path --profile minimal --default-toolchain none
+          fi
+
+          if rustup toolchain list | grep -q "^${channel}-"; then
+            echo "$channel is already installed; not touching the network"
+          else
+            for attempt in 1 2 3; do
+              if timeout 900 rustup toolchain install "$channel" \
+                --profile minimal --component clippy,rustfmt; then
+                break
+              fi
+              [[ "$attempt" -lt 3 ]] || exit 1
+              sleep "$((attempt * 10))"
+            done
+          fi
+
+          echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+
+          # rust-toolchain.toml selects the toolchain; prove it selected the
+          # pinned one rather than whatever happens to be the rustup default.
+          active="$(rustup show active-toolchain)"
+          echo "$active"
+          case "$active" in
+            "$channel"-*) ;;
+            *)
+              echo "the active toolchain is not the pinned $channel" >&2
+              exit 1
+              ;;
+          esac
+          rustc --version
+      - name: Fetch locked dependencies
+        run: |
+          set -euo pipefail
+          # The registry cache lives in the persistent CARGO_HOME, so an
+          # unchanged lockfile needs no network at all. Ask offline first and
+          # only reach for crates.io when the lockfile actually grew.
+          if cargo fetch --locked --offline; then
+            echo "the cargo cache already satisfies the lockfile"
+          else
+            echo "the lockfile names crates that are not cached; fetching"
+            for attempt in 1 2 3; do
+              # A blocked crates.io hangs rather than refusing, so bound it:
+              # a hang must fail fast and legibly, not burn the job timeout.
+              if timeout 300 cargo fetch --locked; then
+                break
+              fi
+              [[ "$attempt" -lt 3 ]] || exit 1
+              sleep "$((attempt * 10))"
+            done
+          fi
+          # Everything the lockfile names is on disk; the rest of the job is
+          # offline, so a network stall cannot turn into a false red build.
+          echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --locked --workspace
+      - run: cargo test --locked --workspace --all-targets --all-features
       - name: Smoke Vox Core composition
         run: cargo run --locked -p vox-core --bin vox-core
-      - name: Remove current Vox CI artifacts
+      - name: Remove this run's build tree
         if: always()
         run: |
           set -euo pipefail
-          for candidate in "$CARGO_HOME" "$RUSTUP_HOME" "$CARGO_TARGET_DIR"; do
-            [[ -e "$candidate" ]] || continue
-            resolved="$(realpath -e -- "$candidate")"
-            case "$resolved" in
-              /tmp/vox-cargo-[0-9]*|/tmp/vox-rustup-[0-9]*|/tmp/vox-target-[0-9]*)
-                rm -rf -- "$resolved"
-                ;;
-              *)
-                echo "Refusing unexpected cleanup target: $resolved" >&2
-                exit 1
-                ;;
-            esac
-          done
+          [[ -e "$CARGO_TARGET_DIR" ]] || exit 0
+          resolved="$(realpath -e -- "$CARGO_TARGET_DIR")"
+          case "$resolved" in
+            /tmp/vox-target-[0-9]*|/var/tmp/vox-target-[0-9]*)
+              rm -rf -- "$resolved"
+              ;;
+            *)
+              echo "Refusing unexpected cleanup target: $resolved" >&2
+              exit 1
+              ;;
+          esac

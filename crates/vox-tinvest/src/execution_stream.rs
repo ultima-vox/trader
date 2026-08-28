@@ -18,8 +18,10 @@ use crate::generated::v1;
 use crate::{GrpcError, GrpcResponseMetadata, GrpcStreamError, RetryPolicy, TInvestGrpcClient};
 
 pub const DEFAULT_EXECUTION_PING_DELAY_MS: i32 = 120_000;
-pub const MIN_EXECUTION_PING_DELAY_MS: i32 = 5_000;
-pub const MAX_EXECUTION_PING_DELAY_MS: i32 = 180_000;
+pub const MIN_TRADES_PING_DELAY_MS: i32 = 5_000;
+pub const MAX_TRADES_PING_DELAY_MS: i32 = 180_000;
+pub const MIN_ORDER_STATE_PING_DELAY_MS: i32 = 1_000;
+pub const MAX_ORDER_STATE_PING_DELAY_MS: i32 = 120_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExecutionStreamKind {
@@ -59,12 +61,22 @@ impl ExecutionStreamConfig {
         if self.subscription_ack_timeout.is_zero() {
             return Err(ExecutionStreamError::ZeroSubscriptionAckTimeout);
         }
-        if !(MIN_EXECUTION_PING_DELAY_MS..=MAX_EXECUTION_PING_DELAY_MS)
-            .contains(&self.ping_delay_ms)
-        {
-            return Err(ExecutionStreamError::InvalidPingDelay);
-        }
         Ok(())
+    }
+
+    pub fn validate_for(&self, kind: ExecutionStreamKind) -> Result<(), ExecutionStreamError> {
+        self.validate()?;
+        let documented_range = match kind {
+            ExecutionStreamKind::Trades => MIN_TRADES_PING_DELAY_MS..=MAX_TRADES_PING_DELAY_MS,
+            ExecutionStreamKind::OrderState => {
+                MIN_ORDER_STATE_PING_DELAY_MS..=MAX_ORDER_STATE_PING_DELAY_MS
+            }
+        };
+        if documented_range.contains(&self.ping_delay_ms) {
+            Ok(())
+        } else {
+            Err(ExecutionStreamError::InvalidPingDelay)
+        }
     }
 }
 
@@ -239,6 +251,7 @@ impl ExecutionStreamSupervisor {
         kind: ExecutionStreamKind,
         accounts: Vec<String>,
     ) -> Result<ExecutionStreamHandle, ExecutionStreamError> {
+        self.config.validate_for(kind)?;
         let accounts = validate_accounts(accounts)?;
         let (events_tx, events) = mpsc::channel(self.config.event_capacity);
         let (stop, stop_rx) = watch::channel(false);
@@ -476,7 +489,7 @@ pub enum ExecutionStreamError {
     ZeroStaleTimeout,
     #[error("execution stream subscription ACK timeout must be positive")]
     ZeroSubscriptionAckTimeout,
-    #[error("execution stream ping delay must be within 5000..=180000 ms")]
+    #[error("execution stream ping delay is outside selected stream's documented range")]
     InvalidPingDelay,
     #[error("execution stream requires at least one account")]
     NoAccounts,
@@ -577,13 +590,26 @@ mod tests {
             ping_delay_ms: 180_000,
             ..Default::default()
         };
-        assert!(config.validate().is_ok());
+        assert!(config.validate_for(ExecutionStreamKind::Trades).is_ok());
+        assert_eq!(
+            config.validate_for(ExecutionStreamKind::OrderState),
+            Err(ExecutionStreamError::InvalidPingDelay)
+        );
         let config = ExecutionStreamConfig {
             ping_delay_ms: 180_001,
             ..Default::default()
         };
         assert_eq!(
-            config.validate(),
+            config.validate_for(ExecutionStreamKind::Trades),
+            Err(ExecutionStreamError::InvalidPingDelay)
+        );
+        let config = ExecutionStreamConfig {
+            ping_delay_ms: 1_000,
+            ..Default::default()
+        };
+        assert!(config.validate_for(ExecutionStreamKind::OrderState).is_ok());
+        assert_eq!(
+            config.validate_for(ExecutionStreamKind::Trades),
             Err(ExecutionStreamError::InvalidPingDelay)
         );
         let config = ExecutionStreamConfig {
