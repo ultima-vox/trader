@@ -3032,7 +3032,6 @@ dependencies = [
  "tonic",
  "tracing",
  "uuid",
- "vox-connections",
  "vox-domain",
  "vox-tinvest",
 ]

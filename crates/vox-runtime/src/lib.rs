@@ -4,7 +4,6 @@
 //! mutation uncertainty, typed identity links, fencing epochs, checkpoints,
 //! bounded dedupe evidence, audit and derived readiness observations.
 
-pub mod connection_credentials;
 pub mod coordinator;
 pub mod metrics;
 pub mod model;

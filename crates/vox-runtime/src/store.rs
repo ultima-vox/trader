@@ -1316,10 +1316,9 @@ mod tests {
     }
 
     fn scope() -> Result<RuntimeScope, crate::model::ModelError> {
-        RuntimeScope::new_bound(
+        RuntimeScope::new(
             Provider::TInvest,
             RuntimeEnvironment::Sandbox,
-            "vox-account-1",
             "account-1",
             OpaqueRef::new("connection:1")?,
             OpaqueRef::new("credential:1")?,

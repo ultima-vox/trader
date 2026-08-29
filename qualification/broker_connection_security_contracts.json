@@ -5,12 +5,15 @@
     "algorithm": "AES-256-GCM",
     "nonce_bytes": 12,
     "key_bytes": 32,
+    "dek_bytes": 32,
+    "dek_wrapping": "AES-256-GCM_WITH_EXTERNAL_KEK",
     "associated_data": [
       "credential_ref",
       "provider",
       "environment",
       "algorithm",
-      "key_version"
+      "key_version",
+      "payload_or_dek_purpose"
     ],
     "key_location": "EXTERNAL_TO_APPLICATION_DATABASE"
   },
@@ -45,6 +48,7 @@
     "NO_SECRET_IN_SERDE_DEBUG_DISPLAY_OR_AUDIT",
     "WRONG_KEK_REJECTED",
     "CIPHERTEXT_AUTHENTICATION_REJECTED",
+    "WRAPPED_DEK_AUTHENTICATION_REJECTED",
     "KEY_VERSION_REWRAP",
     "KEY_PROVIDER_ROTATION_WITH_HISTORICAL_LOOKUP",
     "CREDENTIAL_DISABLE_AND_DELETE_FAIL_CLOSED",
@@ -58,8 +62,7 @@
     "SANDBOX_EXECUTION_AUTHORIZATION_DEFAULTS_DISABLED",
     "RBAC_REJECTS_CREDENTIAL_AND_EXECUTION_CHANGES",
     "REVOKED_ACCOUNT_ACCESS_FAILS_CLOSED",
-    "ROTATION_REQUIRES_CONTROLLED_RECONNECT",
-    "EXACT_RUNTIME_SCOPE_RESOLUTION",
+    "ROTATION_CLOSES_GATE_AND_REQUIRES_FUTURE_RECONNECT",
     "LIVE_SANDBOX_ACCOUNT_DISCOVERY"
   ]
 }

@@ -15,6 +15,13 @@ pub trait ConnectionRepository: Send + Sync {
     fn grant_role(&self, user_id: &UserId, role_id: &RoleId) -> Result<(), RepositoryError>;
     fn permissions(&self, user_id: &UserId) -> Result<BTreeSet<Permission>, RepositoryError>;
     fn insert_connection(&self, connection: &BrokerConnection) -> Result<(), RepositoryError>;
+    fn insert_onboarding(
+        &self,
+        connection: &BrokerConnection,
+        accounts: &[BrokerAccount],
+        authorizations: &[ExecutionAuthorization],
+        audits: &[AuditRecord],
+    ) -> Result<(), RepositoryError>;
     fn update_connection(&self, connection: &BrokerConnection) -> Result<(), RepositoryError>;
     fn connection(&self, id: &ConnectionId) -> Result<Option<BrokerConnection>, RepositoryError>;
     fn list_connections(&self) -> Result<Vec<BrokerConnection>, RepositoryError>;
@@ -49,6 +56,11 @@ pub trait ConnectionRepository: Send + Sync {
     fn append_audit(&self, record: &AuditRecord) -> Result<(), RepositoryError>;
     fn audit_records(&self) -> Result<Vec<AuditRecord>, RepositoryError>;
     fn delete_connection(&self, id: &ConnectionId) -> Result<(), RepositoryError>;
+    fn delete_connection_with_audit(
+        &self,
+        id: &ConnectionId,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError>;
 }
 
 #[derive(Clone)]
@@ -142,6 +154,82 @@ impl ConnectionRepository for SqliteConnectionRepository {
 
     fn insert_connection(&self, connection: &BrokerConnection) -> Result<(), RepositoryError> {
         write_connection(&self.connection()?, connection, false)
+    }
+
+    fn insert_onboarding(
+        &self,
+        connection: &BrokerConnection,
+        accounts: &[BrokerAccount],
+        authorizations: &[ExecutionAuthorization],
+        audits: &[AuditRecord],
+    ) -> Result<(), RepositoryError> {
+        let mut database = self.connection()?;
+        let transaction = database.transaction()?;
+        write_connection(&transaction, connection, false)?;
+        for account in accounts {
+            if account.connection_id != connection.id {
+                return Err(RepositoryError::IdentityMismatch);
+            }
+            transaction.execute(
+                "INSERT INTO broker_accounts (
+                    connection_id, provider, environment, provider_account_id, display_name,
+                    account_type, account_status, access_level, opened_at_unix_ms,
+                    closed_at_unix_ms, accessible, capabilities_json, discovered_at_unix_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![
+                    account.connection_id.as_str(),
+                    account.provider.as_str(),
+                    encode(&account.environment)?,
+                    account.provider_account_id,
+                    account.display_name,
+                    encode(&account.account_type)?,
+                    encode(&account.status)?,
+                    encode(&account.access_level)?,
+                    account.opened_at_unix_ms,
+                    account.closed_at_unix_ms,
+                    account.accessible,
+                    encode(&account.capabilities)?,
+                    account.discovered_at_unix_ms,
+                ],
+            )?;
+        }
+        for authorization in authorizations {
+            if authorization.connection_id != connection.id {
+                return Err(RepositoryError::IdentityMismatch);
+            }
+            transaction.execute(
+                "INSERT INTO execution_authorizations (
+                    connection_id, provider_account_id, authorization_mode,
+                    changed_by, changed_at_unix_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    authorization.connection_id.as_str(),
+                    authorization.provider_account_id,
+                    encode(&authorization.mode)?,
+                    authorization.changed_by.as_str(),
+                    authorization.changed_at_unix_ms,
+                ],
+            )?;
+        }
+        for record in audits {
+            transaction.execute(
+                "INSERT INTO connection_audit (
+                    actor, action, target_ref, previous_state, new_state, correlation_id,
+                    occurred_at_unix_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    record.actor.as_str(),
+                    record.action,
+                    record.target_ref,
+                    record.previous_state,
+                    record.new_state,
+                    record.correlation_id,
+                    record.occurred_at_unix_ms,
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
     }
 
     fn update_connection(&self, connection: &BrokerConnection) -> Result<(), RepositoryError> {
@@ -433,6 +521,39 @@ impl ConnectionRepository for SqliteConnectionRepository {
             "DELETE FROM broker_connections WHERE connection_id = ?1",
             [id.as_str()],
         )?;
+        Ok(())
+    }
+
+    fn delete_connection_with_audit(
+        &self,
+        id: &ConnectionId,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError> {
+        let mut database = self.connection()?;
+        let transaction = database.transaction()?;
+        transaction.execute(
+            "INSERT INTO connection_audit (
+                actor, action, target_ref, previous_state, new_state, correlation_id,
+                occurred_at_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                audit.actor.as_str(),
+                audit.action,
+                audit.target_ref,
+                audit.previous_state,
+                audit.new_state,
+                audit.correlation_id,
+                audit.occurred_at_unix_ms,
+            ],
+        )?;
+        let changed = transaction.execute(
+            "DELETE FROM broker_connections WHERE connection_id = ?1",
+            [id.as_str()],
+        )?;
+        if changed != 1 {
+            return Err(RepositoryError::NotFound);
+        }
+        transaction.commit()?;
         Ok(())
     }
 }

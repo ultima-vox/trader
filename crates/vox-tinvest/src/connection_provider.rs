@@ -84,21 +84,9 @@ impl BrokerProviderPort for TInvestConnectionProvider {
         {
             connection_capabilities.insert(ConnectionCapability::ProductionOrdersProviderAllowed);
         }
-        let credential_class = if sandbox {
-            CredentialClass::Sandbox
-        } else if accounts
-            .iter()
-            .any(|account| account.access_level == BrokerAccessLevel::Full)
-        {
-            CredentialClass::FullAccess
-        } else if accounts
-            .iter()
-            .any(|account| account.access_level == BrokerAccessLevel::ReadOnly)
-        {
-            CredentialClass::ReadOnly
-        } else {
-            CredentialClass::Unknown
-        };
+        // GetAccounts access_level is an account fact, not authoritative token-class
+        // introspection. Only sandbox class is proven by explicit contour onboarding.
+        let credential_class = credential_class(sandbox);
         Ok(ProviderDiscovery {
             credential_class,
             // GetAccounts does not prove whether one returned account means a restricted token.
@@ -109,9 +97,21 @@ impl BrokerProviderPort for TInvestConnectionProvider {
     }
 }
 
+fn credential_class(sandbox: bool) -> CredentialClass {
+    if sandbox {
+        CredentialClass::Sandbox
+    } else {
+        CredentialClass::Unknown
+    }
+}
+
 fn provider_account(account: CanonicalAccount, sandbox: bool) -> ProviderAccountFact {
     let accessible = account.status == AccountStatus::Open as i32
-        && account.access_level != AccessLevel::AccountAccessLevelNoAccess as i32;
+        && matches!(
+            account.access_level,
+            value if value == AccessLevel::AccountAccessLevelFullAccess as i32
+                || value == AccessLevel::AccountAccessLevelReadOnly as i32
+        );
     let mut capabilities = if accessible {
         BTreeSet::from([
             ConnectionCapability::PortfolioRead,
@@ -230,10 +230,7 @@ fn map_config_error(_error: GrpcConfigError) -> ProviderError {
 }
 
 fn provider_error(kind: ProviderErrorKind, safe_message: &str) -> ProviderError {
-    ProviderError {
-        kind,
-        safe_message: safe_message.to_owned(),
-    }
+    ProviderError::new(kind, safe_message)
 }
 
 #[cfg(test)]
@@ -258,6 +255,7 @@ mod tests {
             fact.capabilities
                 .contains(&ConnectionCapability::ProductionOrdersProviderAllowed)
         );
+        assert_eq!(credential_class(false), CredentialClass::Unknown);
         // Provider scope is a fact only. Vox ExecutionAuthorization lives in connection service
         // and is always inserted disabled during onboarding.
     }
@@ -285,5 +283,7 @@ mod tests {
             fact.access_level,
             BrokerAccessLevel::UnknownProviderValue(93)
         );
+        assert!(!fact.accessible);
+        assert!(fact.capabilities.is_empty());
     }
 }

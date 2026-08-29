@@ -12,26 +12,26 @@ BrokerConnection(provider, environment, CredentialRef)
        -> BrokerAccountBinding(VoxAccountId)
        -> ExecutionAuthorization(default disabled)
 
-CredentialRef -> SecretStore -> encrypted_credentials
+CredentialRef -> SecretStore -> encrypted_credentials(payload ciphertext + wrapped DEK)
                            KEK -> KeyProvider (outside database)
 ```
 
 `vox-connections` owns generic types and lifecycle. `vox-tinvest::connection_provider` owns
 T-Invest endpoint routing, credential validation and provider-account capability mapping.
-`vox-runtime::connection_credentials` accepts a connection only when connection, credential,
-provider, environment, broker account and Vox account binding all match.
-
-Runtime scope keys include connection and Vox-account identity. Identical provider account IDs
-behind different connections therefore cannot share persistence ownership or retarget commands.
+`ConnectionService::resolve_bound_connection` returns internal credential material only when
+connection, provider environment, broker account and explicit Vox account binding all match.
+Transport/runtime client replacement remains deferred; no cached authorization bridge is exposed.
 
 ## Secret envelope
 
 - AEAD: AES-256-GCM through `ring`.
-- Random 96-bit nonce per encryption.
+- Random 256-bit DEK per credential encryption. DEK encrypts token with AES-256-GCM.
+- External KEK wraps DEK with separate AES-256-GCM operation and random 96-bit nonce. Payload and
+  DEK wrapping use distinct nonces and AAD purposes.
 - Authenticated associated data binds credential reference, provider, environment, algorithm and
   key version. Cross-environment row substitution fails authentication or context validation.
-- SQLite stores ciphertext, nonce, algorithm, key version, timestamps and short SHA-256
-  fingerprint only. It never stores KEK or plaintext.
+- SQLite stores payload ciphertext, wrapped DEK, both nonces, algorithm, key version, timestamps
+  and short SHA-256 fingerprint only. It never stores KEK, plaintext DEK or plaintext token.
 - `KeyProvider` supplies 32-byte KEKs by version. `StaticKeyProvider::from_hex_environment` loads
   `current_version` plus every retained older version from external environment variables. These
   variables belong in process/service secret configuration, never application DB or source.
@@ -52,9 +52,10 @@ DB backup without external KEK reveals metadata and ciphertext, not broker crede
 4. One `CredentialRef` belongs to connection; discovered accounts never duplicate secret.
 5. Every account receives explicit `ExecutionAuthorization::Disabled`, including provider
    full-access credentials. `ManualAllowed` and `AutomatedAllowed` require separate Vox RBAC.
-6. Credential rotation validates new material before replacing ciphertext. Success returns
-   `reconnect_required=true`; transport/runtime must stop admission, reconnect with new credential,
-   reconcile broker authority, then reopen readiness.
+6. Credential rotation validates new material, closes connection health to `VALIDATING`, replaces
+   envelope, persists broker facts, and returns `reconnect_required=true`. Failure compensates old
+   secret/metadata or disables credential. Future transport integration must reconnect and
+   reconcile before using changed credential.
 7. Disable closes connection use. Delete requires disabled state, removes secret first, then
    cascading metadata. Missing secret always prevents connection resolution.
 8. Rediscovery preserves missing accounts as inaccessible and marks health
@@ -64,10 +65,10 @@ Sandbox credentials construct only sandbox clients; production credentials const
 production clients. `BrokerEnvironment` contains only `SANDBOX` and `PRODUCTION`; paper trading is
 a separate future `TradingMode`, never broker routing.
 
-Credential class is confirmed only from onboarding context or broker facts. T-Invest account
-access levels can confirm read-only/full access; `GetAccounts` cannot prove that one returned
-account means a single-account-restricted token, so scope remains `NOT_CONFIRMED`. Transfer access
-is never inferred.
+Credential class is confirmed only from authoritative onboarding context or broker facts.
+T-Invest `GetAccounts.access_level` is retained as an account capability fact, not treated as token
+class introspection. Production credential class and scope remain `UNKNOWN`/`NOT_CONFIRMED`;
+sandbox class is proven by explicit contour onboarding. Transfer access is never inferred.
 
 ## RBAC
 
@@ -96,7 +97,7 @@ Strategy/AI identities receive only assigned roles. Without
 ## Internal API contract
 
 `ConnectionService` exposes transport-neutral operations for create/list, validate/rediscover,
-rotate, disable/delete, bind/unbind, authorization and exact runtime resolution. Read models
+rotate, disable/delete, bind/unbind, authorization and exact bound credential resolution. Read models
 serialize credential references and fingerprints, never credential material.
 
 Typed failures distinguish permission denial, invalid/inactive credential, insufficient provider
@@ -145,7 +146,7 @@ typed requested environment, reports credential rejection, and never tries anoth
 ## Phase boundary
 
 Phase A contains Rust domain/application ports, secure persistence, T-Invest validation adapter,
-runtime credential resolution and tests. PR #45 owns REST/WebSocket/OpenAPI/public DTO/generated
+bound credential resolution and tests. PR #45 owns REST/WebSocket/OpenAPI/public DTO/generated
 TypeScript/frontend integration. No Phase B transport wiring exists here.
 
 ## Qualification

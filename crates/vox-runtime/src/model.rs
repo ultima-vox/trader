@@ -28,7 +28,6 @@ pub enum RuntimeEnvironment {
 pub struct RuntimeScope {
     pub provider: Provider,
     pub environment: RuntimeEnvironment,
-    pub vox_account_id: String,
     pub broker_account_id: String,
     pub connection_ref: OpaqueRef,
     pub credential_ref: OpaqueRef,
@@ -42,31 +41,10 @@ impl RuntimeScope {
         connection_ref: OpaqueRef,
         credential_ref: OpaqueRef,
     ) -> Result<Self, ModelError> {
-        let broker_account_id = broker_account_id.into();
-        Self::new_bound(
-            provider,
-            environment,
-            broker_account_id.clone(),
-            broker_account_id,
-            connection_ref,
-            credential_ref,
-        )
-    }
-
-    pub fn new_bound(
-        provider: Provider,
-        environment: RuntimeEnvironment,
-        vox_account_id: impl Into<String>,
-        broker_account_id: impl Into<String>,
-        connection_ref: OpaqueRef,
-        credential_ref: OpaqueRef,
-    ) -> Result<Self, ModelError> {
-        let vox_account_id = required(vox_account_id.into(), "vox_account_id")?;
         let broker_account_id = required(broker_account_id.into(), "broker_account_id")?;
         Ok(Self {
             provider,
             environment,
-            vox_account_id,
             broker_account_id,
             connection_ref,
             credential_ref,
@@ -76,12 +54,8 @@ impl RuntimeScope {
     #[must_use]
     pub fn key(&self) -> String {
         format!(
-            "{:?}:{:?}:{}:{}:{}",
-            self.provider,
-            self.environment,
-            self.connection_ref.as_str(),
-            self.broker_account_id,
-            self.vox_account_id
+            "{:?}:{:?}:{}",
+            self.provider, self.environment, self.broker_account_id
         )
     }
 
@@ -130,7 +104,6 @@ impl OpaqueRef {
 struct RuntimeScopeUnchecked {
     provider: Provider,
     environment: RuntimeEnvironment,
-    vox_account_id: String,
     broker_account_id: String,
     connection_ref: OpaqueRef,
     credential_ref: OpaqueRef,
@@ -140,10 +113,9 @@ impl TryFrom<RuntimeScopeUnchecked> for RuntimeScope {
     type Error = ModelError;
 
     fn try_from(value: RuntimeScopeUnchecked) -> Result<Self, Self::Error> {
-        Self::new_bound(
+        Self::new(
             value.provider,
             value.environment,
-            value.vox_account_id,
             value.broker_account_id,
             value.connection_ref,
             value.credential_ref,
@@ -882,10 +854,9 @@ mod tests {
     fn opaque_refs_and_evidence_reject_secret_material() -> Result<(), ModelError> {
         assert!(OpaqueRef::new("Bearer abc").is_err());
         assert!(OpaqueRef::new("token=abc").is_err());
-        let scope = RuntimeScope::new_bound(
+        let scope = RuntimeScope::new(
             Provider::TInvest,
             RuntimeEnvironment::Sandbox,
-            "vox-account-1",
             "account-1234",
             OpaqueRef::new("connection:primary")?,
             OpaqueRef::new("credential:primary")?,
@@ -923,10 +894,9 @@ mod tests {
         }"#;
         assert!(serde_json::from_str::<RuntimeScope>(scope_json).is_err());
 
-        let scope = RuntimeScope::new_bound(
+        let scope = RuntimeScope::new(
             Provider::TInvest,
             RuntimeEnvironment::Sandbox,
-            "vox-account-1",
             "account-1",
             OpaqueRef::new("connection:primary")?,
             OpaqueRef::new("credential:primary")?,
@@ -988,38 +958,6 @@ mod tests {
         assert_eq!(STREAM_QUEUE_CAPACITY, 1_024);
         assert_eq!(RECONCILIATION_CONCURRENCY, 8);
         const { assert!(SQLITE_CONNECTION_LIMIT <= 4) };
-    }
-
-    #[test]
-    fn scope_identity_cannot_collide_across_connections_or_vox_accounts() -> Result<(), ModelError>
-    {
-        let first = RuntimeScope::new_bound(
-            Provider::TInvest,
-            RuntimeEnvironment::Production,
-            "vox-account-1",
-            "shared-broker-account",
-            OpaqueRef::new("connection:first")?,
-            OpaqueRef::new("credential:first")?,
-        )?;
-        let second_connection = RuntimeScope::new_bound(
-            Provider::TInvest,
-            RuntimeEnvironment::Production,
-            "vox-account-1",
-            "shared-broker-account",
-            OpaqueRef::new("connection:second")?,
-            OpaqueRef::new("credential:second")?,
-        )?;
-        let second_vox_account = RuntimeScope::new_bound(
-            Provider::TInvest,
-            RuntimeEnvironment::Production,
-            "vox-account-2",
-            "shared-broker-account",
-            OpaqueRef::new("connection:first")?,
-            OpaqueRef::new("credential:first")?,
-        )?;
-        assert_ne!(first.key(), second_connection.key());
-        assert_ne!(first.key(), second_vox_account.key());
-        Ok(())
     }
 
     #[test]

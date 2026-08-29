@@ -374,6 +374,7 @@ pub(crate) fn safe_text(
 ) -> Result<String, ModelError> {
     let value = value.into();
     let lower = value.to_ascii_lowercase();
+    let trimmed_lower = lower.trim_start();
     if value.trim().is_empty() {
         return Err(ModelError::Empty(field));
     }
@@ -381,6 +382,8 @@ pub(crate) fn safe_text(
         || lower.contains("bearer ")
         || lower.contains("token=")
         || lower.contains("secret=")
+        || trimmed_lower.starts_with("t.")
+        || trimmed_lower.starts_with("eyj")
         || value.chars().any(char::is_control)
     {
         return Err(ModelError::UnsafeMetadata(field));

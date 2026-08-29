@@ -127,6 +127,28 @@ fn key_rotation_rewraps_under_new_external_key() -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+#[test]
+fn corrupt_wrapped_dek_fails_authentication() -> Result<(), Box<dyn std::error::Error>> {
+    let path = temp_db("wrapped-dek");
+    let credential_ref = CredentialRef::new();
+    let store = SqliteSecretStore::open(&path, keys(1, &[(1, 2)])?)?;
+    let context = context(BrokerEnvironment::Sandbox);
+    store.put(&credential_ref, &context, secret("sandbox-secret")?, 1)?;
+    let connection = rusqlite::Connection::open(&path)?;
+    connection.execute(
+        "UPDATE encrypted_credentials SET wrapped_dek = zeroblob(length(wrapped_dek))",
+        [],
+    )?;
+    drop(connection);
+    assert!(matches!(
+        store.get(&credential_ref, &context),
+        Err(SecretStoreError::AuthenticationFailed)
+    ));
+    drop(store);
+    fs::remove_file(path)?;
+    Ok(())
+}
+
 #[derive(Clone, Default)]
 struct MockProvider {
     discoveries: SharedDiscoveries,
@@ -151,10 +173,7 @@ impl MockProvider {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         values.insert(
             credential.as_bytes().to_vec(),
-            Err(ProviderError {
-                kind,
-                safe_message: "provider rejected credential".to_owned(),
-            }),
+            Err(ProviderError::new(kind, "provider rejected credential")),
         );
     }
 }
@@ -168,10 +187,10 @@ impl BrokerProviderPort for MockProvider {
         credential: &SecretBytes,
     ) -> Result<ProviderDiscovery, ProviderError> {
         if provider.as_str() != ProviderId::T_INVEST {
-            return Err(ProviderError {
-                kind: ProviderErrorKind::UnsupportedProvider,
-                safe_message: "unsupported provider".to_owned(),
-            });
+            return Err(ProviderError::new(
+                ProviderErrorKind::UnsupportedProvider,
+                "unsupported provider",
+            ));
         }
         self.environments
             .lock()
@@ -183,10 +202,10 @@ impl BrokerProviderPort for MockProvider {
             .get(credential.expose_secret())
             .cloned()
             .unwrap_or_else(|| {
-                Err(ProviderError {
-                    kind: ProviderErrorKind::InvalidCredential,
-                    safe_message: "invalid credential".to_owned(),
-                })
+                Err(ProviderError::new(
+                    ProviderErrorKind::InvalidCredential,
+                    "invalid credential",
+                ))
             })
     }
 }
@@ -466,13 +485,20 @@ async fn sandbox_binding_and_credential_lifecycle_fail_closed()
         authorization.mode,
         ExecutionAuthorizationMode::ManualAllowed
     );
+    service.disable_connection(&security, &connection.id)?;
+    let disabled = service.set_execution_authorization(
+        &security,
+        &connection.id,
+        "sandbox-account",
+        ExecutionAuthorizationMode::Disabled,
+    )?;
+    assert_eq!(disabled.mode, ExecutionAuthorizationMode::Disabled);
     service.disable_binding(&security, &binding.id)?;
     assert!(
         service
             .resolve_bound_connection(&connection.id, "sandbox-account", &vox_account)
             .is_err()
     );
-    service.disable_connection(&security, &connection.id)?;
     service.delete_connection(&security, &connection.id)?;
     assert!(repository.connection(&connection.id)?.is_none());
     let actions = repository
@@ -545,6 +571,59 @@ async fn revoked_account_access_closes_health_and_exact_target()
                 ExecutionAuthorizationMode::AutomatedAllowed,
             )
             .is_err()
+    );
+    drop(service);
+    drop(repository);
+    fs::remove_file(path)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn capability_downgrade_revokes_automated_authorization()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = temp_db("capability-downgrade");
+    let repository = SqliteConnectionRepository::open(&path)?;
+    let store = SqliteSecretStore::open(&path, keys(1, &[(1, 8)])?)?;
+    let provider = MockProvider::default();
+    provider.accept("full", discovery(&["account"], true));
+    let actor = bootstrap(&repository, all_permissions())?;
+    let service = ConnectionService::new(repository.clone(), store, provider.clone());
+    let security = SecurityContext::new(actor, "downgrade", 1)?;
+    let connection = service
+        .create_connection(
+            &security,
+            CreateConnectionRequest {
+                provider: ProviderId::tinvest(),
+                environment: BrokerEnvironment::Production,
+                label: "Downgrade".to_owned(),
+            },
+            secret("full")?,
+        )
+        .await?;
+    service.bind_account(&security, &connection.id, "account", VoxAccountId::new())?;
+    service.set_execution_authorization(
+        &security,
+        &connection.id,
+        "account",
+        ExecutionAuthorizationMode::AutomatedAllowed,
+    )?;
+    provider.accept("full", discovery(&["account"], false));
+    let updated = service
+        .revalidate(
+            &SecurityContext::new(security.actor, "downgrade-2", 2)?,
+            &connection.id,
+        )
+        .await?;
+    assert_eq!(
+        updated.health.state,
+        ConnectionHealthState::AccountAccessChanged
+    );
+    assert_eq!(
+        repository
+            .authorization(&connection.id, "account")?
+            .ok_or("missing authorization")?
+            .mode,
+        ExecutionAuthorizationMode::Disabled
     );
     drop(service);
     drop(repository);
@@ -671,6 +750,14 @@ fn key_provider_rotates_and_keeps_historical_lookup() -> Result<(), Box<dyn std:
     assert_eq!(provider.active_key_version()?, 2);
     assert!(provider.resolve_key_material(1).is_ok());
     assert!(provider.resolve_key_material(2).is_ok());
+    assert_eq!(
+        provider.rotate_key(2, KeyMaterial::new(key(5))),
+        Err(KeyProviderError::NonMonotonicVersion)
+    );
+    assert_eq!(
+        provider.rotate_key(1, KeyMaterial::new(key(5))),
+        Err(KeyProviderError::NonMonotonicVersion)
+    );
     Ok(())
 }
 
