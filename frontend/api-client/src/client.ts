@@ -60,9 +60,34 @@ export class VoxClient {
     return this.request("POST", "/api/v1/commands/cancel-order", undefined, body);
   }
 
+  /** Cancel a stop order. Exactly one target identity. */
+  postCommandsCancelStopOrder(body: T.CancelOrderRequest): Promise<T.MutationReceiptDto> {
+    return this.request("POST", "/api/v1/commands/cancel-stop-order", undefined, body);
+  }
+
   /** Submit a regular order. The scope in the body is the frozen target of the command. */
   postCommandsOrder(body: T.SubmitOrderRequest): Promise<T.MutationReceiptDto> {
     return this.request("POST", "/api/v1/commands/order", undefined, body);
+  }
+
+  /** Establish protection legs on a position. Not a bulk migration. */
+  postCommandsProtection(body: T.SubmitProtectionRequest): Promise<T.MutationReceiptDto> {
+    return this.request("POST", "/api/v1/commands/protection", undefined, body);
+  }
+
+  /** Replace a live regular order. */
+  postCommandsReplaceOrder(body: T.ReplaceOrderRequest): Promise<T.MutationReceiptDto> {
+    return this.request("POST", "/api/v1/commands/replace-order", undefined, body);
+  }
+
+  /** Submit a stop order. */
+  postCommandsStopOrder(body: T.SubmitStopOrderRequest): Promise<T.MutationReceiptDto> {
+    return this.request("POST", "/api/v1/commands/stop-order", undefined, body);
+  }
+
+  /** The UI uses this list instead of guessing. Intervals the provider does not name never appear; an unknown integer on a candle query fails as `UNSUPPORTED_CANDLE_INTERVAL`. */
+  marketCandleIntervals(): Promise<Array<T.CandleIntervalCapability>> {
+    return this.request("GET", "/api/v1/market/candle-intervals", undefined);
   }
 
   /** Candles for one interval and window. */
@@ -95,6 +120,11 @@ export class VoxClient {
     return this.request("GET", "/api/v1/market/trades", query);
   }
 
+  /** Mutation journal for one scope. Empty when nothing has been dispatched. */
+  mutations(query: { account_id: string; broker_connection_id: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<Array<T.MutationReceiptDto>> {
+    return this.request("GET", "/api/v1/mutations", query);
+  }
+
   /** Operations history, paged by cursor. */
   operations(query: { account_id: string; broker_connection_id: string; cursor?: string | null; environment: T.BrokerEnvironment; limit?: number | null; provider: T.ProviderDto }): Promise<T.OperationsPageDto> {
     return this.request("GET", "/api/v1/operations", query);
@@ -123,6 +153,11 @@ export class VoxClient {
   /** Runtime state, readiness and stream health. */
   runtime(): Promise<T.RuntimeHealthDto> {
     return this.request("GET", "/api/v1/runtime", undefined);
+  }
+
+  /** Scopes the operator may select. Empty until #17 bindings exist. */
+  runtimeScopes(): Promise<Array<T.ExecutionScope>> {
+    return this.request("GET", "/api/v1/runtime/scopes", undefined);
   }
 
   /** Stop orders. */

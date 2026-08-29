@@ -15,6 +15,8 @@ decided.
 | [RFC 9110 — HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110) | — | Status mapping in `error.rs`: 400 validation, 401 authentication, 403 permission, 404 not found, 409 conflict and stale scope/epoch, 202 for an accepted-but-unresolved mutation *receipt*, 503 for a capability with no owner and for transient dependency failure. `UNKNOWN_AFTER_DISPATCH` is never an `ApiError`. |
 | [RFC 6455 — WebSocket](https://www.rfc-editor.org/rfc/rfc6455) | — | One upgrade endpoint, text frames carrying JSON envelopes, server-initiated heartbeats, close on a slow consumer. |
 | [T-Invest developer protocols](https://developer.tbank.ru/invest/intro/developer/protocols/) | — | Confirms the provider speaks gRPC/protobuf. That stays inside the adapter: no provider wire type appears in this API, and the browser never reaches the provider. |
+| [T-Invest GetCandles](https://developer.tbank.ru/invest/api/market-data-service-get-candles) | 2026-08-27 | Historic `CandleInterval` is 1..=16 including 5s/10s/30s. |
+| [T-Invest marketdata proto](https://developer.tbank.ru/invest/services/quotes/marketdata) | pinned `#8` proto | MarketDataStream `SubscriptionInterval` is 1..=13 (no 5s/10s/30s). Provenance stays split. |
 
 Read on 2026-08-27. Versions are what `docs.rs/latest` served that day; the workspace pins
 `axum = "0.8"` and `utoipa = "5.5"`.
@@ -75,18 +77,37 @@ inside a provider-named scope.
 publishes `vox-domain::InstrumentIdentity` (`provider` + `uid`, with FIGI/ticker/class code
 as aliases). That is lookup identity, not the capital-command target.
 
-**Market data is a projection, not a second broker client.** `MarketDataQueries` reads what
-the accepted #8 adapter layer already acquired and republishes it provider-neutrally: quote,
-order book, tape, candles, session and the instrument catalogue. Three facts are contract, not
-decoration. Every record carries `MarketFreshness` (`stream`, `observed_at_unix_ms`, `age_ms`),
-because a price without an age is a claim the operator cannot check, and a stale quote stays
-visible with its age instead of vanishing. Every optional price is absent when the provider did
-not supply it, which is a different thing from zero and must never render as one. A candle
-states `closed`, so a still-forming bar is never read as settled. `InstrumentSummaryDto`
-carries `lot_size` and `min_price_increment` so the order ticket validates against provider
-metadata instead of guessing. No projection is attached in this slice: the six routes and the
-`QUOTES`/`ORDER_BOOK`/`TRADES` stream topics answer `CAPABILITY_UNAVAILABLE` naming their
-owner.
+**Market data is a projection, not a second broker client.** `SnapshotMarketProjection`
+stores facts already acquired by the #8 adapter and republishes them provider-neutrally:
+quote, order book, tape, candles, session and the instrument catalogue. Mapping functions
+(`quote_from_last_price`, `order_book_from_levels`, `trade_from_canonical`,
+`trading_status_from_provider`, `candle_interval_from_provider`) take #8 field shapes
+(`FixedPoint`, uid, historic `CandleInterval` wire numbers, wire status) without importing
+protobuf. Candle intervals are the official GetCandles set accepted by
+`vox_tinvest::market_data::candle_request_constraint` (1..=16), including **5s/10s/30s**.
+Those second-resolution bars are request/history only: MarketDataStream
+`SubscriptionInterval` stops at month (1..=13) and is not treated as the same enum.
+`GET /api/v1/market/candle-intervals` returns `CandleIntervalCapability` so a client can
+tell historic-only from stream-capable without guessing. Unknown provider integers are
+`UNSUPPORTED_CANDLE_INTERVAL`, never a silent drop.
+`CandleDto.state` is `OPEN` / `CLOSED` / `CORRECTED` with a per-bar `revision: u64`; a boolean
+`closed` flag is not enough. Identical republish of the same bar is idempotent: revision
+advances only when the OHLC/volume body changes, and CLOSED → CLOSED becomes CORRECTED
+only then. Live `CANDLES` / `SESSION` WebSocket topics consume these application events;
+a 5s candle UPDATE does not claim MarketDataStream support. Every record carries `MarketFreshness`. An inconsistent book
+is refused. A missing instrument is `MARKET_FACT_NOT_FOUND`, never a zero price. Default
+`vox-server` does not attach an empty projection, so unattached `MARKET_DATA` stays
+`CAPABILITY_UNAVAILABLE`.
+
+**Live WebSocket is an application event bus.** `ApplicationEventBus` is a bounded
+broadcast of already-projected facts. `SnapshotMarketProjection` publish methods emit
+quote/book/tape/candle/session events; a runtime-health watcher publishes `#11` health diffs after the
+first snapshot baseline. The `/api/v1/stream` gateway fans matching events to per-socket
+bounded queues as `UPDATE` with a monotonic per-subscription sequence. Each socket has its
+own writer task, so a slow consumer cannot block another client or upstream publish.
+A lagging subscriber is `DROPPED_SLOW_CONSUMER`, not buffered without limit. Account topics stay
+explicitly unavailable until #17 attaches an account projection. This is not a second
+T-Invest stream client.
 
 **One document, generated.** `docs/api/openapi.json` is produced by
 `cargo run -p vox-api --bin openapi -- docs/api/openapi.json` and served at
@@ -112,8 +133,6 @@ schema: a test fails the build if one does.
 ## What this slice does not do
 
 No risk verdicts (#21), no valuation or P&L (#22), no strategy (#23), analytics (#24/#25),
-models (#26), decisions (#27), backtests (#29), the live market-data projection that feeds
-the read model published here (#38, next slice),
-connection or credential lifecycle (#17), bulk protection migration (#10). Each is listed in
-the capability set with its owner, and `docs/design/BACKEND_CONTRACTS.md` tracks the same
-dependencies for the design side.
+models (#26), decisions (#27), backtests (#29), live broker market feed credentials (#17),
+bulk protection migration (#10). Each is listed in the capability set with its owner, and
+`docs/design/BACKEND_CONTRACTS.md` tracks the same dependencies for the design side.

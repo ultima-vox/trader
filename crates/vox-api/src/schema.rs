@@ -17,12 +17,14 @@ use crate::contract::capability::{Capability, CapabilitySet, UnavailableCapabili
 use crate::contract::execution::{
     CancelOrderRequest, JournalStateDto, MutationDecisionDto, MutationKindDto, MutationReceiptDto,
     OrderSideDto, OrderTypeDto, PriceConventionDto, ProtectionPlanDto, ProtectionStateDto,
-    SubmitOrderRequest, TimeInForceDto, TrailingDistanceDto, TrailingModeDto,
+    ReplaceOrderRequest, SubmitOrderRequest, SubmitProtectionRequest, SubmitStopOrderRequest,
+    TimeInForceDto, TrailingDistanceDto, TrailingModeDto,
 };
 use crate::contract::instrument::InstrumentIdentityDto;
 use crate::contract::market::{
-    CandleDto, CandleIntervalDto, CandlesDto, DepthLevelDto, InstrumentSummaryDto, MarketFreshness,
-    OrderBookDto, QuoteDto, SessionDto, TradeDirectionDto, TradeTickDto, TradingStatusDto,
+    CandleDto, CandleIntervalCapability, CandleIntervalDto, CandleStateDto, CandlesDto,
+    DepthLevelDto, InstrumentSummaryDto, MarketFreshness, OrderBookDto, QuoteDto, SessionDto,
+    TradeDirectionDto, TradeTickDto, TradingStatusDto,
 };
 use crate::contract::money::Decimal;
 use crate::contract::runtime::{
@@ -49,7 +51,9 @@ use crate::transport::http;
         http::system_health,
         http::capabilities,
         http::runtime_health,
+        http::runtime_scopes,
         http::reconciliation,
+        http::mutations,
         http::accounts,
         http::portfolio,
         http::positions,
@@ -58,12 +62,17 @@ use crate::transport::http;
         http::operations,
         http::submit_order,
         http::cancel_order,
+        http::replace_order,
+        http::submit_stop_order,
+        http::cancel_stop_order,
+        http::submit_protection,
         http::instruments,
         http::quote,
         http::order_book,
         http::trades,
         http::candles,
         http::session,
+        http::candle_intervals,
     ),
     components(schemas(
         ApiError, ErrorCategory, FieldError,
@@ -73,14 +82,15 @@ use crate::transport::http;
         BrokerAccountDto, PortfolioDto, CurrencyBalanceDto, MoneyValuationDto, PositionDto,
         OrderDto, OrderExecutionStatusDto, StopOrderDto, StopExecutionStatusDto,
         OperationDto, OperationsPageDto, ReconciliationDto,
-        SubmitOrderRequest, CancelOrderRequest, MutationReceiptDto, MutationKindDto,
+        SubmitOrderRequest, CancelOrderRequest, ReplaceOrderRequest, SubmitStopOrderRequest,
+        SubmitProtectionRequest, MutationReceiptDto, MutationKindDto,
         JournalStateDto, MutationDecisionDto, OrderSideDto, OrderTypeDto, TimeInForceDto,
         PriceConventionDto, ProtectionPlanDto, ProtectionStateDto, TrailingDistanceDto,
         TrailingModeDto, Decimal,
         Capability, CapabilitySet, UnavailableCapability,
         InstrumentIdentityDto, InstrumentSummaryDto, MarketFreshness, TradingStatusDto, SessionDto,
         QuoteDto, DepthLevelDto, OrderBookDto, TradeDirectionDto, TradeTickDto, CandleIntervalDto,
-        CandleDto, CandlesDto,
+        CandleIntervalCapability, CandleStateDto, CandleDto, CandlesDto,
         ClientMessage, ServerEvent, EventPayload, Topic, SubscriptionStatus,
     )),
     tags(
@@ -178,6 +188,7 @@ mod tests {
             "/api/v1/market/order-book",
             "/api/v1/market/trades",
             "/api/v1/market/candles",
+            "/api/v1/market/candle-intervals",
             "/api/v1/market/session",
         ] {
             assert!(
@@ -185,6 +196,58 @@ mod tests {
                 "missing market route: {path}"
             );
         }
+    }
+
+    #[test]
+    fn candle_contract_covers_historic_five_seconds_and_explicit_state()
+    -> Result<(), serde_json::Error> {
+        let doc: serde_json::Value = serde_json::from_str(&openapi_json()?)?;
+        let intervals = doc["components"]["schemas"]["CandleIntervalDto"]["enum"]
+            .as_array()
+            .expect("CandleIntervalDto enum");
+        for required in [
+            "FIVE_SECONDS",
+            "TEN_SECONDS",
+            "THIRTY_SECONDS",
+            "TWO_MINUTES",
+            "ONE_WEEK",
+            "ONE_MONTH",
+        ] {
+            assert!(
+                intervals.iter().any(|value| value == required),
+                "missing interval {required}: {intervals:?}"
+            );
+        }
+        let states = doc["components"]["schemas"]["CandleStateDto"]["enum"]
+            .as_array()
+            .expect("CandleStateDto enum");
+        for required in ["OPEN", "CLOSED", "CORRECTED"] {
+            assert!(
+                states.iter().any(|value| value == required),
+                "missing candle state {required}: {states:?}"
+            );
+        }
+        let candle = &doc["components"]["schemas"]["CandleDto"]["properties"];
+        assert!(candle.get("state").is_some());
+        assert!(candle.get("revision").is_some());
+        assert!(
+            candle.get("closed").is_none(),
+            "boolean closed was replaced by explicit state"
+        );
+        let topics = doc["components"]["schemas"]["Topic"]["enum"]
+            .as_array()
+            .expect("Topic enum");
+        for required in ["CANDLES", "SESSION", "QUOTES"] {
+            assert!(
+                topics.iter().any(|value| value == required),
+                "missing topic {required}: {topics:?}"
+            );
+        }
+        let capability = &doc["components"]["schemas"]["CandleIntervalCapability"]["properties"];
+        assert!(capability.get("interval").is_some());
+        assert!(capability.get("historical_supported").is_some());
+        assert!(capability.get("streaming_supported").is_some());
+        Ok(())
     }
 
     #[test]

@@ -21,11 +21,14 @@ use crate::contract::market::{
 use crate::contract::runtime::RuntimeHealthDto;
 use crate::contract::scope::{BrokerEnvironment, ExecutionScope, ProviderDto};
 use crate::error::ApiError;
+use crate::events::{ApplicationEventBus, spawn_runtime_health_watch};
 
 /// Runtime health and readiness, owned by #11.
 #[async_trait]
 pub trait RuntimeQueries: Send + Sync {
     async fn health(&self) -> Result<RuntimeHealthDto, ApiError>;
+    /// Scopes the operator may select. Empty until #17 bindings exist.
+    async fn scopes(&self) -> Result<Vec<ExecutionScope>, ApiError>;
 }
 
 /// The per-account read side, owned by #9 and #11.
@@ -43,6 +46,7 @@ pub trait AccountQueries: Send + Sync {
         limit: u16,
     ) -> Result<OperationsPageDto, ApiError>;
     async fn reconciliation(&self, scope: &ExecutionScope) -> Result<ReconciliationDto, ApiError>;
+    async fn mutations(&self, scope: &ExecutionScope) -> Result<Vec<MutationReceiptDto>, ApiError>;
 }
 
 /// Capital-affecting commands, owned by #10 and gated by #17 authorization and #11 readiness.
@@ -60,6 +64,22 @@ pub trait ExecutionCommands: Send + Sync {
         &self,
         scope: &ExecutionScope,
         logical_request_id: &str,
+    ) -> Result<MutationReceiptDto, ApiError>;
+    async fn replace_order(
+        &self,
+        request: crate::contract::execution::ReplaceOrderRequest,
+    ) -> Result<MutationReceiptDto, ApiError>;
+    async fn submit_stop_order(
+        &self,
+        request: crate::contract::execution::SubmitStopOrderRequest,
+    ) -> Result<MutationReceiptDto, ApiError>;
+    async fn cancel_stop_order(
+        &self,
+        request: crate::contract::execution::CancelOrderRequest,
+    ) -> Result<MutationReceiptDto, ApiError>;
+    async fn submit_protection(
+        &self,
+        request: crate::contract::execution::SubmitProtectionRequest,
     ) -> Result<MutationReceiptDto, ApiError>;
 }
 
@@ -117,6 +137,8 @@ pub struct AppState {
     pub accounts: Option<Arc<dyn AccountQueries>>,
     pub execution: Option<Arc<dyn ExecutionCommands>>,
     pub market_data: Option<Arc<dyn MarketDataQueries>>,
+    /// Application-side live bus. Not a broker stream.
+    pub events: ApplicationEventBus,
 }
 
 impl AppState {
@@ -130,7 +152,22 @@ impl AppState {
             accounts: None,
             execution: None,
             market_data: None,
+            events: ApplicationEventBus::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_events(mut self, events: ApplicationEventBus) -> Self {
+        self.events = events;
+        self
+    }
+
+    /// Starts the runtime-health watcher once for this process. Safe to call without a runtime.
+    pub fn spawn_runtime_watch(&self) {
+        let Some(runtime) = self.runtime.clone() else {
+            return;
+        };
+        spawn_runtime_health_watch(runtime, self.events.clone());
     }
 
     #[must_use]

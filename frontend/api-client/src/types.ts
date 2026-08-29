@@ -39,7 +39,7 @@ export type CancelOrderRequest = {
   logical_request_id?: string | null;
 };
 
-/** One candle. `closed` distinguishes a settled bar from the one still forming. */
+/** One candle. `state` is explicit: forming, settled, or a post-close correction. */
 export type CandleDto = {
   instrument_uid: string;
   interval: CandleIntervalDto;
@@ -50,12 +50,25 @@ export type CandleDto = {
   low: Decimal;
   close: Decimal;
   volume_units: number;
-  /** False while the bar is still forming. An open bar may be revised. */
-  closed: boolean;
+  state: CandleStateDto;
+  /** Zero at first publication of this open time. Increments on each later publish. */
+  revision: number;
 };
 
-/** Candle interval. Only intervals the provider actually serves appear here. */
-export type CandleIntervalDto = "ONE_MINUTE" | "FIVE_MINUTES" | "FIFTEEN_MINUTES" | "ONE_HOUR" | "ONE_DAY";
+/** Whether one interval is historic-only, stream-capable, or (by absence) unsupported. Unsupported provider integers never appear here. An unknown integer fails as `UNSUPPORTED_CANDLE_INTERVAL`. */
+export type CandleIntervalCapability = {
+  interval: CandleIntervalDto;
+  /** Accepted by historic GetCandles / `#8` `CanonicalCandle.interval`. */
+  historical_supported: boolean;
+  /** Accepted by MarketDataStream `SubscriptionInterval`. False for 5s/10s/30s. */
+  streaming_supported: boolean;
+};
+
+/** Candle interval for the Vox read model. `#8` `CanonicalCandle.interval` is the already-accepted historic GetCandles integer (`candle_request_constraint`, 1..=16). This enum names that integer; it does not invent a second wire table. Stream support is the separate MarketDataStream `SubscriptionInterval` surface (1..=13). 5s/10s/30s exist on GetCandles only; they are not stream-subscribable. */
+export type CandleIntervalDto = "FIVE_SECONDS" | "TEN_SECONDS" | "THIRTY_SECONDS" | "ONE_MINUTE" | "TWO_MINUTES" | "THREE_MINUTES" | "FIVE_MINUTES" | "TEN_MINUTES" | "FIFTEEN_MINUTES" | "THIRTY_MINUTES" | "ONE_HOUR" | "TWO_HOURS" | "FOUR_HOURS" | "ONE_DAY" | "ONE_WEEK" | "ONE_MONTH";
+
+/** Lifecycle of one bar. Replaces a boolean `closed` so OPEN / CLOSED / CORRECTED do not have to be inferred. */
+export type CandleStateDto = "OPEN" | "CLOSED" | "CORRECTED";
 
 /** A page of candles for one instrument and interval. */
 export type CandlesDto = {
@@ -84,6 +97,9 @@ export type ClientMessage = {
   subscription_id: string;
   topic: Topic;
   scope?: null | ExecutionScope;
+  /** Required for market topics. Provider uid inside a provider-named feed. */
+  instrument_uid?: string | null;
+  interval?: null | CandleIntervalDto;
   type: "SUBSCRIBE";
 } | {
   subscription_id: string;
@@ -118,6 +134,36 @@ export type ErrorCategory = "VALIDATION" | "AUTHENTICATION" | "PERMISSION" | "NO
 export type EventPayload = {
   data: RuntimeHealthDto;
   topic: "RUNTIME_HEALTH";
+} | {
+  data: QuoteDto;
+  topic: "QUOTE";
+} | {
+  data: OrderBookDto;
+  topic: "ORDER_BOOK";
+} | {
+  data: Array<TradeTickDto>;
+  topic: "TRADES";
+} | {
+  data: CandlesDto;
+  topic: "CANDLES";
+} | {
+  data: SessionDto;
+  topic: "SESSION";
+} | {
+  data: Array<PositionDto>;
+  topic: "POSITIONS";
+} | {
+  data: Array<OrderDto>;
+  topic: "ORDERS";
+} | {
+  data: Array<StopOrderDto>;
+  topic: "STOPS";
+} | {
+  data: Array<OperationDto>;
+  topic: "OPERATIONS";
+} | {
+  data: PortfolioDto;
+  topic: "PORTFOLIO";
 };
 
 /** The immutable target of a read or a capital-affecting command. `broker_connection_id` is the application connection identity, never a credential. `account_id` is the canonical Vox account/binding identity. Provider broker-account identifiers are read-side metadata, not this key. */
@@ -353,6 +399,17 @@ export type ReconciliationDto = {
   complete: boolean;
 };
 
+/** Replace a live regular order. Identifies the original with exactly one target. */
+export type ReplaceOrderRequest = {
+  scope: ExecutionScope;
+  instrument_id: string;
+  client_request_id: string;
+  broker_order_id?: string | null;
+  logical_request_id?: string | null;
+  quantity_lots: number;
+  price?: null | Decimal;
+};
+
 /** Everything the shell needs to answer "can I trade right now, and if not why". */
 export type RuntimeHealthDto = {
   state: RuntimeStateDto;
@@ -491,6 +548,25 @@ export type SubmitOrderRequest = {
   protection?: null | ProtectionPlanDto;
 };
 
+/** Establish or replace protection legs on an existing position. Not a bulk migration. */
+export type SubmitProtectionRequest = {
+  scope: ExecutionScope;
+  instrument_id: string;
+  client_request_id: string;
+  plan: ProtectionPlanDto;
+};
+
+/** Submit a stop order. Trigger is exact; limit price is optional. */
+export type SubmitStopOrderRequest = {
+  scope: ExecutionScope;
+  instrument_id: string;
+  client_request_id: string;
+  side: OrderSideDto;
+  quantity_lots: number;
+  trigger_price: Decimal;
+  limit_price?: null | Decimal;
+};
+
 /** Why a subscription is in its current status. */
 export type SubscriptionStatus = "ACTIVE" | "CANCELLED" | "DROPPED_SLOW_CONSUMER" | "UNAVAILABLE";
 
@@ -507,7 +583,7 @@ export type SystemHealthDto = {
 export type TimeInForceDto = "DAY" | "FILL_AND_KILL" | "FILL_OR_KILL";
 
 /** Topics a client may subscribe to. A topic exists only when its read model does. */
-export type Topic = "RUNTIME_HEALTH" | "POSITIONS" | "ORDERS" | "STOPS" | "OPERATIONS" | "PORTFOLIO" | "QUOTES" | "ORDER_BOOK" | "TRADES";
+export type Topic = "RUNTIME_HEALTH" | "POSITIONS" | "ORDERS" | "STOPS" | "OPERATIONS" | "PORTFOLIO" | "QUOTES" | "ORDER_BOOK" | "TRADES" | "CANDLES" | "SESSION";
 
 /** Which side initiated a public trade, where the provider reports it. */
 export type TradeDirectionDto = "BUY" | "SELL" | "UNKNOWN";

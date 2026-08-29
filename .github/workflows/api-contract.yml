@@ -108,6 +108,10 @@ jobs:
           curl -sf http://127.0.0.1:18099/api/v1/capabilities |
             python -c "import json,sys; d=json.load(sys.stdin); assert d['unavailable'], 'nothing is reported unavailable'; assert all(u['owner'] for u in d['unavailable']), 'an unavailable capability has no owner'; print(' ', len(d['supported']), 'supported,', len(d['unavailable']), 'unavailable')"
 
+          echo "runtime scopes are empty until #17 bindings exist:"
+          curl -sf http://127.0.0.1:18099/api/v1/runtime/scopes |
+            python -c "import json,sys; d=json.load(sys.stdin); assert d==[], d; print('  []')"
+
           echo "runtime health is the accepted #11 contract, not CAPABILITY_UNAVAILABLE:"
           code=$(curl -s -o /tmp/runtime.json -w '%{http_code}' http://127.0.0.1:18099/api/v1/runtime)
           test "$code" = "200" || { echo "expected 200, got $code"; cat /tmp/runtime.json; exit 1; }

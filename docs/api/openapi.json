@@ -181,6 +181,67 @@
         }
       }
     },
+    "/api/v1/commands/cancel-stop-order": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Cancel a stop order. Exactly one target identity.",
+        "operationId": "cancel_stop_order",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceiptDto"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceiptDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/commands/order": {
       "post": {
         "tags": [
@@ -245,6 +306,194 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/commands/protection": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Establish protection legs on a position. Not a bulk migration.",
+        "operationId": "submit_protection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitProtectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceiptDto"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceiptDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/commands/replace-order": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Replace a live regular order.",
+        "operationId": "replace_order",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceiptDto"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceiptDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/commands/stop-order": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Submit a stop order.",
+        "operationId": "submit_stop_order",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitStopOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceiptDto"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceiptDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/market/candle-intervals": {
+      "get": {
+        "tags": [
+          "market"
+        ],
+        "summary": "Historic vs streaming provenance for every public candle interval.",
+        "description": "The UI uses this list instead of guessing. Intervals the provider does not name never\nappear; an unknown integer on a candle query fails as `UNSUPPORTED_CANDLE_INTERVAL`.",
+        "operationId": "candle_intervals",
+        "responses": {
+          "200": {
+            "description": "Named intervals with historic/stream flags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CandleIntervalCapability"
+                  }
                 }
               }
             }
@@ -646,6 +895,78 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/TradeTickDto"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/mutations": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Mutation journal for one scope. Empty when nothing has been dispatched.",
+        "operationId": "mutations",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "description": "Provider of the connection, for example `T_INVEST`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "description": "Broker environment: `SANDBOX` or `PRODUCTION`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BrokerEnvironment"
+            }
+          },
+          {
+            "name": "broker_connection_id",
+            "in": "query",
+            "description": "Application connection identity. Never a credential.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "description": "Canonical Vox account/binding identity.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MutationReceiptDto"
                   }
                 }
               }
@@ -1068,6 +1389,40 @@
         }
       }
     },
+    "/api/v1/runtime/scopes": {
+      "get": {
+        "tags": [
+          "runtime"
+        ],
+        "summary": "Scopes the operator may select. Empty until #17 bindings exist.",
+        "operationId": "runtime_scopes",
+        "responses": {
+          "200": {
+            "description": "Selectable execution scopes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExecutionScope"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/stop-orders": {
       "get": {
         "tags": [
@@ -1270,7 +1625,7 @@
       },
       "CandleDto": {
         "type": "object",
-        "description": "One candle. `closed` distinguishes a settled bar from the one still forming.",
+        "description": "One candle. `state` is explicit: forming, settled, or a post-close correction.",
         "required": [
           "instrument_uid",
           "interval",
@@ -1280,7 +1635,8 @@
           "low",
           "close",
           "volume_units",
-          "closed"
+          "state",
+          "revision"
         ],
         "properties": {
           "instrument_uid": {
@@ -1310,21 +1666,68 @@
             "type": "integer",
             "format": "int64"
           },
-          "closed": {
+          "state": {
+            "$ref": "#/components/schemas/CandleStateDto"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Zero at first publication of this open time. Increments on each later publish.",
+            "minimum": 0
+          }
+        }
+      },
+      "CandleIntervalCapability": {
+        "type": "object",
+        "description": "Whether one interval is historic-only, stream-capable, or (by absence) unsupported.\n\nUnsupported provider integers never appear here. An unknown integer fails as\n`UNSUPPORTED_CANDLE_INTERVAL`.",
+        "required": [
+          "interval",
+          "historical_supported",
+          "streaming_supported"
+        ],
+        "properties": {
+          "interval": {
+            "$ref": "#/components/schemas/CandleIntervalDto"
+          },
+          "historical_supported": {
             "type": "boolean",
-            "description": "False while the bar is still forming. An open bar may be revised."
+            "description": "Accepted by historic GetCandles / `#8` `CanonicalCandle.interval`."
+          },
+          "streaming_supported": {
+            "type": "boolean",
+            "description": "Accepted by MarketDataStream `SubscriptionInterval`. False for 5s/10s/30s."
           }
         }
       },
       "CandleIntervalDto": {
         "type": "string",
-        "description": "Candle interval. Only intervals the provider actually serves appear here.",
+        "description": "Candle interval for the Vox read model.\n\n`#8` `CanonicalCandle.interval` is the already-accepted historic GetCandles\ninteger (`candle_request_constraint`, 1..=16). This enum names that integer;\nit does not invent a second wire table. Stream support is the separate\nMarketDataStream `SubscriptionInterval` surface (1..=13).\n5s/10s/30s exist on GetCandles only; they are not stream-subscribable.",
         "enum": [
+          "FIVE_SECONDS",
+          "TEN_SECONDS",
+          "THIRTY_SECONDS",
           "ONE_MINUTE",
+          "TWO_MINUTES",
+          "THREE_MINUTES",
           "FIVE_MINUTES",
+          "TEN_MINUTES",
           "FIFTEEN_MINUTES",
+          "THIRTY_MINUTES",
           "ONE_HOUR",
-          "ONE_DAY"
+          "TWO_HOURS",
+          "FOUR_HOURS",
+          "ONE_DAY",
+          "ONE_WEEK",
+          "ONE_MONTH"
+        ]
+      },
+      "CandleStateDto": {
+        "type": "string",
+        "description": "Lifecycle of one bar. Replaces a boolean `closed` so OPEN / CLOSED / CORRECTED\ndo not have to be inferred.",
+        "enum": [
+          "OPEN",
+          "CLOSED",
+          "CORRECTED"
         ]
       },
       "CandlesDto": {
@@ -1440,6 +1843,24 @@
                   {
                     "$ref": "#/components/schemas/ExecutionScope",
                     "description": "Required for every account-scoped topic."
+                  }
+                ]
+              },
+              "instrument_uid": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Required for market topics. Provider uid inside a provider-named feed."
+              },
+              "interval": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CandleIntervalDto",
+                    "description": "Required for `CANDLES`. Names the bar size; does not claim MarketDataStream support."
                   }
                 ]
               },
@@ -1571,6 +1992,201 @@
                 "type": "string",
                 "enum": [
                   "RUNTIME_HEALTH"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "topic"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/QuoteDto"
+              },
+              "topic": {
+                "type": "string",
+                "enum": [
+                  "QUOTE"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "topic"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/OrderBookDto"
+              },
+              "topic": {
+                "type": "string",
+                "enum": [
+                  "ORDER_BOOK"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "topic"
+            ],
+            "properties": {
+              "data": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TradeTickDto"
+                }
+              },
+              "topic": {
+                "type": "string",
+                "enum": [
+                  "TRADES"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "topic"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/CandlesDto"
+              },
+              "topic": {
+                "type": "string",
+                "enum": [
+                  "CANDLES"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "topic"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/SessionDto"
+              },
+              "topic": {
+                "type": "string",
+                "enum": [
+                  "SESSION"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "topic"
+            ],
+            "properties": {
+              "data": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PositionDto"
+                }
+              },
+              "topic": {
+                "type": "string",
+                "enum": [
+                  "POSITIONS"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "topic"
+            ],
+            "properties": {
+              "data": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/OrderDto"
+                }
+              },
+              "topic": {
+                "type": "string",
+                "enum": [
+                  "ORDERS"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "topic"
+            ],
+            "properties": {
+              "data": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StopOrderDto"
+                }
+              },
+              "topic": {
+                "type": "string",
+                "enum": [
+                  "STOPS"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "topic"
+            ],
+            "properties": {
+              "data": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/OperationDto"
+                }
+              },
+              "topic": {
+                "type": "string",
+                "enum": [
+                  "OPERATIONS"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "topic"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/PortfolioDto"
+              },
+              "topic": {
+                "type": "string",
+                "enum": [
+                  "PORTFOLIO"
                 ]
               }
             }
@@ -2538,6 +3154,53 @@
           }
         }
       },
+      "ReplaceOrderRequest": {
+        "type": "object",
+        "description": "Replace a live regular order. Identifies the original with exactly one target.",
+        "required": [
+          "scope",
+          "instrument_id",
+          "client_request_id",
+          "quantity_lots"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/ExecutionScope"
+          },
+          "instrument_id": {
+            "type": "string"
+          },
+          "client_request_id": {
+            "type": "string"
+          },
+          "broker_order_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logical_request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quantity_lots": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "price": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          }
+        }
+      },
       "RuntimeHealthDto": {
         "type": "object",
         "description": "Everything the shell needs to answer \"can I trade right now, and if not why\".",
@@ -3154,6 +3817,73 @@
           }
         }
       },
+      "SubmitProtectionRequest": {
+        "type": "object",
+        "description": "Establish or replace protection legs on an existing position. Not a bulk migration.",
+        "required": [
+          "scope",
+          "instrument_id",
+          "client_request_id",
+          "plan"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/ExecutionScope"
+          },
+          "instrument_id": {
+            "type": "string"
+          },
+          "client_request_id": {
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/ProtectionPlanDto"
+          }
+        }
+      },
+      "SubmitStopOrderRequest": {
+        "type": "object",
+        "description": "Submit a stop order. Trigger is exact; limit price is optional.",
+        "required": [
+          "scope",
+          "instrument_id",
+          "client_request_id",
+          "side",
+          "quantity_lots",
+          "trigger_price"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/ExecutionScope"
+          },
+          "instrument_id": {
+            "type": "string"
+          },
+          "client_request_id": {
+            "type": "string"
+          },
+          "side": {
+            "$ref": "#/components/schemas/OrderSideDto"
+          },
+          "quantity_lots": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "trigger_price": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "limit_price": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decimal"
+              }
+            ]
+          }
+        }
+      },
       "SubscriptionStatus": {
         "type": "string",
         "description": "Why a subscription is in its current status.",
@@ -3210,7 +3940,9 @@
           "PORTFOLIO",
           "QUOTES",
           "ORDER_BOOK",
-          "TRADES"
+          "TRADES",
+          "CANDLES",
+          "SESSION"
         ]
       },
       "TradeDirectionDto": {

@@ -77,6 +77,10 @@ impl RuntimeQueries for ProcessRuntime {
     async fn health(&self) -> Result<RuntimeHealthDto, ApiError> {
         Ok(RuntimeHealthDto::from(&HealthReadPort::health(self).await))
     }
+
+    async fn scopes(&self) -> Result<Vec<crate::contract::scope::ExecutionScope>, ApiError> {
+        Ok(Vec::new())
+    }
 }
 
 /// Runtime health adapter over any accepted `HealthReadPort`, including `RuntimeCoordinator`.
@@ -98,6 +102,10 @@ where
 {
     async fn health(&self) -> Result<RuntimeHealthDto, ApiError> {
         Ok(RuntimeHealthDto::from(&self.inner.health().await))
+    }
+
+    async fn scopes(&self) -> Result<Vec<crate::contract::scope::ExecutionScope>, ApiError> {
+        Ok(Vec::new())
     }
 }
 
@@ -300,6 +308,14 @@ where
             )),
             Err(error) => Err(map_store_error(error)),
         }
+    }
+
+    async fn mutations(
+        &self,
+        scope: &ExecutionScope,
+    ) -> Result<Vec<crate::contract::execution::MutationReceiptDto>, ApiError> {
+        let _runtime_scope = self.runtime_scope(scope)?;
+        Ok(Vec::new())
     }
 }
 

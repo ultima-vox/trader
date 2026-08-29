@@ -11,11 +11,12 @@ Sources of truth (Rust, serde-serializable, `SCREAMING_SNAKE_CASE` on enums):
 - `crates/vox-domain/src/{environment,execution,identity,instrument,money,mutation,readiness}.rs`
 - `crates/vox-runtime/src/{model,policy,ports}.rs`
 
-There is **no HTTP or gRPC server in the repository yet**: `vox-core` is a configuration
-binary, and `reqwest`/`tonic` are used to reach the provider, not to serve Vox clients.
-The transport for these contracts is therefore itself a tracked dependency (#11/#17); the
-types below are already canonical and a typed frontend client must be generated from them
-rather than from a hand-written API guess.
+`vox-api` now serves the Vox application boundary: REST `/api/v1`, WebSocket
+`/api/v1/stream`, generated OpenAPI, and a generated TypeScript client. Provider
+`reqwest`/`tonic` clients stay inside adapters. Account, credential, and execution
+dispatch remain `CAPABILITY_UNAVAILABLE` until #17/#10 compose them. The types below
+are canonical; the frontend generates from the OpenAPI artifact, never from a
+hand-written DTO guess.
 
 ---
 
@@ -175,7 +176,7 @@ must be corrected or shown as an explicitly deferred capability — not simulate
 | C6 | Protection runtime states `ACTIVE/STALE/RECONCILING/TRIGGERED/CANCELLED` | `ProtectionEstablishmentState` = `AWAITING_ENTRY/ESTABLISHING/ACTIVE/UNKNOWN_AFTER_DISPATCH/RECONCILIATION_REQUIRED/CLOSING_POSITION/ORPHANED/TERMINAL` | Adopt the contract enum; `STALE` becomes an age on the last broker response, not a state |
 | C7 | Connection vocabulary `VALIDATING/RECONNECTING/REVOKED/ROTATE/PROVIDER_UNAVAILABLE/DISABLED` | `BrokerResultClass` + `SafetyCondition` (`CREDENTIAL_INVALID`, `EXECUTION_AUTHORIZATION_DISABLED`, `ACCOUNT_UNAVAILABLE`), `StreamState` | Map each chip to a contract value; drop the ones with no backing (`REVOKED`, `ROTATE` as distinct states) |
 | C8 | Portfolio value, P&L, free funds, margin | `PortfolioFact.currencies: Map<code,string>` only | Render currency balances; P&L/margin become a deferred analytics dependency |
-| C9 | Quotes, order book, tape, chart data | Market-data read model now published by `vox-api` (`QuoteDto`, `OrderBookDto`, `TradeTickDto`, `CandleDto`, `SessionDto`, `InstrumentSummaryDto`), each record carrying `MarketFreshness`; no projection feeds it yet | Widgets bind to these types and keep their deferred state while `MARKET_DATA` is unavailable; a stale record renders with its age, never as a fresh price |
+| C9 | Quotes, order book, tape, chart data | Market-data read model published by `vox-api`; `SnapshotMarketProjection` republishes accepted #8 facts with `MarketFreshness` | Widgets bind to these types; while no source is attached `MARKET_DATA` is unavailable. A stale record renders with its age, never as a fresh price |
 | C10 | Strategy, Decision Center, Research, ML screens with live data | No contracts of any kind | Screens exist as operator workplaces but every data region is explicitly deferred |
 | C11 | Bulk protection migration result | No bulk mutation contract; only per-mutation `MutationRecord` | Design stays; the action is gated on a tracked backend capability |
 | C12 | `Все счета` aggregate | No aggregate read model | Already deferred — keep |
@@ -186,7 +187,7 @@ must be corrected or shown as an explicitly deferred capability — not simulate
 | --- | --- | --- | --- |
 | BD-1 | every screen | Vox-side transport exposing the read models above | **#38 — the first slice is implemented**, see below |
 | BD-2 | shell, ticket | risk verdict / guardrail read model (exposure, day loss, concentration, resize) | #21 |
-| BD-3 | Markets, chart, book, tape, ticket price | market-data read model (quote, depth, trades, candles, session, catalogue) as a Vox projection over the accepted #8 adapter layer | **#38 — the read model and its routes are implemented**; the projection that fills them is not attached, so `MARKET_DATA` answers `CAPABILITY_UNAVAILABLE` |
+| BD-3 | Markets, chart, book, tape, ticket price | market-data read model (quote, depth, trades, candles, session, catalogue) as a Vox projection over the accepted #8 adapter layer | **#38 — read model, REST, live WS, and `SnapshotMarketProjection` are implemented**. Historic candle intervals include GetCandles 5s/10s/30s; those are not MarketDataStream intervals. Candle state is OPEN/CLOSED/CORRECTED; identical republish is not a correction. Live topics include QUOTES, ORDER_BOOK, TRADES, CANDLES, SESSION. Default `vox-server` does not attach an empty store, so `MARKET_DATA` stays `CAPABILITY_UNAVAILABLE` until a source publishes facts. No invented prices. |
 | BD-4 | Portfolio | P&L, margin and valuation analytics, operation amounts | #22 |
 | BD-5 | Settings → Brokers | credential rotation/revocation lifecycle beyond `CredentialResolution` | #17 |
 | BD-6 | Strategy, Decision | strategy binding, signal and approval contracts | #23, #27 |
@@ -248,6 +249,13 @@ Two facts this work established that the earlier map did not record:
 2. **The protection lifecycle has ten states, not eight** (section 1.5). The design system
    documents eight; the two missing ones are the partially-filled entry and the protection
    that failed after entry.
+3. **Market-data projection is implemented** as `SnapshotMarketProjection` plus mapping
+   from #8 field shapes. WebSocket `QUOTES`/`ORDER_BOOK`/`TRADES` and `RUNTIME_HEALTH`
+   emit a snapshot on subscribe and later `UPDATE`s from `ApplicationEventBus` when the
+   projection or runtime health changes. Account topics stay unavailable until #17.
+   Default process still refuses empty prices. `GET /api/v1/runtime/scopes` returns `[]`
+   until #17 bindings exist. Replace/stop/protection command routes exist and stay
+   `CAPABILITY_UNAVAILABLE` until an execution port is composed.
 
 The design reference must gain those two states before it can claim to render the canonical
 lifecycle.

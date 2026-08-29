@@ -18,11 +18,12 @@ use crate::contract::account::{
 };
 use crate::contract::capability::CapabilitySet;
 use crate::contract::execution::{
-    CancelOrderRequest, JournalStateDto, MutationReceiptDto, SubmitOrderRequest,
+    CancelOrderRequest, JournalStateDto, MutationReceiptDto, ReplaceOrderRequest,
+    SubmitOrderRequest, SubmitProtectionRequest, SubmitStopOrderRequest,
 };
 use crate::contract::market::{
-    CandleIntervalDto, CandlesDto, InstrumentSummaryDto, OrderBookDto, QuoteDto, SessionDto,
-    TradeTickDto,
+    CandleIntervalCapability, CandleIntervalDto, CandlesDto, InstrumentSummaryDto, OrderBookDto,
+    QuoteDto, SessionDto, TradeTickDto,
 };
 use crate::contract::runtime::{RuntimeHealthDto, SystemHealthDto};
 use crate::contract::scope::{BrokerEnvironment, ExecutionScope, ProviderDto, TradingMode};
@@ -118,6 +119,20 @@ pub async fn runtime_health(
     State(state): State<AppState>,
 ) -> Result<Json<RuntimeHealthDto>, ApiError> {
     Ok(Json(state.runtime_port()?.health().await?))
+}
+
+/// Scopes the operator may select. Empty until #17 bindings exist.
+#[utoipa::path(
+    get, path = "/api/v1/runtime/scopes", tag = "runtime",
+    responses(
+        (status = 200, description = "Selectable execution scopes", body = Vec<ExecutionScope>),
+        (status = 503, body = ApiError),
+    )
+)]
+pub async fn runtime_scopes(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ExecutionScope>>, ApiError> {
+    Ok(Json(state.runtime_port()?.scopes().await?))
 }
 
 /// What this deployment can actually do.
@@ -237,6 +252,19 @@ pub async fn reconciliation(
     Ok(Json(state.accounts_port()?.reconciliation(&scope).await?))
 }
 
+/// Mutation journal for one scope. Empty when nothing has been dispatched.
+#[utoipa::path(
+    get, path = "/api/v1/mutations", tag = "execution", params(ScopeQuery),
+    responses((status = 200, body = Vec<MutationReceiptDto>), (status = 503, body = ApiError))
+)]
+pub async fn mutations(
+    State(state): State<AppState>,
+    Query(query): Query<ScopeQuery>,
+) -> Result<Json<Vec<MutationReceiptDto>>, ApiError> {
+    let scope = query.into_scope()?;
+    Ok(Json(state.accounts_port()?.mutations(&scope).await?))
+}
+
 /// Submit a regular order. The scope in the body is the frozen target of the command.
 #[utoipa::path(
     post, path = "/api/v1/commands/order", tag = "execution", request_body = SubmitOrderRequest,
@@ -275,6 +303,113 @@ pub async fn cancel_order(
     request.target()?;
     Ok(MutationHttpResponse(
         state.execution_port()?.cancel_order(request).await?,
+    ))
+}
+
+/// Replace a live regular order.
+#[utoipa::path(
+    post, path = "/api/v1/commands/replace-order", tag = "execution",
+    request_body = ReplaceOrderRequest,
+    responses(
+        (status = 200, body = MutationReceiptDto),
+        (status = 202, body = MutationReceiptDto),
+        (status = 400, body = ApiError),
+        (status = 503, body = ApiError),
+    )
+)]
+pub async fn replace_order(
+    State(state): State<AppState>,
+    Json(request): Json<ReplaceOrderRequest>,
+) -> Result<MutationHttpResponse, ApiError> {
+    request.target()?;
+    if request.instrument_id.trim().is_empty() || request.quantity_lots <= 0 {
+        return Err(ApiError::validation(
+            "the replace command is not valid",
+            vec![FieldError {
+                field: "quantity_lots".to_owned(),
+                message: "instrument_id must be set and quantity_lots must be positive".to_owned(),
+            }],
+        ));
+    }
+    Ok(MutationHttpResponse(
+        state.execution_port()?.replace_order(request).await?,
+    ))
+}
+
+/// Submit a stop order.
+#[utoipa::path(
+    post, path = "/api/v1/commands/stop-order", tag = "execution",
+    request_body = SubmitStopOrderRequest,
+    responses(
+        (status = 200, body = MutationReceiptDto),
+        (status = 202, body = MutationReceiptDto),
+        (status = 503, body = ApiError),
+    )
+)]
+pub async fn submit_stop_order(
+    State(state): State<AppState>,
+    Json(request): Json<SubmitStopOrderRequest>,
+) -> Result<MutationHttpResponse, ApiError> {
+    if request.instrument_id.trim().is_empty() || request.quantity_lots <= 0 {
+        return Err(ApiError::validation(
+            "the stop command is not valid",
+            vec![FieldError {
+                field: "quantity_lots".to_owned(),
+                message: "instrument_id must be set and quantity_lots must be positive".to_owned(),
+            }],
+        ));
+    }
+    Ok(MutationHttpResponse(
+        state.execution_port()?.submit_stop_order(request).await?,
+    ))
+}
+
+/// Cancel a stop order. Exactly one target identity.
+#[utoipa::path(
+    post, path = "/api/v1/commands/cancel-stop-order", tag = "execution",
+    request_body = CancelOrderRequest,
+    responses(
+        (status = 200, body = MutationReceiptDto),
+        (status = 202, body = MutationReceiptDto),
+        (status = 400, body = ApiError),
+        (status = 503, body = ApiError),
+    )
+)]
+pub async fn cancel_stop_order(
+    State(state): State<AppState>,
+    Json(request): Json<CancelOrderRequest>,
+) -> Result<MutationHttpResponse, ApiError> {
+    request.target()?;
+    Ok(MutationHttpResponse(
+        state.execution_port()?.cancel_stop_order(request).await?,
+    ))
+}
+
+/// Establish protection legs on a position. Not a bulk migration.
+#[utoipa::path(
+    post, path = "/api/v1/commands/protection", tag = "execution",
+    request_body = SubmitProtectionRequest,
+    responses(
+        (status = 200, body = MutationReceiptDto),
+        (status = 202, body = MutationReceiptDto),
+        (status = 503, body = ApiError),
+    )
+)]
+pub async fn submit_protection(
+    State(state): State<AppState>,
+    Json(request): Json<SubmitProtectionRequest>,
+) -> Result<MutationHttpResponse, ApiError> {
+    if request.instrument_id.trim().is_empty() {
+        return Err(ApiError::validation(
+            "protection needs the instrument it protects",
+            vec![FieldError {
+                field: "instrument_id".to_owned(),
+                message: "must not be empty".to_owned(),
+            }],
+        ));
+    }
+    Ok(MutationHttpResponse(
+        state.execution_port()?.submit_protection(request).await?,
     ))
 }
 
@@ -463,6 +598,23 @@ pub async fn trades(
     ))
 }
 
+/// Historic vs streaming provenance for every public candle interval.
+///
+/// The UI uses this list instead of guessing. Intervals the provider does not name never
+/// appear; an unknown integer on a candle query fails as `UNSUPPORTED_CANDLE_INTERVAL`.
+#[utoipa::path(
+    get, path = "/api/v1/market/candle-intervals", tag = "market",
+    responses((status = 200, description = "Named intervals with historic/stream flags", body = Vec<CandleIntervalCapability>))
+)]
+pub async fn candle_intervals() -> Json<Vec<CandleIntervalCapability>> {
+    Json(
+        CandleIntervalDto::ALL
+            .into_iter()
+            .map(CandleIntervalDto::capability)
+            .collect(),
+    )
+}
+
 /// Candles for one interval and window.
 #[utoipa::path(
     get, path = "/api/v1/market/candles", tag = "market", params(CandlesQuery),
@@ -528,6 +680,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/system/health", get(system_health))
         .route("/api/v1/capabilities", get(capabilities))
         .route("/api/v1/runtime", get(runtime_health))
+        .route("/api/v1/runtime/scopes", get(runtime_scopes))
         .route("/api/v1/reconciliation", get(reconciliation))
         .route("/api/v1/accounts", get(accounts))
         .route("/api/v1/portfolio", get(portfolio))
@@ -535,12 +688,21 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/orders", get(orders))
         .route("/api/v1/stop-orders", get(stop_orders))
         .route("/api/v1/operations", get(operations))
+        .route("/api/v1/mutations", get(mutations))
         .route("/api/v1/commands/order", post(submit_order))
         .route("/api/v1/commands/cancel-order", post(cancel_order))
+        .route("/api/v1/commands/replace-order", post(replace_order))
+        .route("/api/v1/commands/stop-order", post(submit_stop_order))
+        .route(
+            "/api/v1/commands/cancel-stop-order",
+            post(cancel_stop_order),
+        )
+        .route("/api/v1/commands/protection", post(submit_protection))
         .route("/api/v1/market/instruments", get(instruments))
         .route("/api/v1/market/quote", get(quote))
         .route("/api/v1/market/order-book", get(order_book))
         .route("/api/v1/market/trades", get(trades))
+        .route("/api/v1/market/candle-intervals", get(candle_intervals))
         .route("/api/v1/market/candles", get(candles))
         .route("/api/v1/market/session", get(session))
         .with_state(state)
@@ -558,6 +720,24 @@ mod tests {
     use crate::error::ErrorCategory;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
+
+    #[tokio::test]
+    async fn candle_interval_capabilities_distinguish_historic_only_seconds() {
+        let Json(list) = candle_intervals().await;
+        assert_eq!(list.len(), 16);
+        let five = list
+            .iter()
+            .find(|row| row.interval == CandleIntervalDto::FiveSeconds)
+            .expect("5s");
+        assert!(five.historical_supported);
+        assert!(!five.streaming_supported);
+        let minute = list
+            .iter()
+            .find(|row| row.interval == CandleIntervalDto::OneMinute)
+            .expect("1m");
+        assert!(minute.historical_supported);
+        assert!(minute.streaming_supported);
+    }
 
     fn sample_scope() -> Result<ExecutionScope, crate::contract::scope::ScopeError> {
         ExecutionScope::new(

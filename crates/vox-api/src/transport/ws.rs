@@ -12,14 +12,17 @@ use axum::extract::State;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use axum::routing::get;
+use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio::time::interval;
 
 use crate::application::AppState;
+use crate::contract::market::CandleIntervalDto;
 use crate::contract::scope::ExecutionScope;
 use crate::contract::stream::{
     ClientMessage, EventPayload, STREAM_SCHEMA_VERSION, ServerEvent, SubscriptionStatus, Topic,
 };
+use crate::events::ApplicationEvent;
 
 use super::http::now_unix_ms;
 
@@ -30,44 +33,82 @@ pub const OUTBOUND_QUEUE_CAPACITY: usize = 256;
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
 /// A subscription this socket currently holds.
-///
-/// The scope and the sequence are carried for the live projection that #11 owns: when a
-/// topic starts producing updates, every event must state which scope it belongs to and
-/// carry a gap-detectable sequence. Until that projection exists only the tests drive them.
-#[allow(
-    dead_code,
-    reason = "consumed by the live projection that #11 owns; exercised by tests"
-)]
 struct Subscription {
     topic: Topic,
     scope: Option<ExecutionScope>,
+    instrument_uid: Option<String>,
+    interval: Option<CandleIntervalDto>,
     /// Monotonic per-subscription sequence, so a client can detect a gap.
     sequence: u64,
+    runtime_epoch: u64,
 }
 
-#[allow(
-    dead_code,
-    reason = "consumed by the live projection that #11 owns; exercised by tests"
-)]
 impl Subscription {
     /// Builds the next update for this subscription and advances its sequence.
-    fn next_update(
-        &mut self,
-        runtime_epoch: u64,
-        payload: EventPayload,
-        subscription_id: &str,
-    ) -> ServerEvent {
+    fn next_update(&mut self, payload: EventPayload, subscription_id: &str) -> ServerEvent {
         self.sequence = self.sequence.saturating_add(1);
         ServerEvent::Update {
             schema_version: STREAM_SCHEMA_VERSION,
             subscription_id: subscription_id.to_owned(),
             as_of_unix_ms: now_unix_ms(),
-            runtime_epoch,
+            runtime_epoch: self.runtime_epoch,
             sequence: self.sequence,
             scope: self.scope.clone(),
             payload,
         }
     }
+
+    fn matches(&self, event: &ApplicationEvent) -> bool {
+        match (self.topic, event) {
+            (Topic::RuntimeHealth, ApplicationEvent::RuntimeHealth(_)) => true,
+            (Topic::Quotes, ApplicationEvent::Quote(quote)) => {
+                self.instrument_uid.as_deref() == Some(quote.instrument_uid.as_str())
+            }
+            (Topic::OrderBook, ApplicationEvent::OrderBook(book)) => {
+                self.instrument_uid.as_deref() == Some(book.instrument_uid.as_str())
+            }
+            (Topic::Trades, ApplicationEvent::Trades { instrument_uid, .. }) => {
+                self.instrument_uid.as_deref() == Some(instrument_uid.as_str())
+            }
+            (Topic::Candles, ApplicationEvent::Candles(page)) => {
+                self.instrument_uid.as_deref() == Some(page.instrument_uid.as_str())
+                    && self.interval == Some(page.interval)
+            }
+            (Topic::Session, ApplicationEvent::Session(session)) => {
+                self.instrument_uid.as_deref() == Some(session.instrument_uid.as_str())
+            }
+            _ => false,
+        }
+    }
+}
+
+fn payload_for(event: &ApplicationEvent) -> EventPayload {
+    match event {
+        ApplicationEvent::RuntimeHealth(health) => EventPayload::RuntimeHealth(health.clone()),
+        ApplicationEvent::Quote(quote) => EventPayload::Quote(quote.clone()),
+        ApplicationEvent::OrderBook(book) => EventPayload::OrderBook(book.clone()),
+        ApplicationEvent::Trades { ticks, .. } => EventPayload::Trades(ticks.clone()),
+        ApplicationEvent::Candles(page) => EventPayload::Candles(page.clone()),
+        ApplicationEvent::Session(session) => EventPayload::Session(session.clone()),
+    }
+}
+
+/// Turns one application event into UPDATE envelopes for matching live subscriptions.
+fn updates_for(
+    subscriptions: &mut HashMap<String, Subscription>,
+    event: &ApplicationEvent,
+) -> Vec<ServerEvent> {
+    let mut out = Vec::new();
+    for (subscription_id, subscription) in subscriptions.iter_mut() {
+        if !subscription.matches(event) {
+            continue;
+        }
+        if let ApplicationEvent::RuntimeHealth(health) = event {
+            subscription.runtime_epoch = health.runtime_epoch;
+        }
+        out.push(subscription.next_update(payload_for(event), subscription_id));
+    }
+    out
 }
 
 /// The stream router.
@@ -81,32 +122,88 @@ async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> Respons
     ws.on_upgrade(move |socket| serve(socket, state))
 }
 
-async fn serve(mut socket: WebSocket, state: AppState) {
+async fn serve(socket: WebSocket, state: AppState) {
+    let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<ServerEvent>(OUTBOUND_QUEUE_CAPACITY);
     let mut subscriptions: HashMap<String, Subscription> = HashMap::new();
     let mut heartbeat = interval(HEARTBEAT_INTERVAL);
     heartbeat.tick().await; // the first tick fires immediately
+    let mut live = state.events.subscribe();
+    let (drop_tx, mut drop_rx) = tokio::sync::oneshot::channel::<()>();
 
-    loop {
-        tokio::select! {
-            incoming = socket.recv() => {
-                let Some(Ok(message)) = incoming else { break };
-                let text = match message {
-                    Message::Text(text) => text.to_string(),
-                    Message::Close(_) => break,
-                    Message::Ping(_) | Message::Pong(_) | Message::Binary(_) => continue,
-                };
-                let events = handle_client_message(&text, &state, &mut subscriptions).await;
-                for event in events {
-                    if tx.try_send(event).is_err() {
-                        let _ = send(&mut socket, &slow_consumer_status()).await;
-                        return;
+    let writer = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                biased;
+                drop_signal = &mut drop_rx => {
+                    if drop_signal.is_ok() {
+                        let _ = tokio::time::timeout(
+                            Duration::from_millis(250),
+                            send(&mut sink, &slow_consumer_status()),
+                        )
+                        .await;
+                    }
+                    break;
+                }
+                queued = rx.recv() => {
+                    let Some(event) = queued else { break };
+                    match tokio::time::timeout(Duration::from_millis(250), send(&mut sink, &event))
+                        .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(_)) => break,
+                        Err(_) => {
+                            let _ = tokio::time::timeout(
+                                Duration::from_millis(250),
+                                send(&mut sink, &slow_consumer_status()),
+                            )
+                            .await;
+                            break;
+                        }
                     }
                 }
             }
-            queued = rx.recv() => {
-                let Some(event) = queued else { break };
-                if send(&mut socket, &event).await.is_err() { break }
+        }
+    });
+
+    let slow = loop {
+        tokio::select! {
+            incoming = stream.next() => {
+                let Some(Ok(message)) = incoming else { break false };
+                let text = match message {
+                    Message::Text(text) => text.to_string(),
+                    Message::Close(_) => break false,
+                    Message::Ping(_) | Message::Pong(_) | Message::Binary(_) => continue,
+                };
+                let events = handle_client_message(&text, &state, &mut subscriptions).await;
+                let mut overflow = false;
+                for event in events {
+                    if tx.try_send(event).is_err() {
+                        overflow = true;
+                        break;
+                    }
+                }
+                if overflow {
+                    break true;
+                }
+            }
+            live_event = live.recv() => {
+                match live_event {
+                    Ok(event) => {
+                        let mut overflow = false;
+                        for update in updates_for(&mut subscriptions, &event) {
+                            if tx.try_send(update).is_err() {
+                                overflow = true;
+                                break;
+                            }
+                        }
+                        if overflow {
+                            break true;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break true,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break false,
+                }
             }
             _ = heartbeat.tick() => {
                 let beat = ServerEvent::Heartbeat {
@@ -114,9 +211,25 @@ async fn serve(mut socket: WebSocket, state: AppState) {
                     server_time_unix_ms: now_unix_ms(),
                     nonce: None,
                 };
-                if send(&mut socket, &beat).await.is_err() { break }
+                if tx.try_send(beat).is_err() {
+                    break true;
+                }
             }
         }
+    };
+
+    if slow {
+        let _ = drop_tx.send(());
+    } else {
+        drop(drop_tx);
+    }
+    drop(tx);
+    let abort = writer.abort_handle();
+    if tokio::time::timeout(Duration::from_millis(400), writer)
+        .await
+        .is_err()
+    {
+        abort.abort();
     }
 }
 
@@ -158,7 +271,20 @@ async fn handle_client_message(
             subscription_id,
             topic,
             scope,
-        } => subscribe(state, subscriptions, subscription_id, topic, scope).await,
+            instrument_uid,
+            interval,
+        } => {
+            subscribe(
+                state,
+                subscriptions,
+                subscription_id,
+                topic,
+                scope,
+                instrument_uid,
+                interval,
+            )
+            .await
+        }
     }
 }
 
@@ -168,6 +294,8 @@ async fn subscribe(
     subscription_id: String,
     topic: Topic,
     scope: Option<ExecutionScope>,
+    instrument_uid: Option<String>,
+    interval: Option<CandleIntervalDto>,
 ) -> Vec<ServerEvent> {
     // Only the topics whose read model exists may be accepted.
     if let Some(existing) = subscriptions.get(&subscription_id) {
@@ -183,18 +311,16 @@ async fn subscribe(
     }
     match topic {
         Topic::RuntimeHealth => {}
-        Topic::Quotes | Topic::OrderBook | Topic::Trades => {
-            if state.market_data.is_none() {
-                return vec![unavailable(
-                    subscription_id,
-                    "no market-data projection is attached to this process",
-                )];
-            }
-            // The read model exists but nothing pushes it yet.
-            return vec![unavailable(
+        Topic::Quotes | Topic::OrderBook | Topic::Trades | Topic::Candles | Topic::Session => {
+            return market_snapshot(
+                state,
+                subscriptions,
                 subscription_id,
-                "live market data needs the streaming projection over the #8 provider layer",
-            )];
+                topic,
+                instrument_uid,
+                interval,
+            )
+            .await;
         }
         Topic::Positions | Topic::Orders | Topic::Stops | Topic::Operations | Topic::Portfolio => {
             if state.accounts.is_none() {
@@ -244,7 +370,10 @@ async fn subscribe(
         Subscription {
             topic,
             scope: scope.clone(),
+            instrument_uid: None,
+            interval: None,
             sequence: 0,
+            runtime_epoch,
         },
     );
     vec![
@@ -263,6 +392,114 @@ async fn subscribe(
             payload: EventPayload::RuntimeHealth(health),
         },
     ]
+}
+
+async fn market_snapshot(
+    state: &AppState,
+    subscriptions: &mut HashMap<String, Subscription>,
+    subscription_id: String,
+    topic: Topic,
+    instrument_uid: Option<String>,
+    interval: Option<CandleIntervalDto>,
+) -> Vec<ServerEvent> {
+    let Ok(port) = state.market_data_port() else {
+        return vec![unavailable(
+            subscription_id,
+            "no market-data projection is attached to this process",
+        )];
+    };
+    let Some(instrument_uid) = instrument_uid.filter(|value| !value.trim().is_empty()) else {
+        return vec![ServerEvent::Error {
+            schema_version: STREAM_SCHEMA_VERSION,
+            subscription_id: Some(subscription_id),
+            code: "INSTRUMENT_REQUIRED".to_owned(),
+            message: "a market topic needs instrument_uid".to_owned(),
+            correlation_id: uuid::Uuid::new_v4().to_string(),
+        }];
+    };
+    let payload = match topic {
+        Topic::Quotes => match port.quote(state.provider, &instrument_uid).await {
+            Ok(quote) => EventPayload::Quote(quote),
+            Err(error) => return vec![market_error(subscription_id, error)],
+        },
+        Topic::OrderBook => match port.order_book(state.provider, &instrument_uid, 20).await {
+            Ok(book) => EventPayload::OrderBook(book),
+            Err(error) => return vec![market_error(subscription_id, error)],
+        },
+        Topic::Trades => match port.trades(state.provider, &instrument_uid, 100).await {
+            Ok(trades) => EventPayload::Trades(trades),
+            Err(error) => return vec![market_error(subscription_id, error)],
+        },
+        Topic::Candles => {
+            let Some(interval) = interval else {
+                return vec![ServerEvent::Error {
+                    schema_version: STREAM_SCHEMA_VERSION,
+                    subscription_id: Some(subscription_id),
+                    code: "INTERVAL_REQUIRED".to_owned(),
+                    message: "a CANDLES topic needs interval".to_owned(),
+                    correlation_id: uuid::Uuid::new_v4().to_string(),
+                }];
+            };
+            match port
+                .candles(state.provider, &instrument_uid, interval, 0, i64::MAX)
+                .await
+            {
+                Ok(page) => EventPayload::Candles(page),
+                Err(error) => return vec![market_error(subscription_id, error)],
+            }
+        }
+        Topic::Session => match port.session(state.provider, &instrument_uid).await {
+            Ok(session) => EventPayload::Session(session),
+            Err(error) => return vec![market_error(subscription_id, error)],
+        },
+        _ => {
+            return vec![unavailable(
+                subscription_id,
+                "this topic is not a market projection topic",
+            )];
+        }
+    };
+    subscriptions.insert(
+        subscription_id.clone(),
+        Subscription {
+            topic,
+            scope: None,
+            instrument_uid: Some(instrument_uid),
+            interval: if topic == Topic::Candles {
+                interval
+            } else {
+                None
+            },
+            sequence: 0,
+            runtime_epoch: 0,
+        },
+    );
+    vec![
+        ServerEvent::Status {
+            schema_version: STREAM_SCHEMA_VERSION,
+            subscription_id: subscription_id.clone(),
+            status: SubscriptionStatus::Active,
+            detail: None,
+        },
+        ServerEvent::Snapshot {
+            schema_version: STREAM_SCHEMA_VERSION,
+            subscription_id,
+            as_of_unix_ms: now_unix_ms(),
+            runtime_epoch: 0,
+            scope: None,
+            payload,
+        },
+    ]
+}
+
+fn market_error(subscription_id: String, error: crate::error::ApiError) -> ServerEvent {
+    ServerEvent::Error {
+        schema_version: STREAM_SCHEMA_VERSION,
+        subscription_id: Some(subscription_id),
+        code: error.code,
+        message: error.message,
+        correlation_id: error.correlation_id,
+    }
 }
 
 fn unavailable(subscription_id: String, detail: &str) -> ServerEvent {
@@ -285,13 +522,16 @@ fn slow_consumer_status() -> ServerEvent {
     }
 }
 
-async fn send(socket: &mut WebSocket, event: &ServerEvent) -> Result<(), axum::Error> {
+async fn send<S>(sink: &mut S, event: &ServerEvent) -> Result<(), axum::Error>
+where
+    S: futures_util::Sink<Message, Error = axum::Error> + Unpin,
+{
     let text = serde_json::to_string(event).unwrap_or_else(|_| {
         // Serializing our own envelope cannot fail on valid data; if it ever does, say so
         // in the same typed shape rather than closing silently.
         "{\"type\":\"ERROR\",\"schema_version\":1,\"code\":\"ENCODE_FAILED\",\"message\":\"the server could not encode an event\",\"correlation_id\":\"\"}".to_owned()
     });
-    socket.send(Message::Text(Utf8Bytes::from(text))).await
+    sink.send(Message::Text(Utf8Bytes::from(text))).await
 }
 
 #[cfg(test)]
@@ -318,6 +558,49 @@ mod tests {
         assert!(
             matches!(events.as_slice(), [ServerEvent::Error { code, .. }] if code == "MALFORMED_MESSAGE")
         );
+    }
+
+    #[tokio::test]
+    async fn a_candles_topic_without_interval_is_refused() {
+        use crate::contract::market::{CandleIntervalDto, CandlesDto, MarketFreshness};
+        use crate::contract::runtime::StreamStateDto;
+        use crate::market_project::{SnapshotMarketProjection, candle_from_canonical};
+        use std::sync::Arc;
+        use vox_domain::FixedPoint;
+        let projection = SnapshotMarketProjection::new();
+        projection.publish_candles(CandlesDto {
+            instrument_uid: "uid-sber".into(),
+            interval: CandleIntervalDto::FiveSeconds,
+            candles: vec![candle_from_canonical(
+                "uid-sber",
+                CandleIntervalDto::FiveSeconds,
+                1_000,
+                FixedPoint::from_units_nano(1, 0).expect("fp"),
+                FixedPoint::from_units_nano(1, 0).expect("fp"),
+                FixedPoint::from_units_nano(1, 0).expect("fp"),
+                FixedPoint::from_units_nano(1, 0).expect("fp"),
+                1,
+                Some(false),
+            )],
+            freshness: MarketFreshness {
+                stream: StreamStateDto::Active,
+                observed_at_unix_ms: 1_000,
+                age_ms: 0,
+            },
+        });
+        let state = AppState::detached(ProviderDto::TInvest, BrokerEnvironment::Sandbox)
+            .with_market_data(Arc::new(projection));
+        let mut subs = HashMap::new();
+        let events = handle_client_message(
+            "{\"type\":\"SUBSCRIBE\",\"subscription_id\":\"c-1\",\"topic\":\"CANDLES\",\"instrument_uid\":\"uid-sber\"}",
+            &state,
+            &mut subs,
+        )
+        .await;
+        assert!(
+            matches!(events.as_slice(), [ServerEvent::Error { code, .. }] if code == "INTERVAL_REQUIRED")
+        );
+        assert!(subs.is_empty());
     }
 
     #[tokio::test]
@@ -372,7 +655,10 @@ mod tests {
             Subscription {
                 topic: Topic::RuntimeHealth,
                 scope: None,
+                instrument_uid: None,
+                interval: None,
                 sequence: 0,
+                runtime_epoch: 0,
             },
         );
         let events = handle_client_message(
@@ -391,17 +677,179 @@ mod tests {
         let mut subscription = Subscription {
             topic: Topic::RuntimeHealth,
             scope: None,
+            instrument_uid: None,
+            interval: None,
             sequence: 0,
+            runtime_epoch: 7,
         };
         let payload = || EventPayload::RuntimeHealth(sample_health());
-        let first = subscription.next_update(7, payload(), "s-1");
-        let second = subscription.next_update(7, payload(), "s-1");
+        let first = subscription.next_update(payload(), "s-1");
+        let second = subscription.next_update(payload(), "s-1");
         let sequence_of = |event: &ServerEvent| match event {
             ServerEvent::Update { sequence, .. } => *sequence,
             _ => panic!("expected an update"),
         };
         assert_eq!(sequence_of(&first), 1);
         assert_eq!(sequence_of(&second), 2);
+    }
+
+    #[tokio::test]
+    async fn a_market_topic_with_a_projection_gets_a_quote_snapshot()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::contract::runtime::StreamStateDto;
+        use crate::market_project::{SnapshotMarketProjection, quote_from_last_price};
+        use std::sync::Arc;
+        use vox_domain::FixedPoint;
+        let projection = SnapshotMarketProjection::new();
+        projection.publish_quote(quote_from_last_price(
+            "uid-sber",
+            FixedPoint::from_units_nano(272, 550_000_000)?,
+            1_000,
+            StreamStateDto::Active,
+        ));
+        let state = AppState::detached(ProviderDto::TInvest, BrokerEnvironment::Sandbox)
+            .with_market_data(Arc::new(projection));
+        let mut subs = HashMap::new();
+        let events = handle_client_message(
+            "{\"type\":\"SUBSCRIBE\",\"subscription_id\":\"q-1\",\"topic\":\"QUOTES\",\"instrument_uid\":\"uid-sber\"}",
+            &state,
+            &mut subs,
+        )
+        .await;
+        assert!(
+            matches!(
+                events.as_slice(),
+                [
+                    ServerEvent::Status {
+                        status: SubscriptionStatus::Active,
+                        ..
+                    },
+                    ServerEvent::Snapshot {
+                        payload: EventPayload::Quote(_),
+                        ..
+                    }
+                ]
+            ),
+            "expected active snapshot, got {events:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_publish_after_subscribe_emits_an_update_without_client_polling()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::contract::runtime::StreamStateDto;
+        use crate::events::ApplicationEventBus;
+        use crate::market_project::{SnapshotMarketProjection, quote_from_last_price};
+        use std::sync::Arc;
+        use vox_domain::FixedPoint;
+
+        let events = ApplicationEventBus::new();
+        let mut live = events.subscribe();
+        let projection = Arc::new(SnapshotMarketProjection::new().with_events(events.clone()));
+        projection.publish_quote(quote_from_last_price(
+            "uid-sber",
+            FixedPoint::from_units_nano(272, 550_000_000)?,
+            1_000,
+            StreamStateDto::Active,
+        ));
+        let _ = live.try_recv();
+        let state = AppState::detached(ProviderDto::TInvest, BrokerEnvironment::Sandbox)
+            .with_market_data(projection.clone())
+            .with_events(events);
+        let mut subs = HashMap::new();
+        let subscribed = handle_client_message(
+            "{\"type\":\"SUBSCRIBE\",\"subscription_id\":\"q-1\",\"topic\":\"QUOTES\",\"instrument_uid\":\"uid-sber\"}",
+            &state,
+            &mut subs,
+        )
+        .await;
+        assert!(
+            matches!(
+                subscribed.as_slice(),
+                [ServerEvent::Status { .. }, ServerEvent::Snapshot { .. }]
+            ),
+            "subscribe must snapshot, got {subscribed:?}"
+        );
+
+        projection.publish_quote(quote_from_last_price(
+            "uid-sber",
+            FixedPoint::from_units_nano(273, 0)?,
+            2_000,
+            StreamStateDto::Active,
+        ));
+        let event = live.recv().await.expect("application event after publish");
+        let updates = updates_for(&mut subs, &event);
+        match updates.as_slice() {
+            [
+                ServerEvent::Update {
+                    subscription_id,
+                    sequence,
+                    payload: EventPayload::Quote(quote),
+                    ..
+                },
+            ] => {
+                assert_eq!(subscription_id, "q-1");
+                assert_eq!(*sequence, 1);
+                assert_eq!(
+                    quote
+                        .last
+                        .as_ref()
+                        .map(crate::contract::money::Decimal::as_str),
+                    Some("273.000000000")
+                );
+            }
+            other => panic!("expected one quote UPDATE, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_runtime_health_change_after_subscribe_emits_an_update() {
+        use crate::events::{ApplicationEvent, ApplicationEventBus};
+        use crate::runtime_attach::ProcessRuntime;
+        use std::sync::Arc;
+
+        let events = ApplicationEventBus::new();
+        let mut live = events.subscribe();
+        let state = AppState::detached(ProviderDto::TInvest, BrokerEnvironment::Sandbox)
+            .with_runtime(Arc::new(ProcessRuntime::starting(
+                ProviderDto::TInvest,
+                BrokerEnvironment::Sandbox,
+            )))
+            .with_events(events.clone());
+        let mut subs = HashMap::new();
+        let subscribed = handle_client_message(
+            "{\"type\":\"SUBSCRIBE\",\"subscription_id\":\"r-1\",\"topic\":\"RUNTIME_HEALTH\"}",
+            &state,
+            &mut subs,
+        )
+        .await;
+        assert!(
+            matches!(
+                subscribed.as_slice(),
+                [ServerEvent::Status { .. }, ServerEvent::Snapshot { .. }]
+            ),
+            "runtime subscribe must snapshot, got {subscribed:?}"
+        );
+
+        let mut ready = sample_health();
+        ready.state = crate::contract::runtime::RuntimeStateDto::Ready;
+        events.publish(ApplicationEvent::RuntimeHealth(ready));
+        let event = live.recv().await.expect("runtime health event");
+        let updates = updates_for(&mut subs, &event);
+        assert!(
+            matches!(
+                updates.as_slice(),
+                [ServerEvent::Update {
+                    subscription_id,
+                    sequence: 1,
+                    payload: EventPayload::RuntimeHealth(_),
+                    ..
+                }] if subscription_id == "r-1"
+            ),
+            "expected runtime UPDATE, got {updates:?}"
+        );
     }
 
     fn sample_health() -> crate::contract::runtime::RuntimeHealthDto {
