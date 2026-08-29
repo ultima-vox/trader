@@ -192,11 +192,15 @@ Top bar 44px, groups separated by 1px borders: brand · broker + AccountSelector
 26px items, 2px active left border, secondary items pinned to the bottom.
 
 ### Workspace — `.vox-workspace`, `.vox-workspace__col-*`, `.vox-drop-target`
-12-column grid, 6px gap, `minmax(48px, auto)` rows. Widget width is declared with
-`.vox-workspace__col-{2,3,4,5,6,7,8,12}` — never with an inline `grid-column`. Below
-1366px the ticket column widens (3 → 4) and the chart yields (7 → 6): a chart may lose
-width, a capital-affecting form may not. The ticket carries `min-width: 300px`, so no
-layout can shrink it below its declared minimum. Drag by widget header; drop target
+12-column grid, 6px gap, `minmax(48px, auto)` rows. Placement is
+`--vox-grid-col-start` / `--vox-grid-row-start` / `--vox-grid-col-span` /
+`--vox-grid-row-span` (CSS Grid is 1-indexed; stored `col`/`row` are 0-based).
+Span classes `.vox-workspace__col-{2,3,4,5,6,7,8,12}` set the span token — never an
+inline `grid-column`. A persisted layout may set the same custom properties on the
+widget so `col,row,colSpan,rowSpan` restore after reload. Below 1366px the class
+fallback widens ticket (3 → 4) and yields chart (7 → 6); element-level persisted
+span wins over that fallback. The ticket carries `min-width: 300px`, so no layout
+can shrink it below its declared minimum. Drag by widget header; drop target
 = dashed accent outline; `.is-dragging` sets `cursor: grabbing`. 8px resize step.
 Layout persisted per workspace; workspaces are switchable and duplicable.
 

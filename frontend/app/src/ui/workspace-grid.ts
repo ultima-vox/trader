@@ -11,6 +11,12 @@ import { append, el } from "./dom";
 const COL_SPANS = [2, 3, 4, 5, 6, 7, 8, 12] as const;
 export type GridColSpan = (typeof COL_SPANS)[number];
 
+/** CSS Grid is 1-indexed; stored WidgetLayout.col/row are 0-based. */
+export const GRID_COL_START = "--vox-grid-col-start";
+export const GRID_ROW_START = "--vox-grid-row-start";
+export const GRID_COL_SPAN = "--vox-grid-col-span";
+export const GRID_ROW_SPAN = "--vox-grid-row-span";
+
 export type WorkspaceGridItem = {
   id: string;
   colSpan: GridColSpan;
@@ -36,9 +42,7 @@ export function createWorkspaceGrid(options: WorkspaceGridOptions): HTMLElement 
     for (const widget of ordered) {
       const item = byId.get(widget.id);
       if (item === undefined) continue;
-      applyColSpan(item.element, nearestColSpan(widget.colSpan));
-      item.element.dataset.widgetId = widget.id;
-      item.element.style.minHeight = `${Math.max(1, widget.rowSpan) * 48}px`;
+      applyGridPlacement(item.element, widget);
       append(grid, item.element);
     }
   };
@@ -100,12 +104,41 @@ function nearestColSpan(value: number): GridColSpan {
   return best;
 }
 
+export function applyGridPlacement(element: HTMLElement, widget: WidgetLayout): void {
+  const colStart = widget.col + 1;
+  const rowStart = widget.row + 1;
+  element.style.setProperty(GRID_COL_START, String(colStart));
+  element.style.setProperty(GRID_ROW_START, String(rowStart));
+  element.style.setProperty(GRID_COL_SPAN, String(widget.colSpan));
+  element.style.setProperty(GRID_ROW_SPAN, String(widget.rowSpan));
+  element.dataset.widgetId = widget.id;
+  element.dataset.col = String(widget.col);
+  element.dataset.row = String(widget.row);
+  element.dataset.colSpan = String(widget.colSpan);
+  element.dataset.rowSpan = String(widget.rowSpan);
+  element.style.minHeight = `${Math.max(1, widget.rowSpan) * 48}px`;
+  applyColSpan(element, nearestColSpan(widget.colSpan));
+}
+
+export function readGridPlacement(element: HTMLElement): {
+  col: number;
+  row: number;
+  colSpan: number;
+  rowSpan: number;
+} {
+  return {
+    col: Number(element.style.getPropertyValue(GRID_COL_START)) - 1,
+    row: Number(element.style.getPropertyValue(GRID_ROW_START)) - 1,
+    colSpan: Number(element.style.getPropertyValue(GRID_COL_SPAN)),
+    rowSpan: Number(element.style.getPropertyValue(GRID_ROW_SPAN)),
+  };
+}
+
 function applyColSpan(element: HTMLElement, span: GridColSpan): void {
   Array.from(element.classList).forEach((token) => {
     if (token.startsWith("vox-workspace__col-")) element.classList.remove(token);
   });
   element.classList.add(`vox-workspace__col-${span}`);
-  element.dataset.colSpan = String(span);
 }
 
 function bindDrag(

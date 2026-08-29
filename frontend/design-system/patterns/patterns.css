@@ -45,26 +45,34 @@
   display: grid; grid-template-columns: repeat(12, 1fr); grid-auto-rows: minmax(48px, auto);
   gap: 6px; background: var(--vox-bg-workspace);
 }
-.vox-workspace .vox-widget { position: relative; }
+/* Start/span come from custom properties so persisted col/row is placement, not DOM order.
+   Span classes set the span token. JS may set the same properties on the widget so a
+   stored col/row/colSpan/rowSpan is authoritative after reload. CSS Grid is 1-indexed. */
+.vox-workspace .vox-widget {
+  position: relative;
+  grid-column: var(--vox-grid-col-start, auto) / span var(--vox-grid-col-span, 1);
+  grid-row: var(--vox-grid-row-start, auto) / span var(--vox-grid-row-span, 1);
+}
 .vox-workspace.is-dragging { cursor: grabbing; }
 .vox-drop-target { border: 1px dashed var(--vox-accent-primary); border-radius: var(--vox-radius-md); background: var(--vox-accent-selected-surface); }
 
 /* Declared widget widths on the 12-column grid — widths belong to the system, not to
-   inline styles. Below 1366px the ticket takes a wider track so it never falls under
+   inline grid-column. Below 1366px the ticket takes a wider track so it never falls under
    its 300px minimum; the chart gives up the column, because a chart may lose width and
-   a capital-affecting form may not. */
-.vox-workspace__col-2 { grid-column: span 2; }
-.vox-workspace__col-3 { grid-column: span 3; }
-.vox-workspace__col-4 { grid-column: span 4; }
-.vox-workspace__col-5 { grid-column: span 5; }
-.vox-workspace__col-6 { grid-column: span 6; }
-.vox-workspace__col-7 { grid-column: span 7; }
-.vox-workspace__col-8 { grid-column: span 8; }
-.vox-workspace__col-12 { grid-column: span 12; }
+   a capital-affecting form may not. Element-level --vox-grid-col-span from a persisted
+   layout wins over this class fallback. */
+.vox-workspace__col-2 { --vox-grid-col-span: 2; }
+.vox-workspace__col-3 { --vox-grid-col-span: 3; }
+.vox-workspace__col-4 { --vox-grid-col-span: 4; }
+.vox-workspace__col-5 { --vox-grid-col-span: 5; }
+.vox-workspace__col-6 { --vox-grid-col-span: 6; }
+.vox-workspace__col-7 { --vox-grid-col-span: 7; }
+.vox-workspace__col-8 { --vox-grid-col-span: 8; }
+.vox-workspace__col-12 { --vox-grid-col-span: 12; }
 
 @media (max-width: 1366px) {
-  .vox-workspace__col-3 { grid-column: span 4; }
-  .vox-workspace__col-7 { grid-column: span 6; }
+  .vox-workspace__col-3 { --vox-grid-col-span: 4; }
+  .vox-workspace__col-7 { --vox-grid-col-span: 6; }
 }
 
 /* ---------- Instrument header / quote ---------- */

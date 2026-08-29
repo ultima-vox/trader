@@ -107,8 +107,7 @@ export function formatDisplay(value: ExactDecimal | Decimal): string {
 
 function assertI64Units(nanos: bigint): void {
   const units = nanos / NANO_SCALE;
-  const unsigned = units < 0n ? -units : units;
-  if (unsigned > I64_MAX) {
+  if (units < I64_MIN || units > I64_MAX) {
     throw new DecimalParseError("decimal units exceed i64");
   }
 }

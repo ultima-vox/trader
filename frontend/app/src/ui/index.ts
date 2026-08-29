@@ -13,7 +13,15 @@ export {
 export { mountFoundationPlayground } from "./playground";
 export { createRuntimeStatus } from "./runtime-status";
 export { createWidget } from "./widget";
-export { createWorkspaceGrid } from "./workspace-grid";
+export {
+  applyGridPlacement,
+  createWorkspaceGrid,
+  GRID_COL_SPAN,
+  GRID_COL_START,
+  GRID_ROW_SPAN,
+  GRID_ROW_START,
+  readGridPlacement,
+} from "./workspace-grid";
 
 export type { AccountContextIndicatorOptions } from "./account-context-indicator";
 export type { AccountSelectorOptions } from "./account-selector";

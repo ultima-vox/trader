@@ -24,3 +24,6 @@ npm --prefix frontend/app run typecheck
   Connections are addressed by `OpaqueRef` only.
 - No provider calls from the browser. The UI talks to the Vox application API, never to
   T-Invest / `invest-public-api` / `api-invest.tinkoff.ru`.
+- Workspace placement is `--vox-grid-col-start` / `--vox-grid-row-start` /
+  `--vox-grid-col-span` / `--vox-grid-row-span` (CSS Grid 1-indexed). Persisted
+  `col,row,colSpan,rowSpan` are written onto the widget so reload restores geometry.

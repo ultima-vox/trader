@@ -4,6 +4,7 @@ import * as decimal from "./exact";
 import {
   DecimalParseError,
   I64_MAX,
+  I64_MIN,
   add,
   compare,
   formatCanonical,
@@ -59,14 +60,19 @@ describe("parseDecimal", () => {
     expect(() => parseDecimal(1 as unknown as string)).toThrow(DecimalParseError);
   });
 
-  it("rejects units above i64::MAX", () => {
-    expect(() => parseDecimal("9223372036854775808.000000000")).toThrow(DecimalParseError);
-    expect(() => parseDecimal("-9223372036854775808.000000000")).toThrow(DecimalParseError);
-    expect(() => fromNanos((I64_MAX + 1n) * 1_000_000_000n)).toThrow(DecimalParseError);
-    expect(() => fromNanos(-(I64_MAX + 1n) * 1_000_000_000n)).toThrow(DecimalParseError);
+  it("accepts signed i64 unit bounds and rejects one step outside", () => {
     const max = parseDecimal("9223372036854775807.000000000");
+    const min = parseDecimal("-9223372036854775808.000000000");
+    expect(toCanonical(max)).toBe("9223372036854775807.000000000");
+    expect(toCanonical(min)).toBe("-9223372036854775808.000000000");
+    expect(fromNanos(I64_MAX * 1_000_000_000n).nanos).toBe(I64_MAX * 1_000_000_000n);
+    expect(fromNanos(I64_MIN * 1_000_000_000n).nanos).toBe(I64_MIN * 1_000_000_000n);
+    expect(() => parseDecimal("9223372036854775808.000000000")).toThrow(DecimalParseError);
+    expect(() => parseDecimal("-9223372036854775809.000000000")).toThrow(DecimalParseError);
+    expect(() => fromNanos((I64_MAX + 1n) * 1_000_000_000n)).toThrow(DecimalParseError);
+    expect(() => fromNanos((I64_MIN - 1n) * 1_000_000_000n)).toThrow(DecimalParseError);
     expect(() => add(max, parseDecimal("1.000000000"))).toThrow(DecimalParseError);
-    expect(() => sub(neg(max), parseDecimal("2.000000000"))).toThrow(DecimalParseError);
+    expect(() => neg(min)).toThrow(DecimalParseError);
     expect(() => neg(max)).not.toThrow();
   });
 });

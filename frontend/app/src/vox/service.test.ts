@@ -3,6 +3,7 @@ import type {
   ExecutionScope,
   MutationReceiptDto,
   PortfolioDto,
+  ReconciliationDto,
   RuntimeHealthDto,
 } from "@vox/api-client";
 import { VoxApiError } from "@vox/api-client";
@@ -22,6 +23,23 @@ function scope(account_id: string): ExecutionScope {
 
 function portfolio(account_id: string): PortfolioDto {
   return { account_id, balances: [] };
+}
+
+function reconciliation(runtime_epoch: number): ReconciliationDto {
+  return {
+    scope_key: "account:a",
+    reconciliation_id: "recon-1",
+    snapshot_observed_at_unix_ms: 0,
+    completed_at_unix_ms: 0,
+    runtime_epoch,
+    accounts_complete: true,
+    portfolio_complete: true,
+    positions_complete: true,
+    orders_complete: true,
+    stops_complete: true,
+    operations_complete: true,
+    complete: true,
+  };
 }
 
 function health(runtime_epoch: number, account_display: string): RuntimeHealthDto {
@@ -164,23 +182,35 @@ describe("VoxService stale suppression", () => {
     expect(store.current()?.account_id).toBe("account:c");
   });
 
-  it("discards a runtime health snapshot from a previous epoch", async () => {
+  it("discards a scoped snapshot from a previous runtime_epoch", async () => {
+    const store = new AccountStore();
+    const { fetchImpl, pending } = deferredFetch();
+    const service = new VoxService(store, { fetch: fetchImpl });
+    store.switchTo(scope("account:a"));
+
+    const first = service.reconciliation();
+    const second = service.reconciliation();
+    take(pending, "/api/v1/reconciliation", "account:a").resolve(reconciliation(7));
+    expect(await first).toMatchObject({ ok: true, value: { runtime_epoch: 7 } });
+    expect(store.runtimeEpoch()).toBe(7);
+
+    take(pending, "/api/v1/reconciliation", "account:a").resolve(reconciliation(4));
+    expect(await second).toEqual({ ok: false, stale: true });
+    expect(store.runtimeEpoch()).toBe(7);
+  });
+
+  it("does not abort or discard unscoped runtime() when the account switches", async () => {
     const store = new AccountStore();
     const { fetchImpl, pending } = deferredFetch();
     const service = new VoxService(store, { fetch: fetchImpl });
 
     store.switchTo(scope("account:a"));
-    const first = service.runtime();
-    const second = service.runtime();
-
+    const pendingRuntime = service.runtime();
+    store.switchTo(scope("account:b"));
     take(pending, "/api/v1/runtime").resolve(health(7, "A"));
-    const firstResult = await first;
-    expect(firstResult).toMatchObject({ ok: true, value: { runtime_epoch: 7 } });
-    expect(store.runtimeEpoch()).toBe(7);
 
-    take(pending, "/api/v1/runtime").resolve(health(4, "A"));
-    expect(await second).toEqual({ ok: false, stale: true });
-    expect(store.runtimeEpoch()).toBe(7);
+    expect(await pendingRuntime).toEqual({ ok: true, value: health(7, "A") });
+    expect(store.current()?.account_id).toBe("account:b");
   });
 
   it("does not surface a VoxApiError from a previous generation", async () => {
