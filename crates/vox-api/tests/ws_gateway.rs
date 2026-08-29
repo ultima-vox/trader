@@ -9,7 +9,10 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 use vox_api::application::RuntimeQueries;
-use vox_api::contract::market::OrderBookDto;
+use vox_api::contract::market::{
+    CandleIntervalDto, CandleStateDto, CandlesDto, MarketFreshness, OrderBookDto, SessionDto,
+    TradingStatusDto,
+};
 use vox_api::contract::runtime::{
     ReasonCodeDto, RuntimeHealthDto, RuntimeStateDto, StreamStateDto,
 };
@@ -18,7 +21,8 @@ use vox_api::contract::stream::{EventPayload, ServerEvent, SubscriptionStatus};
 use vox_api::error::ApiError;
 use vox_api::events::ApplicationEventBus;
 use vox_api::market_project::{
-    SnapshotMarketProjection, order_book_from_levels, quote_from_last_price, trade_from_canonical,
+    SnapshotMarketProjection, candle_from_canonical, order_book_from_levels, quote_from_last_price,
+    trade_from_canonical,
 };
 use vox_api::transport::ws::OUTBOUND_QUEUE_CAPACITY;
 use vox_api::{AppState, router};
@@ -124,6 +128,43 @@ async fn recv_update(ws: &mut Ws) -> ServerEvent {
         "expected UPDATE, got {event:?}"
     );
     event
+}
+
+fn sample_candles(complete: Option<bool>, high: i64, volume: i64) -> CandlesDto {
+    CandlesDto {
+        instrument_uid: "uid-sber".into(),
+        interval: CandleIntervalDto::FiveSeconds,
+        candles: vec![candle_from_canonical(
+            "uid-sber",
+            CandleIntervalDto::FiveSeconds,
+            1_000,
+            fp(1, 0),
+            fp(high, 0),
+            fp(1, 0),
+            fp(1, 0),
+            volume,
+            complete,
+        )],
+        freshness: MarketFreshness {
+            stream: StreamStateDto::Active,
+            observed_at_unix_ms: 1_000,
+            age_ms: 0,
+        },
+    }
+}
+
+fn sample_session(status: TradingStatusDto) -> SessionDto {
+    SessionDto {
+        instrument_uid: "uid-sber".into(),
+        status,
+        limit_orders_available: Some(true),
+        market_orders_available: Some(status == TradingStatusDto::Open),
+        freshness: MarketFreshness {
+            stream: StreamStateDto::Active,
+            observed_at_unix_ms: 1_000,
+            age_ms: 0,
+        },
+    }
 }
 
 fn market_state(
@@ -354,6 +395,105 @@ async fn runtime_health_change_after_subscribe_yields_update() {
             assert_eq!(health.state, RuntimeStateDto::Degraded);
         }
         other => panic!("expected runtime UPDATE, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn subscribe_candles_then_publish_yields_open_closed_corrected() {
+    let events = ApplicationEventBus::new();
+    let projection = Arc::new(SnapshotMarketProjection::new().with_events(events.clone()));
+    projection.publish_candles(sample_candles(Some(false), 2, 10));
+    let url = serve(market_state(projection.clone(), events)).await;
+    let mut ws = connect(&url).await;
+    send_text(
+        &mut ws,
+        r#"{"type":"SUBSCRIBE","subscription_id":"c-1","topic":"CANDLES","instrument_uid":"uid-sber","interval":"FIVE_SECONDS"}"#,
+    )
+    .await;
+    assert!(matches!(
+        recv_event(&mut ws).await,
+        ServerEvent::Status { .. }
+    ));
+    match recv_event(&mut ws).await {
+        ServerEvent::Snapshot {
+            payload: EventPayload::Candles(page),
+            ..
+        } => {
+            assert_eq!(page.interval, CandleIntervalDto::FiveSeconds);
+            assert_eq!(page.candles[0].state, CandleStateDto::Open);
+            assert_eq!(page.candles[0].revision, 0);
+        }
+        other => panic!("expected candle SNAPSHOT, got {other:?}"),
+    }
+
+    projection.publish_candles(sample_candles(Some(true), 2, 10));
+    match recv_update(&mut ws).await {
+        ServerEvent::Update {
+            subscription_id,
+            sequence,
+            payload: EventPayload::Candles(page),
+            ..
+        } => {
+            assert_eq!(subscription_id, "c-1");
+            assert_eq!(sequence, 1);
+            assert_eq!(page.candles[0].state, CandleStateDto::Closed);
+            assert_eq!(page.candles[0].revision, 1);
+        }
+        other => panic!("expected CLOSED UPDATE, got {other:?}"),
+    }
+
+    projection.publish_candles(sample_candles(Some(true), 4, 12));
+    match recv_update(&mut ws).await {
+        ServerEvent::Update {
+            sequence,
+            payload: EventPayload::Candles(page),
+            ..
+        } => {
+            assert_eq!(sequence, 2);
+            assert_eq!(page.candles[0].state, CandleStateDto::Corrected);
+            assert_eq!(page.candles[0].revision, 2);
+        }
+        other => panic!("expected CORRECTED UPDATE, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn subscribe_session_then_publish_yields_update() {
+    let events = ApplicationEventBus::new();
+    let projection = Arc::new(SnapshotMarketProjection::new().with_events(events.clone()));
+    projection.publish_session(sample_session(TradingStatusDto::Open));
+    let url = serve(market_state(projection.clone(), events)).await;
+    let mut ws = connect(&url).await;
+    send_text(
+        &mut ws,
+        r#"{"type":"SUBSCRIBE","subscription_id":"s-1","topic":"SESSION","instrument_uid":"uid-sber"}"#,
+    )
+    .await;
+    assert!(matches!(
+        recv_event(&mut ws).await,
+        ServerEvent::Status { .. }
+    ));
+    match recv_event(&mut ws).await {
+        ServerEvent::Snapshot {
+            payload: EventPayload::Session(session),
+            ..
+        } => assert_eq!(session.status, TradingStatusDto::Open),
+        other => panic!("expected session SNAPSHOT, got {other:?}"),
+    }
+
+    projection.publish_session(sample_session(TradingStatusDto::Suspended));
+    match recv_update(&mut ws).await {
+        ServerEvent::Update {
+            subscription_id,
+            sequence,
+            payload: EventPayload::Session(session),
+            ..
+        } => {
+            assert_eq!(subscription_id, "s-1");
+            assert_eq!(sequence, 1);
+            assert_eq!(session.status, TradingStatusDto::Suspended);
+        }
+        other => panic!("expected session UPDATE, got {other:?}"),
     }
 }
 

@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 use tokio::time::interval;
 
 use crate::application::AppState;
+use crate::contract::market::CandleIntervalDto;
 use crate::contract::scope::ExecutionScope;
 use crate::contract::stream::{
     ClientMessage, EventPayload, STREAM_SCHEMA_VERSION, ServerEvent, SubscriptionStatus, Topic,
@@ -36,6 +37,7 @@ struct Subscription {
     topic: Topic,
     scope: Option<ExecutionScope>,
     instrument_uid: Option<String>,
+    interval: Option<CandleIntervalDto>,
     /// Monotonic per-subscription sequence, so a client can detect a gap.
     sequence: u64,
     runtime_epoch: u64,
@@ -68,6 +70,13 @@ impl Subscription {
             (Topic::Trades, ApplicationEvent::Trades { instrument_uid, .. }) => {
                 self.instrument_uid.as_deref() == Some(instrument_uid.as_str())
             }
+            (Topic::Candles, ApplicationEvent::Candles(page)) => {
+                self.instrument_uid.as_deref() == Some(page.instrument_uid.as_str())
+                    && self.interval == Some(page.interval)
+            }
+            (Topic::Session, ApplicationEvent::Session(session)) => {
+                self.instrument_uid.as_deref() == Some(session.instrument_uid.as_str())
+            }
             _ => false,
         }
     }
@@ -79,6 +88,8 @@ fn payload_for(event: &ApplicationEvent) -> EventPayload {
         ApplicationEvent::Quote(quote) => EventPayload::Quote(quote.clone()),
         ApplicationEvent::OrderBook(book) => EventPayload::OrderBook(book.clone()),
         ApplicationEvent::Trades { ticks, .. } => EventPayload::Trades(ticks.clone()),
+        ApplicationEvent::Candles(page) => EventPayload::Candles(page.clone()),
+        ApplicationEvent::Session(session) => EventPayload::Session(session.clone()),
     }
 }
 
@@ -261,6 +272,7 @@ async fn handle_client_message(
             topic,
             scope,
             instrument_uid,
+            interval,
         } => {
             subscribe(
                 state,
@@ -269,6 +281,7 @@ async fn handle_client_message(
                 topic,
                 scope,
                 instrument_uid,
+                interval,
             )
             .await
         }
@@ -282,6 +295,7 @@ async fn subscribe(
     topic: Topic,
     scope: Option<ExecutionScope>,
     instrument_uid: Option<String>,
+    interval: Option<CandleIntervalDto>,
 ) -> Vec<ServerEvent> {
     // Only the topics whose read model exists may be accepted.
     if let Some(existing) = subscriptions.get(&subscription_id) {
@@ -297,9 +311,16 @@ async fn subscribe(
     }
     match topic {
         Topic::RuntimeHealth => {}
-        Topic::Quotes | Topic::OrderBook | Topic::Trades => {
-            return market_snapshot(state, subscriptions, subscription_id, topic, instrument_uid)
-                .await;
+        Topic::Quotes | Topic::OrderBook | Topic::Trades | Topic::Candles | Topic::Session => {
+            return market_snapshot(
+                state,
+                subscriptions,
+                subscription_id,
+                topic,
+                instrument_uid,
+                interval,
+            )
+            .await;
         }
         Topic::Positions | Topic::Orders | Topic::Stops | Topic::Operations | Topic::Portfolio => {
             if state.accounts.is_none() {
@@ -350,6 +371,7 @@ async fn subscribe(
             topic,
             scope: scope.clone(),
             instrument_uid: None,
+            interval: None,
             sequence: 0,
             runtime_epoch,
         },
@@ -378,6 +400,7 @@ async fn market_snapshot(
     subscription_id: String,
     topic: Topic,
     instrument_uid: Option<String>,
+    interval: Option<CandleIntervalDto>,
 ) -> Vec<ServerEvent> {
     let Ok(port) = state.market_data_port() else {
         return vec![unavailable(
@@ -407,6 +430,28 @@ async fn market_snapshot(
             Ok(trades) => EventPayload::Trades(trades),
             Err(error) => return vec![market_error(subscription_id, error)],
         },
+        Topic::Candles => {
+            let Some(interval) = interval else {
+                return vec![ServerEvent::Error {
+                    schema_version: STREAM_SCHEMA_VERSION,
+                    subscription_id: Some(subscription_id),
+                    code: "INTERVAL_REQUIRED".to_owned(),
+                    message: "a CANDLES topic needs interval".to_owned(),
+                    correlation_id: uuid::Uuid::new_v4().to_string(),
+                }];
+            };
+            match port
+                .candles(state.provider, &instrument_uid, interval, 0, i64::MAX)
+                .await
+            {
+                Ok(page) => EventPayload::Candles(page),
+                Err(error) => return vec![market_error(subscription_id, error)],
+            }
+        }
+        Topic::Session => match port.session(state.provider, &instrument_uid).await {
+            Ok(session) => EventPayload::Session(session),
+            Err(error) => return vec![market_error(subscription_id, error)],
+        },
         _ => {
             return vec![unavailable(
                 subscription_id,
@@ -420,6 +465,11 @@ async fn market_snapshot(
             topic,
             scope: None,
             instrument_uid: Some(instrument_uid),
+            interval: if topic == Topic::Candles {
+                interval
+            } else {
+                None
+            },
             sequence: 0,
             runtime_epoch: 0,
         },
@@ -511,6 +561,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_candles_topic_without_interval_is_refused() {
+        use crate::contract::market::{CandleIntervalDto, CandlesDto, MarketFreshness};
+        use crate::contract::runtime::StreamStateDto;
+        use crate::market_project::{SnapshotMarketProjection, candle_from_canonical};
+        use std::sync::Arc;
+        use vox_domain::FixedPoint;
+        let projection = SnapshotMarketProjection::new();
+        projection.publish_candles(CandlesDto {
+            instrument_uid: "uid-sber".into(),
+            interval: CandleIntervalDto::FiveSeconds,
+            candles: vec![candle_from_canonical(
+                "uid-sber",
+                CandleIntervalDto::FiveSeconds,
+                1_000,
+                FixedPoint::from_units_nano(1, 0).expect("fp"),
+                FixedPoint::from_units_nano(1, 0).expect("fp"),
+                FixedPoint::from_units_nano(1, 0).expect("fp"),
+                FixedPoint::from_units_nano(1, 0).expect("fp"),
+                1,
+                Some(false),
+            )],
+            freshness: MarketFreshness {
+                stream: StreamStateDto::Active,
+                observed_at_unix_ms: 1_000,
+                age_ms: 0,
+            },
+        });
+        let state = AppState::detached(ProviderDto::TInvest, BrokerEnvironment::Sandbox)
+            .with_market_data(Arc::new(projection));
+        let mut subs = HashMap::new();
+        let events = handle_client_message(
+            "{\"type\":\"SUBSCRIBE\",\"subscription_id\":\"c-1\",\"topic\":\"CANDLES\",\"instrument_uid\":\"uid-sber\"}",
+            &state,
+            &mut subs,
+        )
+        .await;
+        assert!(
+            matches!(events.as_slice(), [ServerEvent::Error { code, .. }] if code == "INTERVAL_REQUIRED")
+        );
+        assert!(subs.is_empty());
+    }
+
+    #[tokio::test]
     async fn a_market_topic_without_a_projection_is_refused_with_its_reason() {
         let state = AppState::detached(ProviderDto::TInvest, BrokerEnvironment::Sandbox);
         let mut subs = HashMap::new();
@@ -563,6 +656,7 @@ mod tests {
                 topic: Topic::RuntimeHealth,
                 scope: None,
                 instrument_uid: None,
+                interval: None,
                 sequence: 0,
                 runtime_epoch: 0,
             },
@@ -584,6 +678,7 @@ mod tests {
             topic: Topic::RuntimeHealth,
             scope: None,
             instrument_uid: None,
+            interval: None,
             sequence: 0,
             runtime_epoch: 7,
         };

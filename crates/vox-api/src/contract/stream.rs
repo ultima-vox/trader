@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::account::{OperationDto, OrderDto, PortfolioDto, PositionDto, StopOrderDto};
-use super::market::{OrderBookDto, QuoteDto, TradeTickDto};
+use super::market::{
+    CandleIntervalDto, CandlesDto, OrderBookDto, QuoteDto, SessionDto, TradeTickDto,
+};
 use super::runtime::RuntimeHealthDto;
 use super::scope::ExecutionScope;
 
@@ -40,6 +42,10 @@ pub enum Topic {
     OrderBook,
     /// The public tape for the subscribed instrument.
     Trades,
+    /// Candle bars for one instrument and interval.
+    Candles,
+    /// Venue session / trading status for one instrument.
+    Session,
 }
 
 /// What a client may send.
@@ -56,6 +62,9 @@ pub enum ClientMessage {
         /// Required for market topics. Provider uid inside a provider-named feed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         instrument_uid: Option<String>,
+        /// Required for `CANDLES`. Names the bar size; does not claim MarketDataStream support.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interval: Option<CandleIntervalDto>,
     },
     Unsubscribe {
         subscription_id: String,
@@ -88,6 +97,8 @@ pub enum EventPayload {
     Quote(QuoteDto),
     OrderBook(OrderBookDto),
     Trades(Vec<TradeTickDto>),
+    Candles(CandlesDto),
+    Session(SessionDto),
     Positions(Vec<PositionDto>),
     Orders(Vec<OrderDto>),
     Stops(Vec<StopOrderDto>),
@@ -160,6 +171,7 @@ mod tests {
             topic: Topic::RuntimeHealth,
             scope: None,
             instrument_uid: None,
+            interval: None,
         };
         let json = serde_json::to_string(&msg)?;
         assert!(json.contains("\"type\":\"SUBSCRIBE\""), "{json}");

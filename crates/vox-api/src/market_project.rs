@@ -120,31 +120,44 @@ impl SnapshotMarketProjection {
     }
 
     pub fn publish_candles(&self, mut candles: CandlesDto) {
-        let mut inner = lock(&self.inner);
-        if let Some(existing) = inner
-            .candles
-            .get(&candles.instrument_uid)
-            .and_then(|row| row.by_interval.get(&candles.interval))
-        {
-            for candle in &mut candles.candles {
-                if let Some(prior) = existing
-                    .candles
-                    .iter()
-                    .find(|row| row.opened_at_unix_ms == candle.opened_at_unix_ms)
-                {
-                    candle.revision = prior.revision.saturating_add(1);
-                    if prior.state != CandleStateDto::Open && candle.state != CandleStateDto::Open {
-                        candle.state = CandleStateDto::Corrected;
+        let changed = {
+            let mut inner = lock(&self.inner);
+            let prior_page = inner
+                .candles
+                .get(&candles.instrument_uid)
+                .and_then(|row| row.by_interval.get(&candles.interval))
+                .cloned();
+            let mut changed = prior_page.is_none();
+            if let Some(existing) = &prior_page {
+                if existing.candles.len() != candles.candles.len() {
+                    changed = true;
+                }
+                for candle in &mut candles.candles {
+                    if let Some(prior) = existing
+                        .candles
+                        .iter()
+                        .find(|row| row.opened_at_unix_ms == candle.opened_at_unix_ms)
+                    {
+                        apply_candle_lifecycle(prior, candle);
+                        if prior.revision != candle.revision || prior.state != candle.state {
+                            changed = true;
+                        }
+                    } else {
+                        changed = true;
                     }
                 }
             }
+            inner
+                .candles
+                .entry(candles.instrument_uid.clone())
+                .or_default()
+                .by_interval
+                .insert(candles.interval, candles.clone());
+            changed
+        };
+        if changed {
+            self.emit(ApplicationEvent::Candles(candles));
         }
-        inner
-            .candles
-            .entry(candles.instrument_uid.clone())
-            .or_default()
-            .by_interval
-            .insert(candles.interval, candles);
     }
 
     fn emit(&self, event: ApplicationEvent) {
@@ -154,10 +167,27 @@ impl SnapshotMarketProjection {
     }
 
     pub fn publish_session(&self, session: SessionDto) {
-        let mut inner = lock(&self.inner);
-        inner
-            .sessions
-            .insert(session.instrument_uid.clone(), StoredSession { session });
+        let changed = {
+            let mut inner = lock(&self.inner);
+            let changed = inner
+                .sessions
+                .get(&session.instrument_uid)
+                .is_none_or(|stored| {
+                    stored.session.status != session.status
+                        || stored.session.limit_orders_available != session.limit_orders_available
+                        || stored.session.market_orders_available != session.market_orders_available
+                });
+            inner.sessions.insert(
+                session.instrument_uid.clone(),
+                StoredSession {
+                    session: session.clone(),
+                },
+            );
+            changed
+        };
+        if changed {
+            self.emit(ApplicationEvent::Session(session));
+        }
     }
 
     pub fn publish_instrument(&self, instrument: InstrumentSummaryDto) {
@@ -486,6 +516,52 @@ fn age_freshness(freshness: &MarketFreshness) -> MarketFreshness {
     }
 }
 
+/// Authoritative candle body. Freshness/age and revision/state are not part of the body.
+fn candle_body_eq(left: &CandleDto, right: &CandleDto) -> bool {
+    left.instrument_uid == right.instrument_uid
+        && left.interval == right.interval
+        && left.opened_at_unix_ms == right.opened_at_unix_ms
+        && left.open == right.open
+        && left.high == right.high
+        && left.low == right.low
+        && left.close == right.close
+        && left.volume_units == right.volume_units
+}
+
+/// Revision rule for one bar of the same open time.
+///
+/// - OPEN → OPEN, same body: keep revision, stay OPEN
+/// - OPEN → OPEN, body changed: revision += 1, stay OPEN
+/// - OPEN → CLOSED: revision += 1, CLOSED
+/// - CLOSED → identical CLOSED: keep revision, stay CLOSED (not CORRECTED)
+/// - CLOSED → changed CLOSED: revision += 1, CORRECTED
+fn apply_candle_lifecycle(prior: &CandleDto, incoming: &mut CandleDto) {
+    let same_body = candle_body_eq(prior, incoming);
+    match (prior.state, incoming.state) {
+        (CandleStateDto::Open, CandleStateDto::Open) if same_body => {
+            incoming.revision = prior.revision;
+        }
+        (CandleStateDto::Open, CandleStateDto::Open) => {
+            incoming.revision = prior.revision.saturating_add(1);
+        }
+        (CandleStateDto::Open, CandleStateDto::Closed | CandleStateDto::Corrected) => {
+            incoming.revision = prior.revision.saturating_add(1);
+            incoming.state = CandleStateDto::Closed;
+        }
+        (
+            CandleStateDto::Closed | CandleStateDto::Corrected,
+            CandleStateDto::Closed | CandleStateDto::Corrected,
+        ) if same_body => {
+            incoming.revision = prior.revision;
+            incoming.state = prior.state;
+        }
+        (CandleStateDto::Closed | CandleStateDto::Corrected, _) => {
+            incoming.revision = prior.revision.saturating_add(1);
+            incoming.state = CandleStateDto::Corrected;
+        }
+    }
+}
+
 fn missing(kind: &str, instrument_uid: &str) -> ApiError {
     ApiError::new(
         ErrorCategory::NotFound,
@@ -614,60 +690,110 @@ mod tests {
         assert_eq!(error.code, "UNSUPPORTED_CANDLE_INTERVAL");
     }
 
-    #[test]
-    fn a_republished_closed_bar_is_corrected() -> Result<(), Box<dyn std::error::Error>> {
-        let projection = SnapshotMarketProjection::new();
-        let first = candle_from_canonical(
-            "uid",
-            CandleIntervalDto::FiveSeconds,
-            1_000,
-            fp(1, 0)?,
-            fp(2, 0)?,
-            fp(1, 0)?,
-            fp(2, 0)?,
-            10,
-            Some(true),
-        );
-        assert_eq!(first.state, CandleStateDto::Closed);
+    fn publish_bar(
+        projection: &SnapshotMarketProjection,
+        bar: CandleDto,
+        observed_at_unix_ms: i64,
+    ) {
         projection.publish_candles(CandlesDto {
-            instrument_uid: "uid".into(),
-            interval: CandleIntervalDto::FiveSeconds,
-            candles: vec![first],
+            instrument_uid: bar.instrument_uid.clone(),
+            interval: bar.interval,
+            candles: vec![bar],
             freshness: MarketFreshness {
                 stream: StreamStateDto::Active,
-                observed_at_unix_ms: 1_000,
+                observed_at_unix_ms,
                 age_ms: 0,
             },
         });
-        let revised = candle_from_canonical(
-            "uid",
-            CandleIntervalDto::FiveSeconds,
-            1_000,
-            fp(1, 0)?,
-            fp(3, 0)?,
-            fp(1, 0)?,
-            fp(2, 500_000_000)?,
-            12,
-            Some(true),
-        );
-        projection.publish_candles(CandlesDto {
-            instrument_uid: "uid".into(),
-            interval: CandleIntervalDto::FiveSeconds,
-            candles: vec![revised],
-            freshness: MarketFreshness {
-                stream: StreamStateDto::Active,
-                observed_at_unix_ms: 1_100,
-                age_ms: 0,
-            },
-        });
-        let stored = lock(&projection.inner)
+    }
+
+    fn stored_bar(projection: &SnapshotMarketProjection) -> CandleDto {
+        lock(&projection.inner)
             .candles
             .get("uid")
             .and_then(|row| row.by_interval.get(&CandleIntervalDto::FiveSeconds))
-            .cloned()
-            .expect("stored candles");
-        assert_eq!(stored.candles[0].state, CandleStateDto::Corrected);
-        assert_eq!(stored.candles[0].revision, 1);
+            .and_then(|page| page.candles.first().cloned())
+            .expect("stored candle")
+    }
+
+    fn bar(
+        high: i64,
+        close_nano: i32,
+        volume: i64,
+        complete: Option<bool>,
+    ) -> Result<CandleDto, Box<dyn std::error::Error>> {
+        Ok(candle_from_canonical(
+            "uid",
+            CandleIntervalDto::FiveSeconds,
+            1_000,
+            fp(1, 0)?,
+            fp(high, 0)?,
+            fp(1, 0)?,
+            fp(1, close_nano)?,
+            volume,
+            complete,
+        ))
+    }
+
+    #[test]
+    fn candle_lifecycle_is_idempotent_and_corrects_only_on_body_change()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let projection = SnapshotMarketProjection::new();
+
+        publish_bar(&projection, bar(2, 0, 10, Some(false))?, 1_000);
+        let open = stored_bar(&projection);
+        assert_eq!(open.state, CandleStateDto::Open);
+        assert_eq!(open.revision, 0);
+
+        publish_bar(&projection, bar(2, 0, 10, Some(false))?, 1_010);
+        let open_same = stored_bar(&projection);
+        assert_eq!(open_same.state, CandleStateDto::Open);
+        assert_eq!(open_same.revision, 0, "identical OPEN republish is a no-op");
+
+        publish_bar(&projection, bar(3, 250_000_000, 11, Some(false))?, 1_020);
+        let open_changed = stored_bar(&projection);
+        assert_eq!(open_changed.state, CandleStateDto::Open);
+        assert_eq!(
+            open_changed.revision, 1,
+            "forming body change advances revision"
+        );
+
+        publish_bar(&projection, bar(3, 250_000_000, 11, Some(true))?, 1_030);
+        let closed = stored_bar(&projection);
+        assert_eq!(closed.state, CandleStateDto::Closed);
+        assert_eq!(closed.revision, 2);
+
+        publish_bar(&projection, bar(3, 250_000_000, 11, Some(true))?, 1_040);
+        let closed_same = stored_bar(&projection);
+        assert_eq!(closed_same.state, CandleStateDto::Closed);
+        assert_eq!(
+            closed_same.revision, 2,
+            "identical CLOSED republish is not CORRECTED"
+        );
+
+        publish_bar(&projection, bar(4, 500_000_000, 12, Some(true))?, 1_050);
+        let corrected = stored_bar(&projection);
+        assert_eq!(corrected.state, CandleStateDto::Corrected);
+        assert_eq!(corrected.revision, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn identical_closed_republish_does_not_emit_a_live_event()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let events = crate::events::ApplicationEventBus::new();
+        let mut live = events.subscribe();
+        let projection = SnapshotMarketProjection::new().with_events(events);
+        publish_bar(&projection, bar(2, 0, 10, Some(true))?, 1_000);
+        assert!(matches!(
+            live.try_recv(),
+            Ok(crate::events::ApplicationEvent::Candles(_))
+        ));
+        publish_bar(&projection, bar(2, 0, 10, Some(true))?, 1_100);
+        assert!(
+            live.try_recv().is_err(),
+            "duplicate historic page must not look like a correction"
+        );
         Ok(())
     }
 }

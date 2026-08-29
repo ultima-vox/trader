@@ -1853,6 +1853,17 @@
                 ],
                 "description": "Required for market topics. Provider uid inside a provider-named feed."
               },
+              "interval": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CandleIntervalDto",
+                    "description": "Required for `CANDLES`. Names the bar size; does not claim MarketDataStream support."
+                  }
+                ]
+              },
               "type": {
                 "type": "string",
                 "enum": [
@@ -2038,6 +2049,42 @@
                 "type": "string",
                 "enum": [
                   "TRADES"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "topic"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/CandlesDto"
+              },
+              "topic": {
+                "type": "string",
+                "enum": [
+                  "CANDLES"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "topic"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/SessionDto"
+              },
+              "topic": {
+                "type": "string",
+                "enum": [
+                  "SESSION"
                 ]
               }
             }
@@ -3893,7 +3940,9 @@
           "PORTFOLIO",
           "QUOTES",
           "ORDER_BOOK",
-          "TRADES"
+          "TRADES",
+          "CANDLES",
+          "SESSION"
         ]
       },
       "TradeDirectionDto": {

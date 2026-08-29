@@ -99,6 +99,7 @@ export type ClientMessage = {
   scope?: null | ExecutionScope;
   /** Required for market topics. Provider uid inside a provider-named feed. */
   instrument_uid?: string | null;
+  interval?: null | CandleIntervalDto;
   type: "SUBSCRIBE";
 } | {
   subscription_id: string;
@@ -142,6 +143,12 @@ export type EventPayload = {
 } | {
   data: Array<TradeTickDto>;
   topic: "TRADES";
+} | {
+  data: CandlesDto;
+  topic: "CANDLES";
+} | {
+  data: SessionDto;
+  topic: "SESSION";
 } | {
   data: Array<PositionDto>;
   topic: "POSITIONS";
@@ -576,7 +583,7 @@ export type SystemHealthDto = {
 export type TimeInForceDto = "DAY" | "FILL_AND_KILL" | "FILL_OR_KILL";
 
 /** Topics a client may subscribe to. A topic exists only when its read model does. */
-export type Topic = "RUNTIME_HEALTH" | "POSITIONS" | "ORDERS" | "STOPS" | "OPERATIONS" | "PORTFOLIO" | "QUOTES" | "ORDER_BOOK" | "TRADES";
+export type Topic = "RUNTIME_HEALTH" | "POSITIONS" | "ORDERS" | "STOPS" | "OPERATIONS" | "PORTFOLIO" | "QUOTES" | "ORDER_BOOK" | "TRADES" | "CANDLES" | "SESSION";
 
 /** Which side initiated a public trade, where the provider reports it. */
 export type TradeDirectionDto = "BUY" | "SELL" | "UNKNOWN";

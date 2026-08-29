@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 
 use crate::application::RuntimeQueries;
-use crate::contract::market::{OrderBookDto, QuoteDto, TradeTickDto};
+use crate::contract::market::{CandlesDto, OrderBookDto, QuoteDto, SessionDto, TradeTickDto};
 use crate::contract::runtime::RuntimeHealthDto;
 
 /// How many application events may wait for a lagging gateway before it is treated as slow.
@@ -29,6 +29,8 @@ pub enum ApplicationEvent {
         instrument_uid: String,
         ticks: Vec<TradeTickDto>,
     },
+    Candles(CandlesDto),
+    Session(SessionDto),
 }
 
 /// Bounded fan-out of [`ApplicationEvent`]. Lagging subscribers are dropped, not buffered.

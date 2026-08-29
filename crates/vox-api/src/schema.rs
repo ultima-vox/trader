@@ -234,6 +234,15 @@ mod tests {
             candle.get("closed").is_none(),
             "boolean closed was replaced by explicit state"
         );
+        let topics = doc["components"]["schemas"]["Topic"]["enum"]
+            .as_array()
+            .expect("Topic enum");
+        for required in ["CANDLES", "SESSION", "QUOTES"] {
+            assert!(
+                topics.iter().any(|value| value == required),
+                "missing topic {required}: {topics:?}"
+            );
+        }
         let capability = &doc["components"]["schemas"]["CandleIntervalCapability"]["properties"];
         assert!(capability.get("interval").is_some());
         assert!(capability.get("historical_supported").is_some());

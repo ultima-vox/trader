@@ -91,14 +91,17 @@ Those second-resolution bars are request/history only: MarketDataStream
 tell historic-only from stream-capable without guessing. Unknown provider integers are
 `UNSUPPORTED_CANDLE_INTERVAL`, never a silent drop.
 `CandleDto.state` is `OPEN` / `CLOSED` / `CORRECTED` with a per-bar `revision: u64`; a boolean
-`closed` flag is not enough. Every record carries `MarketFreshness`. An inconsistent book
+`closed` flag is not enough. Identical republish of the same bar is idempotent: revision
+advances only when the OHLC/volume body changes, and CLOSED → CLOSED becomes CORRECTED
+only then. Live `CANDLES` / `SESSION` WebSocket topics consume these application events;
+a 5s candle UPDATE does not claim MarketDataStream support. Every record carries `MarketFreshness`. An inconsistent book
 is refused. A missing instrument is `MARKET_FACT_NOT_FOUND`, never a zero price. Default
 `vox-server` does not attach an empty projection, so unattached `MARKET_DATA` stays
 `CAPABILITY_UNAVAILABLE`.
 
 **Live WebSocket is an application event bus.** `ApplicationEventBus` is a bounded
 broadcast of already-projected facts. `SnapshotMarketProjection` publish methods emit
-quote/book/tape events; a runtime-health watcher publishes `#11` health diffs after the
+quote/book/tape/candle/session events; a runtime-health watcher publishes `#11` health diffs after the
 first snapshot baseline. The `/api/v1/stream` gateway fans matching events to per-socket
 bounded queues as `UPDATE` with a monotonic per-subscription sequence. Each socket has its
 own writer task, so a slow consumer cannot block another client or upstream publish.
