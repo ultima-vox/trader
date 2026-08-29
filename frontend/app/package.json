@@ -1,0 +1,22 @@
+{
+  "name": "@vox/frontend-foundation",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Issue #18 frontend foundation. Consumes the generated @vox/api-client. Do not edit frontend/api-client/src.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "happy-dom": "^18.0.1",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,284 @@
+# Proves the #18 frontend foundation on the exact commit under review.
+#
+# The app consumes the generated client through a path alias. This workflow typechecks
+# and tests that tree, and fails if src talks to a broker host or persists a secret.
+name: Frontend foundation
+
+on:
+  pull_request:
+    paths:
+      - "frontend/app/**"
+      - "frontend/api-client/**"
+      - "frontend/design-system/**"
+      - ".github/workflows/frontend-foundation.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "frontend/app/**"
+      - "frontend/api-client/**"
+      - "frontend/design-system/**"
+      - ".github/workflows/frontend-foundation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-foundation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the commit under review
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Report the verified commit
+        run: echo "verifying $(git rev-parse HEAD)"
+
+      - name: Forbid provider fetches and secret storage
+        run: |
+          python3 - <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          ROOT = Path("frontend/app/src")
+          HOSTS = ("tinkoff", "invest-public-api", "api-invest.tinkoff.ru", "t-invest")
+          SECRET = re.compile(r"token|secret|credential|password|authorization", re.I)
+          URLISH = re.compile(r"^(?:https?|wss?)://|^//", re.I)
+          FETCH_CALL = re.compile(
+              r"\b(?:fetch|XMLHttpRequest|WebSocket)\s*\(|\bnew\s+(?:URL|Request|WebSocket)\s*\(",
+              re.I,
+          )
+          SETITEM = re.compile(
+              r"""(localStorage|sessionStorage)\s*\.\s*setItem\s*\(\s*(['"`])(.*?)(\2)""",
+              re.S | re.I,
+          )
+          INDEX_SET = re.compile(
+              r"""(localStorage|sessionStorage)\s*\[\s*(['"`])(.*?)(\2)\s*\]\s*=""",
+              re.S | re.I,
+          )
+          DOT_SET = re.compile(
+              r"""(localStorage|sessionStorage)\s*\.\s*(token|secret|credential|password|authorization)\b\s*=""",
+              re.I,
+          )
+          IDB_OPEN = re.compile(r"""indexedDB\s*\.\s*open\s*\(\s*(['"`])(.*?)(\1)""", re.S | re.I)
+          IDB_STORE = re.compile(r"""createObjectStore\s*\(\s*(['"`])(.*?)(\1)""", re.S | re.I)
+
+
+          def strip_comments(src: str) -> str:
+              out: list[str] = []
+              i = 0
+              n = len(src)
+              while i < n:
+                  ch = src[i]
+                  if ch in "'\"`":
+                      q = ch
+                      out.append(ch)
+                      i += 1
+                      while i < n:
+                          if src[i] == "\\":
+                              out.append(src[i : i + 2])
+                              i += 2
+                              continue
+                          out.append(src[i])
+                          if src[i] == q:
+                              i += 1
+                              break
+                          i += 1
+                      continue
+                  if src.startswith("//", i):
+                      while i < n and src[i] != "\n":
+                          i += 1
+                      continue
+                  if src.startswith("/*", i):
+                      i += 2
+                      while i < n and not src.startswith("*/", i):
+                          if src[i] == "\n":
+                              out.append("\n")
+                          i += 1
+                      i = min(n, i + 2)
+                      continue
+                  out.append(ch)
+                  i += 1
+              return "".join(out)
+
+
+          def line_at(src: str, index: int) -> int:
+              return src.count("\n", 0, index) + 1
+
+
+          def has_host(body: str) -> bool:
+              low = body.lower()
+              return any(host in low for host in HOSTS)
+
+
+          def iter_strings(src: str):
+              i = 0
+              n = len(src)
+              while i < n:
+                  ch = src[i]
+                  if ch in "'\"`":
+                      q = ch
+                      start = i
+                      i += 1
+                      body: list[str] = []
+                      while i < n:
+                          if src[i] == "\\":
+                              body.append(src[i : i + 2])
+                              i += 2
+                              continue
+                          if src[i] == q:
+                              yield start, "".join(body)
+                              i += 1
+                              break
+                          body.append(src[i])
+                          i += 1
+                      continue
+                  i += 1
+
+
+          def mask_strings(src: str) -> str:
+              out: list[str] = []
+              i = 0
+              n = len(src)
+              while i < n:
+                  ch = src[i]
+                  if ch in "'\"`":
+                      q = ch
+                      out.append(ch)
+                      i += 1
+                      while i < n:
+                          if src[i] == "\\":
+                              out.append("  " if i + 1 < n else " ")
+                              i += 2
+                              continue
+                          if src[i] == q:
+                              out.append(q)
+                              i += 1
+                              break
+                          out.append("\n" if src[i] == "\n" else " ")
+                          i += 1
+                      continue
+                  out.append(ch)
+                  i += 1
+              return "".join(out)
+
+
+          def slice_parens(src: str, open_at: int) -> str:
+              depth = 0
+              i = open_at
+              n = len(src)
+              while i < n:
+                  if src[i] == "(":
+                      depth += 1
+                  elif src[i] == ")":
+                      depth -= 1
+                      if depth == 0:
+                          return src[open_at : i + 1]
+                  i += 1
+              return src[open_at : min(n, open_at + 240)]
+
+
+          errors: list[str] = []
+          if not ROOT.is_dir():
+              print("frontend/app/src missing", file=sys.stderr)
+              sys.exit(1)
+
+          for path in sorted(ROOT.rglob("*")):
+              if path.suffix.lower() not in {".ts", ".tsx", ".js", ".mjs", ".cts", ".mts"}:
+                  continue
+              is_test = bool(re.search(r"\.(?:test|spec)\.", path.name, re.I))
+              text = path.read_text(encoding="utf-8")
+              code = strip_comments(text)
+              rel = path.as_posix()
+              # Tests hold negative provider-host / IndexedDB fixtures.
+              # Keep secret-key assignment rules on tests.
+              if not is_test:
+                  for start, body in iter_strings(code):
+                      if URLISH.search(body.strip()) and has_host(body):
+                          errors.append(
+                              f"{rel}:{line_at(code, start)}: provider host used as fetch URL"
+                          )
+                  masked = mask_strings(code)
+                  for match in FETCH_CALL.finditer(masked):
+                      paren = match.group(0).rfind("(")
+                      args = slice_parens(code, match.start() + paren)
+                      if has_host(args):
+                          errors.append(
+                              f"{rel}:{line_at(code, match.start())}: provider host used as fetch URL"
+                          )
+                  for match in IDB_OPEN.finditer(code):
+                      key = match.group(2)
+                      if SECRET.search(key):
+                          errors.append(
+                              f"{rel}:{line_at(code, match.start())}: indexedDB.open secret-shaped name"
+                          )
+                  for match in IDB_STORE.finditer(code):
+                      key = match.group(2)
+                      if SECRET.search(key):
+                          errors.append(
+                              f"{rel}:{line_at(code, match.start())}: createObjectStore secret-shaped name"
+                          )
+              for match in SETITEM.finditer(code):
+                  key = match.group(3)
+                  if SECRET.search(key):
+                      errors.append(
+                          f"{rel}:{line_at(code, match.start())}: {match.group(1)}.setItem secret-shaped key"
+                      )
+              for match in INDEX_SET.finditer(code):
+                  key = match.group(3)
+                  if SECRET.search(key):
+                      errors.append(
+                          f"{rel}:{line_at(code, match.start())}: {match.group(1)}[secret-shaped key] assignment"
+                      )
+              for match in DOT_SET.finditer(code):
+                  errors.append(
+                      f"{rel}:{line_at(code, match.start())}: {match.group(1)}.{match.group(2)} assignment"
+                  )
+
+          if errors:
+              print("frontend foundation policy failed:", file=sys.stderr)
+              for item in errors:
+                  print(item, file=sys.stderr)
+              sys.exit(1)
+          print("no provider fetch URLs and no secret-shaped storage keys")
+          PY
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/app/package-lock.json
+
+      - name: Install
+        working-directory: frontend/app
+        run: npm ci --no-audit --no-fund
+
+      - name: Test
+        working-directory: frontend/app
+        run: npm test
+
+      - name: Typecheck
+        working-directory: frontend/app
+        run: npm run typecheck
+
+      - name: Install Chromium
+        working-directory: frontend/app
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser shell at 1280 / 1440 / 1920
+        working-directory: frontend/app
+        run: npm run test:e2e
+
+      - name: Upload foundation shell screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: foundation-shell-${{ github.sha }}
+          path: frontend/app/e2e/artifacts
+          if-no-files-found: error
