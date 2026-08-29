@@ -105,13 +105,28 @@ pub trait BrokerProviderPort: Send + Sync {
     ) -> Result<ProviderDiscovery, ProviderError>;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExecutionPurpose {
+    SandboxMutation,
+    ProductionManual,
+    ProductionAutomated,
+}
+
 #[derive(Debug)]
-pub struct ResolvedConnection {
+pub struct ResolvedReadAccess {
     pub target: AccountTarget,
     pub credential_ref: CredentialRef,
     pub credential: SecretBytes,
     pub capabilities: BTreeSet<ConnectionCapability>,
-    pub execution_authorization: ExecutionAuthorizationMode,
+}
+
+#[derive(Debug)]
+pub struct ResolvedExecutionAccess {
+    pub target: AccountTarget,
+    pub credential_ref: CredentialRef,
+    pub credential: SecretBytes,
+    pub capabilities: BTreeSet<ConnectionCapability>,
+    pub mode: ExecutionAuthorizationMode,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -470,22 +485,25 @@ where
         };
         connection.credential_status = CredentialStatus::Disabled;
         connection.updated_at_unix_ms = security.now_unix_ms;
-        self.repository.update_connection(&connection)?;
+        let audits = [
+            self.audit_record(
+                security,
+                "CREDENTIAL_DISABLED",
+                connection.credential_ref.as_str(),
+                Some("VALID"),
+                Some("DISABLED"),
+            )?,
+            self.audit_record(
+                security,
+                "CONNECTION_DISABLED",
+                connection_id.as_str(),
+                Some("ENABLED"),
+                Some("DISABLED"),
+            )?,
+        ];
+        self.repository
+            .update_connection_with_audits(&connection, &audits)?;
         self.secret_store.disable(&connection.credential_ref)?;
-        self.audit(
-            security,
-            "CREDENTIAL_DISABLED",
-            connection.credential_ref.as_str(),
-            Some("VALID"),
-            Some("DISABLED"),
-        )?;
-        self.audit(
-            security,
-            "CONNECTION_DISABLED",
-            connection_id.as_str(),
-            Some("ENABLED"),
-            Some("DISABLED"),
-        )?;
         Ok(connection)
     }
 
@@ -496,19 +514,44 @@ where
     ) -> Result<(), ServiceError> {
         self.require(security, Permission::DisableDeleteConnection)?;
         let connection = self.connection(connection_id)?;
-        if connection.enabled {
+        if connection.enabled && connection.credential_status != CredentialStatus::PendingDelete {
             return Err(ServiceError::DisableBeforeDelete);
         }
-        let audit = self.audit_record(
+        let mut tombstone = connection.clone();
+        tombstone.enabled = false;
+        tombstone.credential_status = CredentialStatus::PendingDelete;
+        tombstone.health = ConnectionHealth {
+            state: ConnectionHealthState::Disabled,
+            checked_at_unix_ms: Some(security.now_unix_ms),
+            provider: tombstone.provider.clone(),
+            environment: tombstone.environment,
+            reason_code: ConnectionHealthReason::DisabledByOperator,
+            safe_detail: Some("delete in progress".to_owned()),
+            retryable: false,
+        };
+        tombstone.updated_at_unix_ms = security.now_unix_ms;
+        let started = self.audit_record(
+            security,
+            "CONNECTION_DELETE_STARTED",
+            connection_id.as_str(),
+            Some("DISABLED"),
+            Some("PENDING_DELETE"),
+        )?;
+        self.repository
+            .begin_connection_delete_with_audit(&tombstone, &started)?;
+        match self.secret_store.delete(&connection.credential_ref) {
+            Ok(()) | Err(SecretStoreError::NotFound) => {}
+            Err(error) => return Err(error.into()),
+        }
+        let deleted = self.audit_record(
             security,
             "CONNECTION_DELETED",
             connection_id.as_str(),
-            Some("DISABLED"),
+            Some("PENDING_DELETE"),
             Some("DELETED"),
         )?;
         self.repository
-            .delete_connection_with_audit(connection_id, &audit)?;
-        self.secret_store.delete(&connection.credential_ref)?;
+            .finalize_connection_delete(connection_id, &deleted)?;
         Ok(())
     }
 
@@ -542,14 +585,14 @@ where
             created_at_unix_ms: security.now_unix_ms,
             updated_at_unix_ms: security.now_unix_ms,
         };
-        self.repository.put_binding(&binding)?;
-        self.audit(
+        let audit = self.audit_record(
             security,
             "ACCOUNT_BOUND",
             binding.id.as_str(),
             None,
             Some(connection_id.as_str()),
         )?;
+        self.repository.put_binding_with_audit(&binding, &audit)?;
         Ok(binding)
     }
 
@@ -559,14 +602,16 @@ where
         binding_id: &BindingId,
     ) -> Result<(), ServiceError> {
         self.require(security, Permission::BindAccounts)?;
-        self.repository.delete_binding(binding_id)?;
-        self.audit(
+        let audit = self.audit_record(
             security,
             "ACCOUNT_UNBOUND",
             binding_id.as_str(),
             Some("BOUND"),
             Some("UNBOUND"),
-        )
+        )?;
+        self.repository
+            .delete_binding_with_audit(binding_id, &audit)?;
+        Ok(())
     }
 
     pub fn replace_role(
@@ -576,14 +621,15 @@ where
     ) -> Result<(), ServiceError> {
         self.require(security, Permission::SecurityAdmin)?;
         role.name = safe_text(role.name, "role_name", 128)?;
-        self.repository.put_role(&role)?;
-        self.audit(
+        let audit = self.audit_record(
             security,
             "ROLE_PERMISSIONS_CHANGED",
             role.id.as_str(),
             None,
             Some("REPLACED"),
-        )
+        )?;
+        self.repository.put_role_with_audit(&role, &audit)?;
+        Ok(())
     }
 
     pub fn grant_role(
@@ -593,14 +639,16 @@ where
         role_id: &RoleId,
     ) -> Result<(), ServiceError> {
         self.require(security, Permission::SecurityAdmin)?;
-        self.repository.grant_role(user_id, role_id)?;
-        self.audit(
+        let audit = self.audit_record(
             security,
             "ROLE_ASSIGNED",
             user_id.as_str(),
             None,
             Some(role_id.as_str()),
-        )
+        )?;
+        self.repository
+            .grant_role_with_audit(user_id, role_id, &audit)?;
+        Ok(())
     }
 
     pub fn disable_binding(
@@ -609,15 +657,20 @@ where
         binding_id: &BindingId,
     ) -> Result<(), ServiceError> {
         self.require(security, Permission::BindAccounts)?;
-        self.repository
-            .set_binding_enabled(binding_id, false, security.now_unix_ms)?;
-        self.audit(
+        let audit = self.audit_record(
             security,
             "ACCOUNT_BINDING_DISABLED",
             binding_id.as_str(),
             Some("ENABLED"),
             Some("DISABLED"),
-        )
+        )?;
+        self.repository.set_binding_enabled_with_audit(
+            binding_id,
+            false,
+            security.now_unix_ms,
+            &audit,
+        )?;
+        Ok(())
     }
 
     pub fn set_execution_authorization(
@@ -633,31 +686,7 @@ where
             .authorization(connection_id, provider_account_id)?
             .map(|value| value.mode)
             .unwrap_or(ExecutionAuthorizationMode::Disabled);
-        match (connection.environment, previous, mode) {
-            (BrokerEnvironment::Production, ExecutionAuthorizationMode::AutomatedAllowed, _)
-            | (BrokerEnvironment::Production, _, ExecutionAuthorizationMode::AutomatedAllowed) => {
-                self.require(security, Permission::EnableAutomatedProductionExecution)?
-            }
-            (BrokerEnvironment::Production, ExecutionAuthorizationMode::ManualAllowed, _)
-            | (BrokerEnvironment::Production, _, ExecutionAuthorizationMode::ManualAllowed) => {
-                self.require(security, Permission::SubmitProductionManualOrders)?
-            }
-            (
-                BrokerEnvironment::Sandbox,
-                ExecutionAuthorizationMode::Disabled,
-                ExecutionAuthorizationMode::Disabled,
-            )
-            | (
-                BrokerEnvironment::Production,
-                ExecutionAuthorizationMode::Disabled,
-                ExecutionAuthorizationMode::Disabled,
-            ) => {
-                self.require(security, Permission::BindAccounts)?;
-            }
-            (BrokerEnvironment::Sandbox, _, _) => {
-                self.require(security, Permission::SubmitSandboxOrders)?;
-            }
-        }
+        self.require_authorization_transition(security, connection.environment, previous, mode)?;
         let account = self
             .repository
             .accounts(connection_id)?
@@ -696,68 +725,71 @@ where
             changed_by: security.actor.clone(),
             changed_at_unix_ms: security.now_unix_ms,
         };
-        self.repository.put_authorization(&authorization)?;
-        self.audit(
+        let audit = self.audit_record(
             security,
             "EXECUTION_AUTHORIZATION_CHANGED",
             binding.id.as_str(),
             Some(authorization_name(previous)),
             Some(authorization_name(mode)),
         )?;
+        self.repository
+            .put_authorization_with_audit(&authorization, &audit)?;
         Ok(authorization)
     }
 
-    pub fn resolve_bound_connection(
+    pub fn resolve_read_credential(
         &self,
         connection_id: &ConnectionId,
         provider_account_id: &str,
         vox_account_id: &VoxAccountId,
-    ) -> Result<ResolvedConnection, ServiceError> {
-        let connection = self.connection(connection_id)?;
-        if !connection.enabled || connection.health.state != ConnectionHealthState::Healthy {
-            return Err(ServiceError::ConnectionUnavailable);
-        }
-        let account = self
-            .repository
-            .accounts(connection_id)?
-            .into_iter()
-            .find(|account| account.provider_account_id == provider_account_id)
-            .ok_or(ServiceError::AccountNotFound)?;
-        if !account.accessible {
-            return Err(ServiceError::AccountUnavailable);
-        }
-        let binding_exists = self
-            .repository
-            .bindings(connection_id)?
-            .into_iter()
-            .any(|binding| {
-                binding.provider_account_id == provider_account_id
-                    && &binding.vox_account_id == vox_account_id
-                    && binding.enabled
-            });
-        if !binding_exists {
-            return Err(ServiceError::AccountBindingMismatch);
-        }
-        let authorization = self
+    ) -> Result<ResolvedReadAccess, ServiceError> {
+        let bound =
+            self.bound_healthy_target(connection_id, provider_account_id, vox_account_id)?;
+        let credential = self.secret_store.get(
+            &bound.connection.credential_ref,
+            &credential_context(&bound.connection),
+        )?;
+        Ok(ResolvedReadAccess {
+            target: bound.target,
+            credential_ref: bound.connection.credential_ref,
+            credential,
+            capabilities: bound.capabilities,
+        })
+    }
+
+    pub fn resolve_execution_credential(
+        &self,
+        connection_id: &ConnectionId,
+        provider_account_id: &str,
+        vox_account_id: &VoxAccountId,
+        purpose: ExecutionPurpose,
+    ) -> Result<ResolvedExecutionAccess, ServiceError> {
+        let bound =
+            self.bound_healthy_target(connection_id, provider_account_id, vox_account_id)?;
+        let mode = self
             .repository
             .authorization(connection_id, provider_account_id)?
             .map(|value| value.mode)
             .unwrap_or(ExecutionAuthorizationMode::Disabled);
-        let credential = self
-            .secret_store
-            .get(&connection.credential_ref, &credential_context(&connection))?;
-        Ok(ResolvedConnection {
-            target: AccountTarget {
-                connection_id: connection.id,
-                provider: connection.provider,
-                environment: connection.environment,
-                provider_account_id: provider_account_id.to_owned(),
-                vox_account_id: vox_account_id.clone(),
-            },
-            credential_ref: connection.credential_ref,
+        if !execution_purpose_allowed(bound.connection.environment, mode, purpose) {
+            return Err(ServiceError::ExecutionUnauthorized);
+        }
+        if !bound
+            .capabilities
+            .contains(&required_order_capability(bound.connection.environment))
+        {
+            return Err(ServiceError::ProviderDoesNotAllowProductionOrders);
+        }
+        let credential = self.secret_store.get(
+            &bound.connection.credential_ref,
+            &credential_context(&bound.connection),
+        )?;
+        Ok(ResolvedExecutionAccess {
+            target: bound.target,
+            credential_ref: bound.connection.credential_ref,
             credential,
-            capabilities: account.capabilities,
-            execution_authorization: authorization,
+            capabilities: bound.capabilities,
+            mode,
         })
     }
 
@@ -805,13 +837,6 @@ where
             {
                 continue;
             }
-            self.repository.put_authorization(&ExecutionAuthorization {
-                connection_id: connection.id.clone(),
-                provider_account_id: account.provider_account_id.clone(),
-                mode: ExecutionAuthorizationMode::Disabled,
-                changed_by: security.actor.clone(),
-                changed_at_unix_ms: security.now_unix_ms,
-            })?;
             let target = self
                 .repository
                 .bindings(&connection.id)?
@@ -821,12 +846,22 @@ where
                     || connection.id.as_str().to_owned(),
                     |binding| binding.id.as_str().to_owned(),
                 );
-            self.audit(
+            let audit = self.audit_record(
                 security,
                 "EXECUTION_AUTHORIZATION_REVOKED_PROVIDER_DOWNGRADE",
                 &target,
                 Some(authorization_name(previous.mode)),
                 Some("DISABLED"),
+            )?;
+            self.repository.put_authorization_with_audit(
+                &ExecutionAuthorization {
+                    connection_id: connection.id.clone(),
+                    provider_account_id: account.provider_account_id.clone(),
+                    mode: ExecutionAuthorizationMode::Disabled,
+                    changed_by: security.actor.clone(),
+                    changed_at_unix_ms: security.now_unix_ms,
+                },
+                &audit,
             )?;
         }
         Ok(())
@@ -836,6 +871,97 @@ where
         self.repository
             .connection(id)?
             .ok_or(ServiceError::ConnectionNotFound)
+    }
+
+    fn bound_healthy_target(
+        &self,
+        connection_id: &ConnectionId,
+        provider_account_id: &str,
+        vox_account_id: &VoxAccountId,
+    ) -> Result<BoundTarget, ServiceError> {
+        let connection = self.connection(connection_id)?;
+        if !connection.enabled
+            || connection.health.state != ConnectionHealthState::Healthy
+            || connection.credential_status == CredentialStatus::PendingDelete
+        {
+            return Err(ServiceError::ConnectionUnavailable);
+        }
+        let account = self
+            .repository
+            .accounts(connection_id)?
+            .into_iter()
+            .find(|account| account.provider_account_id == provider_account_id)
+            .ok_or(ServiceError::AccountNotFound)?;
+        if !account.accessible {
+            return Err(ServiceError::AccountUnavailable);
+        }
+        let binding_exists = self
+            .repository
+            .bindings(connection_id)?
+            .into_iter()
+            .any(|binding| {
+                binding.provider_account_id == provider_account_id
+                    && &binding.vox_account_id == vox_account_id
+                    && binding.enabled
+            });
+        if !binding_exists {
+            return Err(ServiceError::AccountBindingMismatch);
+        }
+        Ok(BoundTarget {
+            connection,
+            target: AccountTarget {
+                connection_id: connection_id.clone(),
+                provider: account.provider.clone(),
+                environment: account.environment,
+                provider_account_id: provider_account_id.to_owned(),
+                vox_account_id: vox_account_id.clone(),
+            },
+            capabilities: account.capabilities,
+        })
+    }
+
+    fn require_authorization_transition(
+        &self,
+        security: &SecurityContext,
+        environment: BrokerEnvironment,
+        previous: ExecutionAuthorizationMode,
+        mode: ExecutionAuthorizationMode,
+    ) -> Result<(), ServiceError> {
+        if authorization_rank(mode) < authorization_rank(previous)
+            && (self.has(security, Permission::EmergencyHalt)?
+                || self.has(security, Permission::DisableDeleteConnection)?
+                || self.has(security, Permission::SecurityAdmin)?)
+        {
+            return Ok(());
+        }
+        match (environment, previous, mode) {
+            (BrokerEnvironment::Production, _, ExecutionAuthorizationMode::AutomatedAllowed) => {
+                self.require(security, Permission::EnableAutomatedProductionExecution)
+            }
+            (BrokerEnvironment::Production, _, ExecutionAuthorizationMode::ManualAllowed) => {
+                self.require(security, Permission::SubmitProductionManualOrders)
+            }
+            (_, ExecutionAuthorizationMode::Disabled, ExecutionAuthorizationMode::Disabled) => {
+                self.require(security, Permission::BindAccounts)
+            }
+            (BrokerEnvironment::Sandbox, _, _) => {
+                self.require(security, Permission::SubmitSandboxOrders)
+            }
+            (BrokerEnvironment::Production, _, ExecutionAuthorizationMode::Disabled) => {
+                self.require(security, Permission::EmergencyHalt)
+            }
+        }
+    }
+
+    fn has(
+        &self,
+        security: &SecurityContext,
+        permission: Permission,
+    ) -> Result<bool, ServiceError> {
+        Ok(self
+            .repository
+            .permissions(&security.actor)?
+            .contains(&permission))
     }
 
     fn require(
@@ -1021,6 +1147,45 @@ fn provider_error_detail(kind: ProviderErrorKind) -> &'static str {
     }
 }
 
+struct BoundTarget {
+    connection: BrokerConnection,
+    target: AccountTarget,
+    capabilities: BTreeSet<ConnectionCapability>,
+}
+
+fn authorization_rank(mode: ExecutionAuthorizationMode) -> u8 {
+    match mode {
+        ExecutionAuthorizationMode::Disabled => 0,
+        ExecutionAuthorizationMode::ManualAllowed => 1,
+        ExecutionAuthorizationMode::AutomatedAllowed => 2,
+    }
+}
+
+fn execution_purpose_allowed(
+    environment: BrokerEnvironment,
+    mode: ExecutionAuthorizationMode,
+    purpose: ExecutionPurpose,
+) -> bool {
+    matches!(
+        (environment, purpose, mode),
+        (
+            BrokerEnvironment::Sandbox,
+            ExecutionPurpose::SandboxMutation,
+            ExecutionAuthorizationMode::ManualAllowed
+                | ExecutionAuthorizationMode::AutomatedAllowed
+        ) | (
+            BrokerEnvironment::Production,
+            ExecutionPurpose::ProductionManual,
+            ExecutionAuthorizationMode::ManualAllowed
+                | ExecutionAuthorizationMode::AutomatedAllowed
+        ) | (
+            BrokerEnvironment::Production,
+            ExecutionPurpose::ProductionAutomated,
+            ExecutionAuthorizationMode::AutomatedAllowed
+        )
+    )
+}
+
 fn authorization_name(mode: ExecutionAuthorizationMode) -> &'static str {
     match mode {
         ExecutionAuthorizationMode::Disabled => "DISABLED",
@@ -1069,6 +1234,8 @@ pub enum ServiceError {
     AccountBindingMismatch,
     #[error("provider credential does not allow requested execution")]
     ProviderDoesNotAllowProductionOrders,
+    #[error("vox execution is not authorized for the requested mutation")]
+    ExecutionUnauthorized,
     #[error("credential rotation compensation failed; credential disabled")]
     CredentialRotationCompensationFailed,
     #[error("provider returned duplicate account identity")]

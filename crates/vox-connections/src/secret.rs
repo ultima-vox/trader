@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 use ring::aead::{self, Aad, LessSafeKey, Nonce, UnboundKey};
@@ -220,6 +221,7 @@ pub trait SecretStore: Send + Sync {
 pub struct SqliteSecretStore<K> {
     path: PathBuf,
     key_provider: K,
+    fail_next_delete: Arc<AtomicBool>,
 }
 
 impl<K: KeyProvider> SqliteSecretStore<K> {
@@ -227,6 +229,7 @@ impl<K: KeyProvider> SqliteSecretStore<K> {
         let store = Self {
             path: path.as_ref().to_path_buf(),
             key_provider,
+            fail_next_delete: Arc::new(AtomicBool::new(false)),
         };
         let connection = store.connection()?;
         connection.execute_batch(
@@ -247,6 +250,10 @@ impl<K: KeyProvider> SqliteSecretStore<K> {
             ) STRICT;",
         )?;
         Ok(store)
+    }
+
+    pub fn fail_next_delete(&self) {
+        self.fail_next_delete.store(true, Ordering::SeqCst);
     }
 
     fn connection(&self) -> Result<Connection, SecretStoreError> {
@@ -515,6 +522,9 @@ impl<K: KeyProvider> SecretStore for SqliteSecretStore<K> {
     }
 
     fn delete(&self, credential_ref: &CredentialRef) -> Result<(), SecretStoreError> {
+        if self.fail_next_delete.swap(false, Ordering::SeqCst) {
+            return Err(SecretStoreError::CryptographicFailure);
+        }
         let connection = self.connection()?;
         connection.execute(
             "DELETE FROM encrypted_credentials WHERE credential_ref = ?1",

@@ -8,10 +8,11 @@ use vox_connections::{
     BrokerAccessLevel, BrokerAccountStatus, BrokerAccountType, BrokerEnvironment,
     BrokerProviderPort, ConnectionCapability, ConnectionHealthState, ConnectionRepository,
     ConnectionService, CreateConnectionRequest, CredentialClass, CredentialContext, CredentialRef,
-    CredentialScope, ExecutionAuthorizationMode, KeyMaterial, KeyProvider, KeyProviderError,
-    Permission, ProviderAccountFact, ProviderDiscovery, ProviderError, ProviderErrorKind,
-    ProviderId, Role, RoleId, SecretBytes, SecretStore, SecretStoreError, SecurityContext,
-    SqliteConnectionRepository, SqliteSecretStore, StaticKeyProvider, User, UserId, VoxAccountId,
+    CredentialScope, CredentialStatus, ExecutionAuthorizationMode, ExecutionPurpose, KeyMaterial,
+    KeyProvider, KeyProviderError, Permission, ProviderAccountFact, ProviderDiscovery,
+    ProviderError, ProviderErrorKind, ProviderId, Role, RoleId, SecretBytes, SecretStore,
+    SecretStoreError, SecurityContext, ServiceError, SqliteConnectionRepository, SqliteSecretStore,
+    StaticKeyProvider, User, UserId, VoxAccountId,
 };
 
 fn temp_db(name: &str) -> PathBuf {
@@ -331,15 +332,20 @@ async fn production_onboarding_is_multi_account_bound_and_default_off()
 
     let vox_account = VoxAccountId::new();
     service.bind_account(&security, &connection.id, "broker-b", vox_account.clone())?;
-    let resolved = service.resolve_bound_connection(&connection.id, "broker-b", &vox_account)?;
+    let resolved = service.resolve_read_credential(&connection.id, "broker-b", &vox_account)?;
     assert_eq!(resolved.target.provider_account_id, "broker-b");
-    assert_eq!(
-        resolved.execution_authorization,
-        ExecutionAuthorizationMode::Disabled
-    );
+    assert!(matches!(
+        service.resolve_execution_credential(
+            &connection.id,
+            "broker-b",
+            &vox_account,
+            ExecutionPurpose::ProductionManual,
+        ),
+        Err(ServiceError::ExecutionUnauthorized)
+    ));
     assert!(
         service
-            .resolve_bound_connection(&connection.id, "broker-a", &vox_account)
+            .resolve_read_credential(&connection.id, "broker-a", &vox_account)
             .is_err()
     );
 
@@ -496,7 +502,7 @@ async fn sandbox_binding_and_credential_lifecycle_fail_closed()
     service.disable_binding(&security, &binding.id)?;
     assert!(
         service
-            .resolve_bound_connection(&connection.id, "sandbox-account", &vox_account)
+            .resolve_read_credential(&connection.id, "sandbox-account", &vox_account)
             .is_err()
     );
     service.delete_connection(&security, &connection.id)?;
@@ -625,6 +631,202 @@ async fn capability_downgrade_revokes_automated_authorization()
             .mode,
         ExecutionAuthorizationMode::Disabled
     );
+    drop(service);
+    drop(repository);
+    fs::remove_file(path)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn production_token_cannot_resolve_for_mutation_while_vox_disabled()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = temp_db("exec-gate");
+    let repository = SqliteConnectionRepository::open(&path)?;
+    let store = SqliteSecretStore::open(&path, keys(1, &[(1, 11)])?)?;
+    let provider = MockProvider::default();
+    provider.accept("full-production-token", discovery(&["broker-a"], true));
+    let actor = bootstrap(&repository, all_permissions())?;
+    let service = ConnectionService::new(repository.clone(), store, provider);
+    let security = SecurityContext::new(actor, "exec-gate", 1)?;
+    let connection = service
+        .create_connection(
+            &security,
+            CreateConnectionRequest {
+                provider: ProviderId::tinvest(),
+                environment: BrokerEnvironment::Production,
+                label: "Full access still off".to_owned(),
+            },
+            secret("full-production-token")?,
+        )
+        .await?;
+    let vox_account = VoxAccountId::new();
+    service.bind_account(&security, &connection.id, "broker-a", vox_account.clone())?;
+    let read = service.resolve_read_credential(&connection.id, "broker-a", &vox_account)?;
+    assert_eq!(read.credential.expose_secret(), b"full-production-token");
+    let error = service
+        .resolve_execution_credential(
+            &connection.id,
+            "broker-a",
+            &vox_account,
+            ExecutionPurpose::ProductionManual,
+        )
+        .expect_err("disabled authorization must not decrypt for mutation");
+    assert!(matches!(error, ServiceError::ExecutionUnauthorized));
+    let automated = service.resolve_execution_credential(
+        &connection.id,
+        "broker-a",
+        &vox_account,
+        ExecutionPurpose::ProductionAutomated,
+    );
+    assert!(matches!(
+        automated,
+        Err(ServiceError::ExecutionUnauthorized)
+    ));
+    drop(service);
+    drop(repository);
+    fs::remove_file(path)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn audit_insert_failure_does_not_change_authorization_or_binding()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = temp_db("audit-fail");
+    let repository = SqliteConnectionRepository::open(&path)?;
+    let store = SqliteSecretStore::open(&path, keys(1, &[(1, 12)])?)?;
+    let provider = MockProvider::default();
+    provider.accept("full", discovery(&["account"], true));
+    let actor = bootstrap(&repository, all_permissions())?;
+    let service = ConnectionService::new(repository.clone(), store, provider);
+    let security = SecurityContext::new(actor, "audit-fail", 1)?;
+    let connection = service
+        .create_connection(
+            &security,
+            CreateConnectionRequest {
+                provider: ProviderId::tinvest(),
+                environment: BrokerEnvironment::Production,
+                label: "Audit fail".to_owned(),
+            },
+            secret("full")?,
+        )
+        .await?;
+    repository.fail_next_audit();
+    assert!(
+        service
+            .bind_account(&security, &connection.id, "account", VoxAccountId::new())
+            .is_err()
+    );
+    assert!(repository.bindings(&connection.id)?.is_empty());
+    let vox_account = VoxAccountId::new();
+    service.bind_account(&security, &connection.id, "account", vox_account)?;
+    repository.fail_next_audit();
+    assert!(
+        service
+            .set_execution_authorization(
+                &security,
+                &connection.id,
+                "account",
+                ExecutionAuthorizationMode::AutomatedAllowed,
+            )
+            .is_err()
+    );
+    assert_eq!(
+        repository
+            .authorization(&connection.id, "account")?
+            .ok_or("missing authorization")?
+            .mode,
+        ExecutionAuthorizationMode::Disabled
+    );
+    drop(service);
+    drop(repository);
+    fs::remove_file(path)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn secret_delete_failure_leaves_pending_delete_tombstone()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = temp_db("delete-tombstone");
+    let repository = SqliteConnectionRepository::open(&path)?;
+    let store = SqliteSecretStore::open(&path, keys(1, &[(1, 13)])?)?;
+    let provider = MockProvider::default();
+    provider.accept("token", discovery(&["account"], true));
+    let actor = bootstrap(&repository, all_permissions())?;
+    let service = ConnectionService::new(repository.clone(), store.clone(), provider);
+    let security = SecurityContext::new(actor, "delete-tombstone", 1)?;
+    let connection = service
+        .create_connection(
+            &security,
+            CreateConnectionRequest {
+                provider: ProviderId::tinvest(),
+                environment: BrokerEnvironment::Production,
+                label: "Tombstone".to_owned(),
+            },
+            secret("token")?,
+        )
+        .await?;
+    service.disable_connection(&security, &connection.id)?;
+    store.fail_next_delete();
+    assert!(
+        service
+            .delete_connection(&security, &connection.id)
+            .is_err()
+    );
+    let tombstone = repository
+        .connection(&connection.id)?
+        .ok_or("tombstone missing")?;
+    assert!(!tombstone.enabled);
+    assert_eq!(tombstone.credential_status, CredentialStatus::PendingDelete);
+    service.delete_connection(&security, &connection.id)?;
+    assert!(repository.connection(&connection.id)?.is_none());
+    drop(service);
+    drop(repository);
+    fs::remove_file(path)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn emergency_halt_can_disable_automated_without_enable_privilege()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = temp_db("emergency-halt");
+    let repository = SqliteConnectionRepository::open(&path)?;
+    let store = SqliteSecretStore::open(&path, keys(1, &[(1, 14)])?)?;
+    let provider = MockProvider::default();
+    provider.accept("full", discovery(&["account"], true));
+    let admin = bootstrap(&repository, all_permissions())?;
+    let service = ConnectionService::new(repository.clone(), store, provider);
+    let admin_security = SecurityContext::new(admin, "admin", 1)?;
+    let connection = service
+        .create_connection(
+            &admin_security,
+            CreateConnectionRequest {
+                provider: ProviderId::tinvest(),
+                environment: BrokerEnvironment::Production,
+                label: "Halt".to_owned(),
+            },
+            secret("full")?,
+        )
+        .await?;
+    service.bind_account(
+        &admin_security,
+        &connection.id,
+        "account",
+        VoxAccountId::new(),
+    )?;
+    service.set_execution_authorization(
+        &admin_security,
+        &connection.id,
+        "account",
+        ExecutionAuthorizationMode::AutomatedAllowed,
+    )?;
+    let halt = bootstrap(&repository, BTreeSet::from([Permission::EmergencyHalt]))?;
+    let disabled = service.set_execution_authorization(
+        &SecurityContext::new(halt, "halt", 2)?,
+        &connection.id,
+        "account",
+        ExecutionAuthorizationMode::Disabled,
+    )?;
+    assert_eq!(disabled.mode, ExecutionAuthorizationMode::Disabled);
     drop(service);
     drop(repository);
     fs::remove_file(path)?;

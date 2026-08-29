@@ -13,6 +13,6 @@ pub use secret::{
 };
 pub use service::{
     BrokerProviderPort, ConnectionService, CreateConnectionRequest, CredentialRotationOutcome,
-    ProviderAccountFact, ProviderDiscovery, ProviderError, ProviderErrorKind, ResolvedConnection,
-    SecurityContext, ServiceError,
+    ExecutionPurpose, ProviderAccountFact, ProviderDiscovery, ProviderError, ProviderErrorKind,
+    ResolvedExecutionAccess, ResolvedReadAccess, SecurityContext, ServiceError,
 };

@@ -119,6 +119,7 @@ pub enum CredentialStatus {
     Invalid,
     ExpiredOrInactive,
     Disabled,
+    PendingDelete,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

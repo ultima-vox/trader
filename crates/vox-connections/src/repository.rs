@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
@@ -11,8 +13,16 @@ use crate::model::{
 
 pub trait ConnectionRepository: Send + Sync {
     fn put_user(&self, user: &User) -> Result<(), RepositoryError>;
+    fn put_user_with_audit(&self, user: &User, audit: &AuditRecord) -> Result<(), RepositoryError>;
     fn put_role(&self, role: &Role) -> Result<(), RepositoryError>;
+    fn put_role_with_audit(&self, role: &Role, audit: &AuditRecord) -> Result<(), RepositoryError>;
     fn grant_role(&self, user_id: &UserId, role_id: &RoleId) -> Result<(), RepositoryError>;
+    fn grant_role_with_audit(
+        &self,
+        user_id: &UserId,
+        role_id: &RoleId,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError>;
     fn permissions(&self, user_id: &UserId) -> Result<BTreeSet<Permission>, RepositoryError>;
     fn insert_connection(&self, connection: &BrokerConnection) -> Result<(), RepositoryError>;
     fn insert_onboarding(
@@ -23,6 +33,16 @@ pub trait ConnectionRepository: Send + Sync {
         audits: &[AuditRecord],
     ) -> Result<(), RepositoryError>;
     fn update_connection(&self, connection: &BrokerConnection) -> Result<(), RepositoryError>;
+    fn update_connection_with_audit(
+        &self,
+        connection: &BrokerConnection,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError>;
+    fn update_connection_with_audits(
+        &self,
+        connection: &BrokerConnection,
+        audits: &[AuditRecord],
+    ) -> Result<(), RepositoryError>;
     fn connection(&self, id: &ConnectionId) -> Result<Option<BrokerConnection>, RepositoryError>;
     fn list_connections(&self) -> Result<Vec<BrokerConnection>, RepositoryError>;
     fn replace_accounts(
@@ -33,13 +53,30 @@ pub trait ConnectionRepository: Send + Sync {
     fn accounts(&self, connection_id: &ConnectionId)
     -> Result<Vec<BrokerAccount>, RepositoryError>;
     fn put_binding(&self, binding: &BrokerAccountBinding) -> Result<(), RepositoryError>;
+    fn put_binding_with_audit(
+        &self,
+        binding: &BrokerAccountBinding,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError>;
     fn set_binding_enabled(
         &self,
         binding_id: &BindingId,
         enabled: bool,
         now_unix_ms: i64,
     ) -> Result<(), RepositoryError>;
+    fn set_binding_enabled_with_audit(
+        &self,
+        binding_id: &BindingId,
+        enabled: bool,
+        now_unix_ms: i64,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError>;
     fn delete_binding(&self, binding_id: &BindingId) -> Result<(), RepositoryError>;
+    fn delete_binding_with_audit(
+        &self,
+        binding_id: &BindingId,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError>;
     fn bindings(
         &self,
         connection_id: &ConnectionId,
@@ -53,10 +90,25 @@ pub trait ConnectionRepository: Send + Sync {
         &self,
         authorization: &ExecutionAuthorization,
     ) -> Result<(), RepositoryError>;
+    fn put_authorization_with_audit(
+        &self,
+        authorization: &ExecutionAuthorization,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError>;
     fn append_audit(&self, record: &AuditRecord) -> Result<(), RepositoryError>;
     fn audit_records(&self) -> Result<Vec<AuditRecord>, RepositoryError>;
     fn delete_connection(&self, id: &ConnectionId) -> Result<(), RepositoryError>;
     fn delete_connection_with_audit(
+        &self,
+        id: &ConnectionId,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError>;
+    fn begin_connection_delete_with_audit(
+        &self,
+        connection: &BrokerConnection,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError>;
+    fn finalize_connection_delete(
         &self,
         id: &ConnectionId,
         audit: &AuditRecord,
@@ -66,15 +118,21 @@ pub trait ConnectionRepository: Send + Sync {
 #[derive(Clone)]
 pub struct SqliteConnectionRepository {
     path: PathBuf,
+    fail_next_audit: Arc<AtomicBool>,
 }
 
 impl SqliteConnectionRepository {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, RepositoryError> {
         let repository = Self {
             path: path.as_ref().to_path_buf(),
+            fail_next_audit: Arc::new(AtomicBool::new(false)),
         };
         repository.connection()?.execute_batch(SCHEMA)?;
         Ok(repository)
+    }
+
+    pub fn fail_next_audit(&self) {
+        self.fail_next_audit.store(true, Ordering::SeqCst);
     }
 
     fn connection(&self) -> Result<Connection, RepositoryError> {
@@ -84,47 +142,62 @@ impl SqliteConnectionRepository {
         connection.pragma_update(None, "synchronous", "FULL")?;
         Ok(connection)
     }
-}
 
-impl ConnectionRepository for SqliteConnectionRepository {
-    fn put_user(&self, user: &User) -> Result<(), RepositoryError> {
-        self.connection()?.execute(
-            "INSERT INTO connection_users (user_id, display_name, enabled) VALUES (?1, ?2, ?3)
-             ON CONFLICT(user_id) DO UPDATE SET display_name = excluded.display_name,
-             enabled = excluded.enabled",
-            params![user.id.as_str(), user.display_name, user.enabled],
-        )?;
-        Ok(())
-    }
-
-    fn put_role(&self, role: &Role) -> Result<(), RepositoryError> {
-        let mut connection = self.connection()?;
-        let transaction = connection.transaction()?;
-        transaction.execute(
-            "INSERT INTO connection_roles (role_id, name) VALUES (?1, ?2)
-             ON CONFLICT(role_id) DO UPDATE SET name = excluded.name",
-            params![role.id.as_str(), role.name],
-        )?;
-        transaction.execute(
-            "DELETE FROM connection_role_permissions WHERE role_id = ?1",
-            [role.id.as_str()],
-        )?;
-        for permission in &role.permissions {
-            transaction.execute(
-                "INSERT INTO connection_role_permissions (role_id, permission) VALUES (?1, ?2)",
-                params![role.id.as_str(), encode(permission)?],
-            )?;
+    fn mutate_with_audits(
+        &self,
+        audits: &[AuditRecord],
+        mutation: impl FnOnce(&Connection) -> Result<(), RepositoryError>,
+    ) -> Result<(), RepositoryError> {
+        let mut database = self.connection()?;
+        let transaction = database.transaction()?;
+        mutation(&transaction)?;
+        if self.fail_next_audit.swap(false, Ordering::SeqCst) {
+            return Err(RepositoryError::Persistence(
+                "injected audit failure".to_owned(),
+            ));
+        }
+        for audit in audits {
+            append_audit_row(&transaction, audit)?;
         }
         transaction.commit()?;
         Ok(())
     }
+}
+
+impl ConnectionRepository for SqliteConnectionRepository {
+    fn put_user(&self, user: &User) -> Result<(), RepositoryError> {
+        write_user(&self.connection()?, user)
+    }
+
+    fn put_user_with_audit(&self, user: &User, audit: &AuditRecord) -> Result<(), RepositoryError> {
+        self.mutate_with_audits(std::slice::from_ref(audit), |tx| write_user(tx, user))
+    }
+
+    fn put_role(&self, role: &Role) -> Result<(), RepositoryError> {
+        let mut database = self.connection()?;
+        let transaction = database.transaction()?;
+        write_role(&transaction, role)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn put_role_with_audit(&self, role: &Role, audit: &AuditRecord) -> Result<(), RepositoryError> {
+        self.mutate_with_audits(std::slice::from_ref(audit), |tx| write_role(tx, role))
+    }
 
     fn grant_role(&self, user_id: &UserId, role_id: &RoleId) -> Result<(), RepositoryError> {
-        self.connection()?.execute(
-            "INSERT OR IGNORE INTO connection_user_roles (user_id, role_id) VALUES (?1, ?2)",
-            params![user_id.as_str(), role_id.as_str()],
-        )?;
-        Ok(())
+        write_grant(&self.connection()?, user_id, role_id)
+    }
+
+    fn grant_role_with_audit(
+        &self,
+        user_id: &UserId,
+        role_id: &RoleId,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError> {
+        self.mutate_with_audits(std::slice::from_ref(audit), |tx| {
+            write_grant(tx, user_id, role_id)
+        })
     }
 
     fn permissions(&self, user_id: &UserId) -> Result<BTreeSet<Permission>, RepositoryError> {
@@ -234,6 +307,24 @@ impl ConnectionRepository for SqliteConnectionRepository {
 
     fn update_connection(&self, connection: &BrokerConnection) -> Result<(), RepositoryError> {
         write_connection(&self.connection()?, connection, true)
+    }
+
+    fn update_connection_with_audit(
+        &self,
+        connection: &BrokerConnection,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError> {
+        self.mutate_with_audits(std::slice::from_ref(audit), |tx| {
+            write_connection(tx, connection, true)
+        })
+    }
+
+    fn update_connection_with_audits(
+        &self,
+        connection: &BrokerConnection,
+        audits: &[AuditRecord],
+    ) -> Result<(), RepositoryError> {
+        self.mutate_with_audits(audits, |tx| write_connection(tx, connection, true))
     }
 
     fn connection(&self, id: &ConnectionId) -> Result<Option<BrokerConnection>, RepositoryError> {
@@ -347,32 +438,29 @@ impl ConnectionRepository for SqliteConnectionRepository {
     }
 
     fn put_binding(&self, binding: &BrokerAccountBinding) -> Result<(), RepositoryError> {
-        self.connection()?.execute(
-            "INSERT INTO broker_account_bindings (
-                binding_id, connection_id, provider, environment, provider_account_id,
-                vox_account_id, enabled, created_at_unix_ms, updated_at_unix_ms
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                binding.id.as_str(),
-                binding.connection_id.as_str(),
-                binding.provider.as_str(),
-                encode(&binding.environment)?,
-                binding.provider_account_id,
-                binding.vox_account_id.as_str(),
-                binding.enabled,
-                binding.created_at_unix_ms,
-                binding.updated_at_unix_ms,
-            ],
-        )?;
-        Ok(())
+        write_binding(&self.connection()?, binding)
+    }
+
+    fn put_binding_with_audit(
+        &self,
+        binding: &BrokerAccountBinding,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError> {
+        self.mutate_with_audits(std::slice::from_ref(audit), |tx| write_binding(tx, binding))
     }
 
     fn delete_binding(&self, binding_id: &BindingId) -> Result<(), RepositoryError> {
-        self.connection()?.execute(
-            "DELETE FROM broker_account_bindings WHERE binding_id = ?1",
-            [binding_id.as_str()],
-        )?;
-        Ok(())
+        write_delete_binding(&self.connection()?, binding_id)
+    }
+
+    fn delete_binding_with_audit(
+        &self,
+        binding_id: &BindingId,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError> {
+        self.mutate_with_audits(std::slice::from_ref(audit), |tx| {
+            write_delete_binding(tx, binding_id)
+        })
     }
 
     fn set_binding_enabled(
@@ -381,15 +469,19 @@ impl ConnectionRepository for SqliteConnectionRepository {
         enabled: bool,
         now_unix_ms: i64,
     ) -> Result<(), RepositoryError> {
-        let changed = self.connection()?.execute(
-            "UPDATE broker_account_bindings SET enabled = ?2, updated_at_unix_ms = ?3
-             WHERE binding_id = ?1",
-            params![binding_id.as_str(), enabled, now_unix_ms],
-        )?;
-        if changed != 1 {
-            return Err(RepositoryError::NotFound);
-        }
-        Ok(())
+        write_binding_enabled(&self.connection()?, binding_id, enabled, now_unix_ms)
+    }
+
+    fn set_binding_enabled_with_audit(
+        &self,
+        binding_id: &BindingId,
+        enabled: bool,
+        now_unix_ms: i64,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError> {
+        self.mutate_with_audits(std::slice::from_ref(audit), |tx| {
+            write_binding_enabled(tx, binding_id, enabled, now_unix_ms)
+        })
     }
 
     fn bindings(
@@ -455,24 +547,17 @@ impl ConnectionRepository for SqliteConnectionRepository {
         &self,
         authorization: &ExecutionAuthorization,
     ) -> Result<(), RepositoryError> {
-        self.connection()?.execute(
-            "INSERT INTO execution_authorizations (
-                connection_id, provider_account_id, authorization_mode,
-                changed_by, changed_at_unix_ms
-             ) VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(connection_id, provider_account_id) DO UPDATE SET
-                authorization_mode = excluded.authorization_mode,
-                changed_by = excluded.changed_by,
-                changed_at_unix_ms = excluded.changed_at_unix_ms",
-            params![
-                authorization.connection_id.as_str(),
-                authorization.provider_account_id,
-                encode(&authorization.mode)?,
-                authorization.changed_by.as_str(),
-                authorization.changed_at_unix_ms,
-            ],
-        )?;
-        Ok(())
+        write_authorization(&self.connection()?, authorization)
+    }
+
+    fn put_authorization_with_audit(
+        &self,
+        authorization: &ExecutionAuthorization,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError> {
+        self.mutate_with_audits(std::slice::from_ref(audit), |tx| {
+            write_authorization(tx, authorization)
+        })
     }
 
     fn append_audit(&self, record: &AuditRecord) -> Result<(), RepositoryError> {
@@ -556,6 +641,167 @@ impl ConnectionRepository for SqliteConnectionRepository {
         transaction.commit()?;
         Ok(())
     }
+
+    fn begin_connection_delete_with_audit(
+        &self,
+        connection: &BrokerConnection,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError> {
+        self.update_connection_with_audit(connection, audit)
+    }
+
+    fn finalize_connection_delete(
+        &self,
+        id: &ConnectionId,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError> {
+        self.mutate_with_audits(std::slice::from_ref(audit), |tx| {
+            let changed = tx.execute(
+                "DELETE FROM broker_connections WHERE connection_id = ?1",
+                [id.as_str()],
+            )?;
+            if changed != 1 {
+                return Err(RepositoryError::NotFound);
+            }
+            Ok(())
+        })
+    }
+}
+
+fn write_user(connection: &Connection, user: &User) -> Result<(), RepositoryError> {
+    connection.execute(
+        "INSERT INTO connection_users (user_id, display_name, enabled) VALUES (?1, ?2, ?3)
+         ON CONFLICT(user_id) DO UPDATE SET display_name = excluded.display_name,
+         enabled = excluded.enabled",
+        params![user.id.as_str(), user.display_name, user.enabled],
+    )?;
+    Ok(())
+}
+
+fn write_role(connection: &Connection, role: &Role) -> Result<(), RepositoryError> {
+    connection.execute(
+        "INSERT INTO connection_roles (role_id, name) VALUES (?1, ?2)
+         ON CONFLICT(role_id) DO UPDATE SET name = excluded.name",
+        params![role.id.as_str(), role.name],
+    )?;
+    connection.execute(
+        "DELETE FROM connection_role_permissions WHERE role_id = ?1",
+        [role.id.as_str()],
+    )?;
+    for permission in &role.permissions {
+        connection.execute(
+            "INSERT INTO connection_role_permissions (role_id, permission) VALUES (?1, ?2)",
+            params![role.id.as_str(), encode(permission)?],
+        )?;
+    }
+    Ok(())
+}
+
+fn write_grant(
+    connection: &Connection,
+    user_id: &UserId,
+    role_id: &RoleId,
+) -> Result<(), RepositoryError> {
+    connection.execute(
+        "INSERT OR IGNORE INTO connection_user_roles (user_id, role_id) VALUES (?1, ?2)",
+        params![user_id.as_str(), role_id.as_str()],
+    )?;
+    Ok(())
+}
+
+fn write_binding(
+    connection: &Connection,
+    binding: &BrokerAccountBinding,
+) -> Result<(), RepositoryError> {
+    connection.execute(
+        "INSERT INTO broker_account_bindings (
+            binding_id, connection_id, provider, environment, provider_account_id,
+            vox_account_id, enabled, created_at_unix_ms, updated_at_unix_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            binding.id.as_str(),
+            binding.connection_id.as_str(),
+            binding.provider.as_str(),
+            encode(&binding.environment)?,
+            binding.provider_account_id,
+            binding.vox_account_id.as_str(),
+            binding.enabled,
+            binding.created_at_unix_ms,
+            binding.updated_at_unix_ms,
+        ],
+    )?;
+    Ok(())
+}
+
+fn write_delete_binding(
+    connection: &Connection,
+    binding_id: &BindingId,
+) -> Result<(), RepositoryError> {
+    connection.execute(
+        "DELETE FROM broker_account_bindings WHERE binding_id = ?1",
+        [binding_id.as_str()],
+    )?;
+    Ok(())
+}
+
+fn write_binding_enabled(
+    connection: &Connection,
+    binding_id: &BindingId,
+    enabled: bool,
+    now_unix_ms: i64,
+) -> Result<(), RepositoryError> {
+    let changed = connection.execute(
+        "UPDATE broker_account_bindings SET enabled = ?2, updated_at_unix_ms = ?3
+         WHERE binding_id = ?1",
+        params![binding_id.as_str(), enabled, now_unix_ms],
+    )?;
+    if changed != 1 {
+        return Err(RepositoryError::NotFound);
+    }
+    Ok(())
+}
+
+fn write_authorization(
+    connection: &Connection,
+    authorization: &ExecutionAuthorization,
+) -> Result<(), RepositoryError> {
+    connection.execute(
+        "INSERT INTO execution_authorizations (
+            connection_id, provider_account_id, authorization_mode,
+            changed_by, changed_at_unix_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(connection_id, provider_account_id) DO UPDATE SET
+            authorization_mode = excluded.authorization_mode,
+            changed_by = excluded.changed_by,
+            changed_at_unix_ms = excluded.changed_at_unix_ms",
+        params![
+            authorization.connection_id.as_str(),
+            authorization.provider_account_id,
+            encode(&authorization.mode)?,
+            authorization.changed_by.as_str(),
+            authorization.changed_at_unix_ms,
+        ],
+    )?;
+    Ok(())
+}
+
+fn append_audit_row(connection: &Connection, record: &AuditRecord) -> Result<(), RepositoryError> {
+    connection.execute(
+        "INSERT INTO connection_audit (
+            actor, action, target_ref, previous_state, new_state, correlation_id,
+            occurred_at_unix_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            record.actor.as_str(),
+            record.action,
+            record.target_ref,
+            record.previous_state,
+            record.new_state,
+            record.correlation_id,
+            record.occurred_at_unix_ms,
+        ],
+    )?;
+    Ok(())
 }
 
 fn write_connection(

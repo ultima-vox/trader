@@ -18,9 +18,12 @@ CredentialRef -> SecretStore -> encrypted_credentials(payload ciphertext + wrapp
 
 `vox-connections` owns generic types and lifecycle. `vox-tinvest::connection_provider` owns
 T-Invest endpoint routing, credential validation and provider-account capability mapping.
-`ConnectionService::resolve_bound_connection` returns internal credential material only when
+Read-side resolution (`resolve_read_credential`) returns internal credential material only when
 connection, provider environment, broker account and explicit Vox account binding all match.
-Transport/runtime client replacement remains deferred; no cached authorization bridge is exposed.
+Execution-side resolution (`resolve_execution_credential`) additionally fails closed unless Vox
+authorization permits the requested mutation purpose. A full-access provider token never decrypts
+for mutation while `ExecutionAuthorization` is `Disabled`. Transport/runtime client replacement
+remains deferred; no cached authorization bridge is exposed.
 
 ## Secret envelope
 
@@ -56,8 +59,11 @@ DB backup without external KEK reveals metadata and ciphertext, not broker crede
    envelope, persists broker facts, and returns `reconnect_required=true`. Failure compensates old
    secret/metadata or disables credential. Future transport integration must reconnect and
    reconcile before using changed credential.
-7. Disable closes connection use. Delete requires disabled state, removes secret first, then
-   cascading metadata. Missing secret always prevents connection resolution.
+7. Disable closes connection use. Delete requires disabled state, writes a `PENDING_DELETE`
+   tombstone with audit, then deletes the secret, then removes metadata with audit. If secret
+   deletion fails, the tombstone remains and resolution stays closed. Missing secret always
+   prevents connection resolution. RBAC, binding and authorization mutations persist state and
+   audit in one database transaction.
 8. Rediscovery preserves missing accounts as inaccessible and marks health
    `ACCOUNT_ACCESS_CHANGED`. Exact binding resolution then fails closed.
 
@@ -77,6 +83,7 @@ Permissions stay separate, server-enforced values:
 - view connection metadata;
 - manage credentials;
 - disable/delete connection;
+- emergency halt, which can always reduce or disable live execution without the enable privilege;
 - discover accounts;
 - bind accounts;
 - view portfolio;
