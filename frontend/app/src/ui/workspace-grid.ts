@@ -213,23 +213,35 @@ function bindResize(
     handle.setPointerCapture(event.pointerId);
 
     const onMove = (move: PointerEvent): void => {
+      if (id === undefined || existing === undefined) return;
       const dx = move.clientX - startX;
       const dy = move.clientY - startY;
       const snappedWidth = Math.round((startWidth + dx) / RESIZE_STEP_PX) * RESIZE_STEP_PX;
       const snappedHeight = Math.max(48, Math.round((startHeight + dy) / RESIZE_STEP_PX) * RESIZE_STEP_PX);
       const span = nearestColSpan(Math.max(2, snappedWidth / Math.max(colWidth, 1)));
-      applyColSpan(widget, span);
-      widget.style.minHeight = `${snappedHeight}px`;
+      const rowSpan = Math.max(1, Math.round(snappedHeight / 48));
+      applyGridPlacement(widget, {
+        id,
+        col: existing.col,
+        row: existing.row,
+        colSpan: span,
+        rowSpan,
+      });
     };
 
     const onUp = (): void => {
       handle.removeEventListener("pointermove", onMove);
       handle.removeEventListener("pointerup", onUp);
       if (id === undefined || existing === undefined) return;
-      const span = nearestColSpan(Number(widget.dataset.colSpan ?? existing.colSpan));
-      const height = Number.parseInt(widget.style.minHeight, 10);
-      const rowSpan = Number.isFinite(height) ? Math.max(1, Math.round(height / 48)) : existing.rowSpan;
-      commit(options.layoutStore.resize(options.workspaceId, id, span, rowSpan));
+      const previewed = readGridPlacement(widget);
+      commit(
+        options.layoutStore.resize(
+          options.workspaceId,
+          id,
+          previewed.colSpan,
+          previewed.rowSpan,
+        ),
+      );
     };
 
     handle.addEventListener("pointermove", onMove);

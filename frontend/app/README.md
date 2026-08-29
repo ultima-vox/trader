@@ -16,6 +16,8 @@ From the repository root:
 npm --prefix frontend/app ci
 npm --prefix frontend/app test
 npm --prefix frontend/app run typecheck
+npx --prefix frontend/app playwright install chromium
+npm --prefix frontend/app run test:e2e
 ```
 
 ## Browser rules

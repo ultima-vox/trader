@@ -9,12 +9,14 @@ on:
     paths:
       - "frontend/app/**"
       - "frontend/api-client/**"
+      - "frontend/design-system/**"
       - ".github/workflows/frontend-foundation.yml"
   push:
     branches: ["main"]
     paths:
       - "frontend/app/**"
       - "frontend/api-client/**"
+      - "frontend/design-system/**"
       - ".github/workflows/frontend-foundation.yml"
   workflow_dispatch:
 
@@ -264,3 +266,19 @@ jobs:
       - name: Typecheck
         working-directory: frontend/app
         run: npm run typecheck
+
+      - name: Install Chromium
+        working-directory: frontend/app
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser shell at 1280 / 1440 / 1920
+        working-directory: frontend/app
+        run: npm run test:e2e
+
+      - name: Upload foundation shell screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: foundation-shell-${{ github.sha }}
+          path: frontend/app/e2e/artifacts
+          if-no-files-found: error

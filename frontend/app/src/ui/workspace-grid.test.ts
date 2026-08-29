@@ -44,6 +44,26 @@ function widgetEl(): HTMLElement {
   return root;
 }
 
+function stubRect(
+  element: HTMLElement,
+  box: { x: number; y: number; width: number; height: number },
+): void {
+  element.getBoundingClientRect = () =>
+    ({
+      x: box.x,
+      y: box.y,
+      left: box.x,
+      top: box.y,
+      right: box.x + box.width,
+      bottom: box.y + box.height,
+      width: box.width,
+      height: box.height,
+      toJSON() {
+        return this;
+      },
+    }) as DOMRect;
+}
+
 describe("workspace grid placement", () => {
   it("paints persisted col/row/colSpan/rowSpan onto CSS custom properties", () => {
     const storage = memoryStorage();
@@ -100,6 +120,51 @@ describe("workspace grid placement", () => {
       grid.style.width = `${width}px`;
       expect(readGridPlacement(chart)).toEqual({ col: 1, row: 2, colSpan: 7, rowSpan: 3 });
     }
+  });
+
+  it("resize from span 4 to 6 updates the span property, persists, and reload restores 6", () => {
+    const storage = memoryStorage();
+    const store = new LayoutStore(storage);
+    store.save("trade", {
+      workspaceId: "trade",
+      widgets: [{ id: "chart", col: 0, row: 0, colSpan: 4, rowSpan: 2 }],
+    });
+    const chart = widgetEl();
+    const grid = createWorkspaceGrid({
+      workspaceId: "trade",
+      layoutStore: store,
+      items: [{ id: "chart", colSpan: 4, element: chart }],
+    });
+    document.body.append(grid);
+    stubRect(grid, { x: 0, y: 0, width: 1200, height: 400 });
+    stubRect(chart, { x: 0, y: 0, width: 400, height: 96 });
+    const handle = chart.querySelector(".vox-widget__resize");
+    expect(handle).toBeInstanceOf(HTMLElement);
+    if (!(handle instanceof HTMLElement)) return;
+    handle.setPointerCapture = () => undefined;
+    handle.releasePointerCapture = () => undefined;
+    handle.dispatchEvent(
+      new PointerEvent("pointerdown", { button: 0, clientX: 400, clientY: 96, bubbles: true }),
+    );
+    handle.dispatchEvent(
+      new PointerEvent("pointermove", { button: 0, clientX: 600, clientY: 144, bubbles: true }),
+    );
+    expect(readGridPlacement(chart)).toEqual({ col: 0, row: 0, colSpan: 6, rowSpan: 3 });
+    expect(chart.style.getPropertyValue(GRID_COL_SPAN)).toBe("6");
+    expect(chart.style.getPropertyValue(GRID_ROW_SPAN)).toBe("3");
+    handle.dispatchEvent(
+      new PointerEvent("pointerup", { button: 0, clientX: 600, clientY: 144, bubbles: true }),
+    );
+    expect(store.load("trade").widgets[0]).toMatchObject({ colSpan: 6, rowSpan: 3 });
+
+    const reloaded = widgetEl();
+    createWorkspaceGrid({
+      workspaceId: "trade",
+      layoutStore: new LayoutStore(storage),
+      items: [{ id: "chart", colSpan: 4, element: reloaded }],
+    });
+    expect(readGridPlacement(reloaded)).toEqual({ col: 0, row: 0, colSpan: 6, rowSpan: 3 });
+    grid.remove();
   });
 
   it("design-system CSS binds start/span custom properties, not DOM order", () => {

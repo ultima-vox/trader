@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vitest/config";
+import { defineConfig } from "vite";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -10,9 +10,9 @@ export default defineConfig({
       "@vox/api-client": path.resolve(root, "../api-client/src/index.ts"),
     },
   },
-  test: {
-    environment: "happy-dom",
-    passWithNoTests: true,
-    exclude: ["e2e/**", "node_modules/**"],
+  server: {
+    fs: {
+      allow: [path.resolve(root, "..")],
+    },
   },
 });
