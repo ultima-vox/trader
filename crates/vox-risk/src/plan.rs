@@ -112,7 +112,8 @@ pub enum RiskApprovedExecutionPlanError {
 mod tests {
     use super::*;
     use crate::model::{
-        BrokerLotLimits, RiskOutcome, RiskReason, RiskReasonCode, RiskSnapshot, RiskSource,
+        BrokerLotLimits, RiskActionKind, RiskOutcome, RiskReason, RiskReasonCode, RiskSnapshot,
+        RiskSource,
     };
 
     fn validity() -> RiskValidityContext {
@@ -136,6 +137,7 @@ mod tests {
             instrument_id: "instrument-1".into(),
             strategy_id: None,
             source: RiskSource::Manual,
+            action: RiskActionKind::DirectionalOrder,
             requested_delta_lots: 10,
             requested_notional_nanos: 10,
             is_market_order: false,
@@ -168,6 +170,7 @@ mod tests {
             request_id: "req-1".into(),
             policy_revision: 7,
             account_id: "account-1".into(),
+            action: RiskActionKind::DirectionalOrder,
             requested_delta_lots: 10,
             approved_delta_lots: 10,
             outcome: RiskOutcome::Approve,
