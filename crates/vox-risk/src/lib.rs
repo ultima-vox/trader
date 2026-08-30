@@ -10,4 +10,4 @@ pub mod store;
 
 pub use engine::{RiskEngine, RiskEngineError};
 pub use model::*;
-pub use store::{RiskStore, RiskStoreError, SqliteRiskStore};
+pub use store::{PersistedRiskApproval, ReservationCapacity, RiskStore, RiskStoreError, SqliteRiskStore};
