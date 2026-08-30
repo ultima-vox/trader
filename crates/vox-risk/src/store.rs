@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
 
-use crate::model::{ReservationState, RiskDecision, RiskReservation, RiskSource};
+use crate::model::{ReservationState, RiskActionKind, RiskDecision, RiskReservation, RiskSource};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ReservationCapacity {
@@ -609,6 +609,7 @@ mod tests {
             request_id: request.to_owned(),
             policy_revision: 1,
             account_id: "account-1".to_owned(),
+            action: RiskActionKind::DirectionalOrder,
             requested_delta_lots: delta,
             approved_delta_lots: delta,
             outcome: RiskOutcome::Approve,
