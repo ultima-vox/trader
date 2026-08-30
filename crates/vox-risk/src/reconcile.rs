@@ -181,7 +181,7 @@ impl<S: RiskStore> RiskReservationReconciler<S> {
     }
 }
 
-#[derive(Clone, Debug, Error, Eq, PartialEq)]
+#[derive(Debug, Error)]
 pub enum RiskReservationReconcileError {
     #[error("risk reservation not found")]
     ReservationNotFound,
