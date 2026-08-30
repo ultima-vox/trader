@@ -384,6 +384,7 @@ impl Harness {
             execution.clone(),
             streams.clone(),
             credentials.clone(),
+            Arc::new(FakeRiskAdmission),
             metrics.clone(),
             ReconciliationConfig {
                 max_safe_read_attempts: 3,
@@ -571,6 +572,7 @@ async fn unknown_survives_restart_resolves_from_direct_readback_without_replay()
         execution.clone(),
         streams,
         credentials,
+        Arc::new(FakeRiskAdmission),
         metrics,
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
