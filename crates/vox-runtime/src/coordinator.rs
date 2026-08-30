@@ -344,9 +344,11 @@ where
                         .as_deref()
                         .is_none_or(str::is_empty)))
         {
-            return Err(RuntimeError::RiskAdmission(RiskAdmissionError::Unavailable(
-                "risk admission returned an incomplete approval".into(),
-            )));
+            return Err(RuntimeError::RiskAdmission(
+                RiskAdmissionError::Unavailable(
+                    "risk admission returned an incomplete approval".into(),
+                ),
+            ));
         }
         tracing::info!(
             event = "risk_admission_granted",
