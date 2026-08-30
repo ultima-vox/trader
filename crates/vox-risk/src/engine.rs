@@ -341,7 +341,11 @@ fn provider_limit(
         return Ok(None);
     }
     let selected = if request.requested_delta_lots > 0 {
-        if wants_margin { limits.buy_margin } else { limits.buy_own }
+        if wants_margin {
+            limits.buy_margin
+        } else {
+            limits.buy_own
+        }
     } else if wants_margin {
         limits.sell_margin
     } else {
@@ -371,7 +375,8 @@ fn increasing_portion(base: i64, delta: i64) -> Result<i64, RiskEngineError> {
         return Ok(0);
     }
     if base == 0 || base.signum() == delta.signum() {
-        return i64::try_from(delta.unsigned_abs()).map_err(|_| RiskEngineError::ArithmeticOverflow);
+        return i64::try_from(delta.unsigned_abs())
+            .map_err(|_| RiskEngineError::ArithmeticOverflow);
     }
     let base_abs =
         i64::try_from(base.unsigned_abs()).map_err(|_| RiskEngineError::ArithmeticOverflow)?;
@@ -415,9 +420,7 @@ pub enum RiskEngineError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{
-        BrokerLotLimits, LotLimit, RiskSnapshot, RiskSource, RiskValidityContext,
-    };
+    use crate::model::{BrokerLotLimits, LotLimit, RiskSnapshot, RiskSource, RiskValidityContext};
 
     fn request(base: i64, delta: i64) -> RiskRequest {
         RiskRequest {
@@ -550,6 +553,10 @@ mod tests {
         let decision = RiskEngine::evaluate(&policy(), &r).expect("risk");
         let mut changed = r.clone();
         changed.snapshot.validity.execution_authorization_revision += 1;
-        assert!(!RiskEngine::still_valid(&decision, &changed, policy().revision));
+        assert!(!RiskEngine::still_valid(
+            &decision,
+            &changed,
+            policy().revision
+        ));
     }
 }
