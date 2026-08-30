@@ -619,6 +619,27 @@ mod tests {
     }
 
     #[test]
+    fn cancel_order_is_typed_non_directional_risk_action() {
+        let mut r = request(10, 0);
+        r.action = RiskActionKind::CancelOrder;
+        let decision = RiskEngine::evaluate(&policy(), &r).expect("risk");
+        assert_eq!(decision.outcome, RiskOutcome::Approve);
+        assert_eq!(decision.approved_delta_lots, 0);
+        assert!(decision.permits_dispatch());
+    }
+
+    #[test]
+    fn protection_maintenance_is_allowed_in_halted_cleanup_path() {
+        let mut p = policy();
+        p.state = RiskState::Halted;
+        let mut r = request(10, 0);
+        r.action = RiskActionKind::ProtectionMaintenance;
+        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
+        assert_eq!(decision.outcome, RiskOutcome::Approve);
+        assert!(decision.permits_dispatch());
+    }
+
+    #[test]
     fn decision_is_invalid_after_authorization_revision_change() {
         let r = request(0, 10);
         let decision = RiskEngine::evaluate(&policy(), &r).expect("risk");
