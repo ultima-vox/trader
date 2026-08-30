@@ -302,7 +302,7 @@ impl RiskAdmissionPort for FakeRiskAdmission {
         };
         Ok(RiskAdmission {
             decision_id: format!("test-risk:{logical_request_id}"),
-            reservation_id: format!("test-reservation:{logical_request_id}"),
+            reservation_id: Some(format!("test-reservation:{logical_request_id}")),
             policy_revision: 1,
             approved_delta_lots,
         })
