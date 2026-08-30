@@ -15,13 +15,12 @@ use vox_runtime::{
     BrokerAccount, BrokerEvent, BrokerEventClass, BrokerIdentityLinks, BrokerMethod,
     BrokerPortError, BrokerReadPort, BrokerResultClass, CredentialResolution,
     CredentialResolverPort, ExecutionPort, ExecutionResult, ExecutionStreamPort, HealthReadPort,
-    RiskAdmission, RiskAdmissionError, RiskAdmissionPort,
     InMemoryMetrics, JournalState, MetricLabel, MetricName, MutationEvidence, MutationKind,
     MutationRecord, OpaqueRef, OperationFact, OperationsPage, OrderExecutionStatus, OrderFact,
-    PortfolioFact, Provider, ReasonCode, ReconciliationConfig, RuntimeConfig, RuntimeCoordinator,
-    RuntimeEnvironment, RuntimeError, RuntimeExecutionCommand, RuntimeExecutionPurpose,
-    RuntimeScope, RuntimeState, RuntimeStore, SqliteRuntimeStore, StopExecutionStatus, StopFact,
-    StreamKind, StreamSignal,
+    PortfolioFact, Provider, ReasonCode, ReconciliationConfig, RiskAdmission, RiskAdmissionError,
+    RiskAdmissionPort, RuntimeConfig, RuntimeCoordinator, RuntimeEnvironment, RuntimeError,
+    RuntimeExecutionCommand, RuntimeExecutionPurpose, RuntimeScope, RuntimeState, RuntimeStore,
+    SqliteRuntimeStore, StopExecutionStatus, StopFact, StreamKind, StreamSignal,
 };
 
 #[derive(Clone)]
@@ -298,7 +297,8 @@ impl RiskAdmissionPort for FakeRiskAdmission {
             RuntimeExecutionCommand::ReplaceOrder(command) => command.quantity_lots,
             RuntimeExecutionCommand::PostStopOrder(command)
             | RuntimeExecutionCommand::ProtectionLeg(command) => command.quantity_lots,
-            RuntimeExecutionCommand::CancelOrder(_) | RuntimeExecutionCommand::CancelStopOrder(_) => 1,
+            RuntimeExecutionCommand::CancelOrder(_)
+            | RuntimeExecutionCommand::CancelStopOrder(_) => 1,
         };
         Ok(RiskAdmission {
             decision_id: format!("test-risk:{logical_request_id}"),
