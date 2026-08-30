@@ -19,6 +19,7 @@ pub mod operations;
 pub mod operations_stream;
 pub mod reports;
 pub mod runtime_execution;
+pub mod risk_read;
 pub mod runtime_read;
 pub mod runtime_stream;
 
