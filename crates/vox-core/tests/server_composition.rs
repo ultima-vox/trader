@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::path::PathBuf;
 
+use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
@@ -20,19 +21,19 @@ use vox_domain::{CancelOrderCommand, ProviderOrderIdentityKind, RuntimeExecution
 use vox_tinvest::ConnectionFactoryError;
 
 const SESSION: &str = "session-token-material-00000000000000000000000000000001";
-const CSRF: &str = "csrf-token-material-000000000000000000000000000000001";
 
 #[tokio::test]
 async fn production_composition_enforces_server_verified_session_and_rbac()
 -> Result<(), Box<dyn Error>> {
     let root = temp_root("auth");
     let user_id = UserId::new();
-    let composition = ApplicationComposition::build(config(
+    let mut server_config = config(
         &root,
         user_id.clone(),
         BTreeSet::from([Permission::ViewConnectionMetadata]),
-    ))
-    .await?;
+    );
+    server_config.bootstrap.cookie_secure = true;
+    let composition = ApplicationComposition::build(server_config).await?;
     let app = composition.router();
 
     let anonymous = app
@@ -41,22 +42,48 @@ async fn production_composition_enforces_server_verified_session_and_rbac()
         .await?;
     assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
 
+    let first_bootstrap = bootstrap_response(app.clone()).await?;
+    assert_eq!(first_bootstrap.status(), StatusCode::OK);
+    assert_eq!(first_bootstrap.headers()["cache-control"], "no-store");
+    let first_cookie = first_bootstrap.headers()["set-cookie"].to_str()?;
+    assert!(first_cookie.contains("HttpOnly"));
+    assert!(first_cookie.contains("Secure"));
+    assert!(first_cookie.contains("SameSite=Strict"));
+    assert!(!first_cookie.contains(SESSION));
+    let second_bootstrap = bootstrap_response(app.clone()).await?;
+    assert_ne!(
+        first_cookie,
+        second_bootstrap.headers()["set-cookie"].to_str()?,
+        "each bootstrap must issue fresh random session material"
+    );
+    let invalid = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/auth/session")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "bootstrap_credential": "invalid-bootstrap-credential-material"
+                    })
+                    .to_string(),
+                ))?,
+        )
+        .await?;
+    assert_eq!(invalid.status(), StatusCode::UNAUTHORIZED);
+
     let authenticated = app
         .clone()
-        .oneshot(authenticated_request(
-            "GET",
-            "/api/v1/broker-connections",
-            false,
-        )?)
+        .oneshot(
+            authenticated_request(app.clone(), "GET", "/api/v1/broker-connections", false).await?,
+        )
         .await?;
     assert_eq!(authenticated.status(), StatusCode::OK);
 
     let no_csrf = app
-        .oneshot(authenticated_request(
-            "POST",
-            "/api/v1/broker-connections",
-            false,
-        )?)
+        .clone()
+        .oneshot(
+            authenticated_request(app.clone(), "POST", "/api/v1/broker-connections", false).await?,
+        )
         .await?;
     assert_eq!(no_csrf.status(), StatusCode::FORBIDDEN);
 
@@ -78,14 +105,7 @@ async fn production_composition_enforces_server_verified_session_and_rbac()
         BTreeSet::from([Permission::ViewConnectionMetadata]),
     ))
     .await?;
-    let rejected = restarted
-        .router()
-        .oneshot(authenticated_request(
-            "GET",
-            "/api/v1/broker-connections",
-            false,
-        )?)
-        .await?;
+    let rejected = bootstrap_response(restarted.router()).await?;
     assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
     restarted.shutdown().await;
     Ok(())
@@ -98,36 +118,48 @@ async fn production_composition_denies_missing_domain_permission() -> Result<(),
         ApplicationComposition::build(config(&root, UserId::new(), BTreeSet::new())).await?;
     let response = composition
         .router()
-        .oneshot(authenticated_request(
-            "GET",
-            "/api/v1/broker-connections",
-            false,
-        )?)
+        .oneshot(
+            authenticated_request(
+                composition.router(),
+                "GET",
+                "/api/v1/broker-connections",
+                false,
+            )
+            .await?,
+        )
         .await?;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     let credential_write = composition
         .router()
-        .oneshot(json_authenticated_request(
-            "POST",
-            "/api/v1/broker-connections",
-            serde_json::json!({
-                "provider": "T_INVEST",
-                "environment": "SANDBOX",
-                "display_label": "must fail before provider access",
-                "credential": "not-a-real-credential"
-            }),
-        )?)
+        .oneshot(
+            json_authenticated_request(
+                composition.router(),
+                "POST",
+                "/api/v1/broker-connections",
+                serde_json::json!({
+                    "provider": "T_INVEST",
+                    "environment": "SANDBOX",
+                    "display_label": "must fail before provider access",
+                    "credential": "not-a-real-credential"
+                }),
+            )
+            .await?,
+        )
         .await?;
     assert_eq!(credential_write.status(), StatusCode::FORBIDDEN);
 
     let execution = composition
         .router()
-        .oneshot(json_authenticated_request(
-            "POST",
-            "/api/v1/commands/order",
-            serde_json::json!({}),
-        )?)
+        .oneshot(
+            json_authenticated_request(
+                composition.router(),
+                "POST",
+                "/api/v1/commands/order",
+                serde_json::json!({}),
+            )
+            .await?,
+        )
         .await?;
     assert_eq!(execution.status(), StatusCode::FORBIDDEN);
     composition.shutdown().await;
@@ -162,29 +194,37 @@ async fn production_composition_requires_enable_permission_but_allows_emergency_
 
     let forbidden_enable = composition
         .router()
-        .oneshot(json_authenticated_request(
-            "PUT",
-            &uri,
-            serde_json::json!({
-                "provider_account_id": provider_account_id,
-                "mode": "AUTOMATED_ALLOWED",
-                "expected_authorization_revision": 7
-            }),
-        )?)
+        .oneshot(
+            json_authenticated_request(
+                composition.router(),
+                "PUT",
+                &uri,
+                serde_json::json!({
+                    "provider_account_id": provider_account_id,
+                    "mode": "AUTOMATED_ALLOWED",
+                    "expected_authorization_revision": 7
+                }),
+            )
+            .await?,
+        )
         .await?;
     assert_eq!(forbidden_enable.status(), StatusCode::FORBIDDEN);
 
     let emergency_disable = composition
         .router()
-        .oneshot(json_authenticated_request(
-            "PUT",
-            &uri,
-            serde_json::json!({
-                "provider_account_id": provider_account_id,
-                "mode": "DISABLED",
-                "expected_authorization_revision": 7
-            }),
-        )?)
+        .oneshot(
+            json_authenticated_request(
+                composition.router(),
+                "PUT",
+                &uri,
+                serde_json::json!({
+                    "provider_account_id": provider_account_id,
+                    "mode": "DISABLED",
+                    "expected_authorization_revision": 7
+                }),
+            )
+            .await?,
+        )
         .await?;
     assert_eq!(emergency_disable.status(), StatusCode::OK);
     let body = response_json(emergency_disable).await?;
@@ -238,11 +278,15 @@ async fn production_composition_restart_restores_stored_scope_without_plaintext(
     assert_eq!(restarted.lifecycle_recovery, Default::default());
     let details = restarted
         .router()
-        .oneshot(authenticated_request(
-            "GET",
-            &format!("/api/v1/broker-connections/{}", connection_id.as_str()),
-            false,
-        )?)
+        .oneshot(
+            authenticated_request(
+                restarted.router(),
+                "GET",
+                &format!("/api/v1/broker-connections/{}", connection_id.as_str()),
+                false,
+            )
+            .await?,
+        )
         .await?;
     assert_eq!(details.status(), StatusCode::OK);
     let details = response_json(details).await?;
@@ -279,16 +323,20 @@ async fn live_sandbox_onboarding_read_and_restart_use_production_composition()
     let app = composition.router();
     let created = app
         .clone()
-        .oneshot(json_authenticated_request(
-            "POST",
-            "/api/v1/broker-connections",
-            serde_json::json!({
-                "provider": "T_INVEST",
-                "environment": "SANDBOX",
-                "display_label": "live composition qualification",
-                "credential": token
-            }),
-        )?)
+        .oneshot(
+            json_authenticated_request(
+                app.clone(),
+                "POST",
+                "/api/v1/broker-connections",
+                serde_json::json!({
+                    "provider": "T_INVEST",
+                    "environment": "SANDBOX",
+                    "display_label": "live composition qualification",
+                    "credential": token
+                }),
+            )
+            .await?,
+        )
         .await?;
     assert_eq!(created.status(), StatusCode::CREATED);
     let created = response_json(created).await?;
@@ -299,11 +347,15 @@ async fn live_sandbox_onboarding_read_and_restart_use_production_composition()
 
     let accounts = app
         .clone()
-        .oneshot(authenticated_request(
-            "GET",
-            &format!("/api/v1/broker-connections/{connection_id}/accounts"),
-            false,
-        )?)
+        .oneshot(
+            authenticated_request(
+                app.clone(),
+                "GET",
+                &format!("/api/v1/broker-connections/{connection_id}/accounts"),
+                false,
+            )
+            .await?,
+        )
         .await?;
     assert_eq!(accounts.status(), StatusCode::OK);
     let accounts = response_json(accounts).await?;
@@ -319,27 +371,35 @@ async fn live_sandbox_onboarding_read_and_restart_use_production_composition()
     let vox_account_id = vox_connections::VoxAccountId::new();
     let binding = app
         .clone()
-        .oneshot(json_authenticated_request(
-            "POST",
-            &format!("/api/v1/broker-connections/{connection_id}/bindings"),
-            serde_json::json!({
-                "provider_account_id": provider_account_id,
-                "account_id": vox_account_id.as_str()
-            }),
-        )?)
+        .oneshot(
+            json_authenticated_request(
+                app.clone(),
+                "POST",
+                &format!("/api/v1/broker-connections/{connection_id}/bindings"),
+                serde_json::json!({
+                    "provider_account_id": provider_account_id,
+                    "account_id": vox_account_id.as_str()
+                }),
+            )
+            .await?,
+        )
         .await?;
     assert_eq!(binding.status(), StatusCode::CREATED);
     let authorization = app
         .clone()
-        .oneshot(json_authenticated_request(
-            "PUT",
-            &format!("/api/v1/broker-connections/{connection_id}/execution-authorization"),
-            serde_json::json!({
-                "provider_account_id": provider_account_id,
-                "mode": "MANUAL_ALLOWED",
-                "expected_authorization_revision": 1
-            }),
-        )?)
+        .oneshot(
+            json_authenticated_request(
+                app.clone(),
+                "PUT",
+                &format!("/api/v1/broker-connections/{connection_id}/execution-authorization"),
+                serde_json::json!({
+                    "provider_account_id": provider_account_id,
+                    "mode": "MANUAL_ALLOWED",
+                    "expected_authorization_revision": 1
+                }),
+            )
+            .await?,
+        )
         .await?;
     assert_eq!(authorization.status(), StatusCode::OK);
     let authorization = response_json(authorization).await?;
@@ -351,7 +411,7 @@ async fn live_sandbox_onboarding_read_and_restart_use_production_composition()
     );
     let read = app
         .clone()
-        .oneshot(authenticated_request("GET", &read_uri, false)?)
+        .oneshot(authenticated_request(app.clone(), "GET", &read_uri, false).await?)
         .await?;
     let read_status = read.status();
     let read_body = response_json(read).await?;
@@ -365,7 +425,7 @@ async fn live_sandbox_onboarding_read_and_restart_use_production_composition()
         );
         let response = app
             .clone()
-            .oneshot(authenticated_request("GET", &uri, false)?)
+            .oneshot(authenticated_request(app.clone(), "GET", &uri, false).await?)
             .await?;
         let status = response.status();
         let body = response_json(response).await?;
@@ -392,11 +452,15 @@ async fn live_sandbox_onboarding_read_and_restart_use_production_composition()
     assert_eq!(restarted.lifecycle_recovery, Default::default());
     let details = restarted
         .router()
-        .oneshot(authenticated_request(
-            "GET",
-            &format!("/api/v1/broker-connections/{connection_id}"),
-            false,
-        )?)
+        .oneshot(
+            authenticated_request(
+                restarted.router(),
+                "GET",
+                &format!("/api/v1/broker-connections/{connection_id}"),
+                false,
+            )
+            .await?,
+        )
         .await?;
     assert_eq!(details.status(), StatusCode::OK);
     let details = response_json(details).await?;
@@ -426,41 +490,77 @@ fn config(
             user_id,
             display_name: "test operator".to_owned(),
             permissions,
-            session_token: SecretBytes::new(SESSION).expect("valid session token"),
-            csrf_token: SecretBytes::new(CSRF).expect("valid csrf token"),
+            bootstrap_credential: SecretBytes::new(SESSION).expect("valid bootstrap credential"),
             expires_at_unix_ms: 4_102_444_800_000,
+            cookie_secure: false,
         },
         tinvest_enabled: true,
     }
 }
 
-fn authenticated_request(
+async fn authenticated_request(
+    app: Router,
     method: &str,
     uri: &str,
     csrf: bool,
-) -> Result<Request<Body>, axum::http::Error> {
+) -> Result<Request<Body>, Box<dyn Error>> {
+    let (cookie, csrf_token) = session_credentials(app).await?;
     let mut request = Request::builder()
         .method(method)
         .uri(uri)
-        .header("cookie", format!("vox_session={SESSION}"));
+        .header("cookie", cookie);
     if csrf {
-        request = request.header("x-vox-csrf", CSRF);
+        request = request.header("x-vox-csrf", csrf_token);
     }
-    request.body(Body::empty())
+    Ok(request.body(Body::empty())?)
 }
 
-fn json_authenticated_request(
+async fn json_authenticated_request(
+    app: Router,
     method: &str,
     uri: &str,
     body: serde_json::Value,
-) -> Result<Request<Body>, axum::http::Error> {
-    Request::builder()
+) -> Result<Request<Body>, Box<dyn Error>> {
+    let (cookie, csrf_token) = session_credentials(app).await?;
+    Ok(Request::builder()
         .method(method)
         .uri(uri)
         .header("content-type", "application/json")
-        .header("cookie", format!("vox_session={SESSION}"))
-        .header("x-vox-csrf", CSRF)
-        .body(Body::from(body.to_string()))
+        .header("cookie", cookie)
+        .header("x-vox-csrf", csrf_token)
+        .body(Body::from(body.to_string()))?)
+}
+
+async fn bootstrap_response(app: Router) -> Result<axum::response::Response, Box<dyn Error>> {
+    Ok(app
+        .oneshot(
+            Request::post("/api/v1/auth/session")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "bootstrap_credential": SESSION }).to_string(),
+                ))?,
+        )
+        .await?)
+}
+
+async fn session_credentials(app: Router) -> Result<(String, String), Box<dyn Error>> {
+    let response = bootstrap_response(app).await?;
+    if response.status() != StatusCode::OK {
+        return Err(format!("session bootstrap failed: {}", response.status()).into());
+    }
+    let cookie = response
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .ok_or("session cookie missing")?
+        .to_owned();
+    let body = response_json(response).await?;
+    let csrf = body["csrf_token"]
+        .as_str()
+        .ok_or("CSRF token missing")?
+        .to_owned();
+    Ok((cookie, csrf))
 }
 
 async fn response_json(

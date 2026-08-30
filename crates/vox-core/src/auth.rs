@@ -3,15 +3,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use async_trait::async_trait;
 use axum::extract::{Request, State};
 use axum::http::{Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use ring::digest;
+use ring::rand::{SecureRandom, SystemRandom};
 use rusqlite::{Connection, OptionalExtension, params};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
-use vox_api::application::AuthenticatedActor;
+use vox_api::application::{AuthenticatedActor, EstablishedSession, SessionAuthentication};
+use vox_api::contract::auth::CreateSessionRequest;
+use vox_api::error::{ApiError, ErrorCategory};
 use vox_connections::{
     ConnectionRepository, Permission, Role, RoleId, SqliteConnectionRepository, User, UserId,
 };
@@ -23,9 +27,9 @@ pub struct SessionBootstrap {
     pub user_id: UserId,
     pub display_name: String,
     pub permissions: BTreeSet<Permission>,
-    pub session_token: vox_connections::SecretBytes,
-    pub csrf_token: vox_connections::SecretBytes,
+    pub bootstrap_credential: vox_connections::SecretBytes,
     pub expires_at_unix_ms: i64,
+    pub cookie_secure: bool,
 }
 
 #[derive(Clone)]
@@ -33,6 +37,10 @@ pub struct AuthState {
     sessions: Arc<SessionStore>,
     users: SqliteConnectionRepository,
     manual_execution_permission: Permission,
+    bootstrap_hash: String,
+    bootstrap_user_id: UserId,
+    bootstrap_expires_at_unix_ms: i64,
+    cookie_secure: bool,
 }
 
 impl AuthState {
@@ -46,8 +54,8 @@ impl AuthState {
         if bootstrap.expires_at_unix_ms <= now_unix_ms {
             return Err(AuthError::ExpiredBootstrapSession);
         }
-        validate_token(bootstrap.session_token.expose_secret())?;
-        validate_token(bootstrap.csrf_token.expose_secret())?;
+        validate_token(bootstrap.bootstrap_credential.expose_secret())?;
+        let bootstrap_hash = digest_hex(bootstrap.bootstrap_credential.expose_secret());
         let user = match users.user(&bootstrap.user_id)? {
             Some(user) => user,
             None => {
@@ -69,17 +77,14 @@ impl AuthState {
         users.grant_role(&user.id, &role.id)?;
 
         let sessions = SessionStore::open(database_path)?;
-        sessions.upsert(
-            &user.id,
-            bootstrap.session_token.expose_secret(),
-            bootstrap.csrf_token.expose_secret(),
-            bootstrap.expires_at_unix_ms,
-            now_unix_ms,
-        )?;
         Ok(Self {
             sessions: Arc::new(sessions),
             users,
             manual_execution_permission,
+            bootstrap_hash,
+            bootstrap_user_id: user.id,
+            bootstrap_expires_at_unix_ms: bootstrap.expires_at_unix_ms,
+            cookie_secure: bootstrap.cookie_secure,
         })
     }
 
@@ -122,6 +127,59 @@ impl AuthState {
     }
 }
 
+#[async_trait]
+impl SessionAuthentication for AuthState {
+    async fn establish_session(
+        &self,
+        request: CreateSessionRequest,
+    ) -> Result<EstablishedSession, ApiError> {
+        let now = now_unix_ms().map_err(|_| auth_unavailable())?;
+        let supplied_hash = digest_hex(request.bootstrap_credential.as_bytes());
+        if now >= self.bootstrap_expires_at_unix_ms
+            || !bool::from(
+                supplied_hash
+                    .as_bytes()
+                    .ct_eq(self.bootstrap_hash.as_bytes()),
+            )
+        {
+            return Err(ApiError::new(
+                ErrorCategory::Authentication,
+                "BOOTSTRAP_CREDENTIAL_REJECTED",
+                "trusted bootstrap credential rejected",
+            ));
+        }
+        let user = self
+            .users
+            .user(&self.bootstrap_user_id)
+            .map_err(|_| auth_unavailable())?
+            .filter(|user| user.enabled)
+            .ok_or_else(|| {
+                ApiError::new(
+                    ErrorCategory::Authentication,
+                    "BOOTSTRAP_PRINCIPAL_REVOKED",
+                    "bootstrap principal is disabled or revoked",
+                )
+            })?;
+        let session_token = random_token().map_err(|_| auth_unavailable())?;
+        let csrf_token = random_token().map_err(|_| auth_unavailable())?;
+        self.sessions
+            .upsert(
+                &user.id,
+                session_token.as_bytes(),
+                csrf_token.as_bytes(),
+                self.bootstrap_expires_at_unix_ms,
+                now,
+            )
+            .map_err(|_| auth_unavailable())?;
+        Ok(EstablishedSession {
+            session_token,
+            csrf_token,
+            expires_at_unix_ms: self.bootstrap_expires_at_unix_ms,
+            cookie_secure: self.cookie_secure,
+        })
+    }
+}
+
 struct VerifiedSession {
     actor: AuthenticatedActor,
     permissions: BTreeSet<Permission>,
@@ -132,7 +190,9 @@ pub async fn authenticated_actor_middleware(
     mut request: Request,
     next: Next,
 ) -> Response {
-    if request.uri().path() == "/api/v1/system/health" {
+    if request.uri().path() == "/api/v1/system/health"
+        || (*request.method() == Method::POST && request.uri().path() == "/api/v1/auth/session")
+    {
         return next.run(request).await;
     }
     match auth.authenticate(&request) {
@@ -340,6 +400,20 @@ fn digest_hex(value: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn random_token() -> Result<String, ring::error::Unspecified> {
+    let mut bytes = [0_u8; 32];
+    SystemRandom::new().fill(&mut bytes)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn auth_unavailable() -> ApiError {
+    ApiError::new(
+        ErrorCategory::Transient,
+        "AUTHENTICATION_UNAVAILABLE",
+        "authentication subsystem unavailable",
+    )
 }
 
 fn now_unix_ms() -> Result<i64, AuthError> {

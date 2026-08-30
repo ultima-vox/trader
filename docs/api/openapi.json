@@ -88,6 +88,57 @@
         }
       }
     },
+    "/api/v1/auth/session": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Exchanges trusted bootstrap credential for browser session cookie and CSRF state.",
+        "operationId": "create_session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Session established; authentication is in HttpOnly cookie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bootstrap credential rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication persistence unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/broker-bindings/{binding_id}": {
       "delete": {
         "tags": [
@@ -2209,6 +2260,23 @@
           }
         }
       },
+      "AuthSessionDto": {
+        "type": "object",
+        "description": "Browser-readable anti-CSRF state. Authentication remains in HttpOnly cookie.",
+        "required": [
+          "csrf_token",
+          "expires_at_unix_ms"
+        ],
+        "properties": {
+          "csrf_token": {
+            "type": "string"
+          },
+          "expires_at_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "BindBrokerAccountRequest": {
         "type": "object",
         "required": [
@@ -2825,6 +2893,19 @@
             "type": "string"
           },
           "credential": {
+            "type": "string",
+            "writeOnly": true
+          }
+        }
+      },
+      "CreateSessionRequest": {
+        "type": "object",
+        "description": "Trusted bootstrap credential. Never returned by Vox.",
+        "required": [
+          "bootstrap_credential"
+        ],
+        "properties": {
+          "bootstrap_credential": {
             "type": "string",
             "writeOnly": true
           }
@@ -5204,6 +5285,10 @@
     }
   },
   "tags": [
+    {
+      "name": "auth",
+      "description": "Server-side browser session bootstrap"
+    },
     {
       "name": "system",
       "description": "Process liveness and capability discovery"

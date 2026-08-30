@@ -5,8 +5,12 @@ import type * as T from "./types";
 
 /** Everything this client can fail with, as the server described it. */
 export class VoxApiError extends Error {
-  constructor(readonly status: number, readonly body: T.ApiError) {
+  readonly status: number;
+  readonly body: T.ApiError;
+  constructor(status: number, body: T.ApiError) {
     super(body.message);
+    this.status = status;
+    this.body = body;
     this.name = "VoxApiError";
   }
 }
@@ -16,16 +20,24 @@ export interface VoxClientOptions {
   baseUrl?: string;
   /** Passed through to fetch, for credentials and abort signals. */
   fetch?: typeof fetch;
+  /** Cookie policy. Same-origin sends server-issued HttpOnly session cookie. */
+  credentials?: RequestCredentials;
+  /** Restored CSRF state from an earlier session bootstrap response. */
+  csrfToken?: string;
 }
 
 /** The generated transport client. Wrap it in a service; do not call fetch directly. */
 export class VoxClient {
   private readonly baseUrl: string;
   private readonly doFetch: typeof fetch;
+  private readonly credentials: RequestCredentials;
+  private csrfToken: string | undefined;
 
   constructor(options: VoxClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "";
     this.doFetch = options.fetch ?? fetch;
+    this.credentials = options.credentials ?? "same-origin";
+    this.csrfToken = options.csrfToken;
   }
 
   private async request<R>(method: string, path: string, query?: Record<string, unknown>, body?: unknown): Promise<R> {
@@ -39,21 +51,29 @@ export class VoxClient {
     }
     const url = new URL(this.baseUrl + resolvedPath, this.baseUrl || "http://localhost");
     for (const [key, value] of Object.entries(remainingQuery)) url.searchParams.set(key, String(value));
-    const init: RequestInit = { method };
+    const headers: Record<string, string> = {};
+    if (!["GET", "HEAD", "OPTIONS"].includes(method) && this.csrfToken) headers["x-vox-csrf"] = this.csrfToken;
+    const init: RequestInit = { method, credentials: this.credentials, headers };
     if (body !== undefined) {
-      init.headers = { "content-type": "application/json" };
+      headers["content-type"] = "application/json";
       init.body = JSON.stringify(body);
     }
     const target = this.baseUrl ? url.toString() : url.pathname + url.search;
     const response = await this.doFetch(target, init);
     const payload = response.status === 204 ? undefined : await response.json();
     if (!response.ok) throw new VoxApiError(response.status, payload as T.ApiError);
+    if (path === "/api/v1/auth/session") this.csrfToken = (payload as T.AuthSessionDto).csrf_token;
     return payload as R;
   }
 
   /** Accounts discovered through the connection. */
   accounts(query: { account_id: string; broker_connection_id: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<Array<T.BrokerAccountDto>> {
     return this.request("GET", "/api/v1/accounts", query);
+  }
+
+  /** Exchanges trusted bootstrap credential for browser session cookie and CSRF state. */
+  postAuthSession(body: T.CreateSessionRequest): Promise<T.AuthSessionDto> {
+    return this.request("POST", "/api/v1/auth/session", undefined, body);
   }
 
   deleteBrokerBindingsBinding_id(query: { binding_id: string }): Promise<void> {

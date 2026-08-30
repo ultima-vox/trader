@@ -101,10 +101,9 @@ jobs:
           export VOX_KEK_ACTIVE_VERSION=1
           export VOX_KEK_HEX_V1=4949494949494949494949494949494949494949494949494949494949494949
           export VOX_BOOTSTRAP_USER_ID=user:00000000-0000-4000-8000-000000000017
-          export VOX_BOOTSTRAP_SESSION_TOKEN=ci-session-token-material-00000000000000000000000000000001
-          export VOX_BOOTSTRAP_CSRF_TOKEN=ci-csrf-token-material-000000000000000000000000000000001
-          export VOX_BOOTSTRAP_SESSION_EXPIRES_UNIX_MS=4102444800000
-          auth=(-H "Cookie: vox_session=$VOX_BOOTSTRAP_SESSION_TOKEN")
+          export VOX_BOOTSTRAP_CREDENTIAL=ci-bootstrap-credential-material-00000000000000000000000000001
+          export VOX_BOOTSTRAP_EXPIRES_UNIX_MS=4102444800000
+          export VOX_SESSION_COOKIE_SECURE=false
           ./target/debug/vox-server &
           server=$!
           trap 'kill $server' EXIT
@@ -116,33 +115,5 @@ jobs:
           echo "health:"
           curl -sf http://127.0.0.1:18099/api/v1/system/health
 
-          echo "capabilities name their owners:"
-          curl -sf "${auth[@]}" http://127.0.0.1:18099/api/v1/capabilities |
-            python -c "import json,sys; d=json.load(sys.stdin); assert d['unavailable'], 'nothing is reported unavailable'; assert all(u['owner'] for u in d['unavailable']), 'an unavailable capability has no owner'; print(' ', len(d['supported']), 'supported,', len(d['unavailable']), 'unavailable')"
-
-          echo "runtime scopes are empty until #17 bindings exist:"
-          curl -sf "${auth[@]}" http://127.0.0.1:18099/api/v1/runtime/scopes |
-            python -c "import json,sys; d=json.load(sys.stdin); assert d==[], d; print('  []')"
-
-          echo "runtime health is the accepted #11 contract, not CAPABILITY_UNAVAILABLE:"
-          code=$(curl -s "${auth[@]}" -o /tmp/runtime.json -w '%{http_code}' http://127.0.0.1:18099/api/v1/runtime)
-          test "$code" = "200" || { echo "expected 200, got $code"; cat /tmp/runtime.json; exit 1; }
-          python -c "import json; d=json.load(open('/tmp/runtime.json')); assert d['state']=='STARTING', d; assert d['reason_code']=='STARTUP', d; assert d['execution_authorized'] is False, d; assert d['new_exposure_allowed'] is False, d; print(' ', d['state'], d['reason_code'])"
-
-          echo "an unknown stored binding refuses before broker access:"
-          code=$(curl -s "${auth[@]}" -o /tmp/accounts.json -w '%{http_code}' 'http://127.0.0.1:18099/api/v1/accounts?provider=T_INVEST&environment=SANDBOX&broker_connection_id=connection:00000000-0000-4000-8000-000000000017&account_id=vox-account:00000000-0000-4000-8000-000000000017')
-          test "$code" = "404" || { echo "expected 404, got $code"; cat /tmp/accounts.json; exit 1; }
-          python -c "import json; d=json.load(open('/tmp/accounts.json')); assert d['code']=='ACCOUNT_BINDING_NOT_FOUND', d; print(' ', d['code'])"
-
-          echo "market data refuses instead of inventing a price:"
-          code=$(curl -s "${auth[@]}" -o /tmp/quote.json -w '%{http_code}' 'http://127.0.0.1:18099/api/v1/market/quote?provider=T_INVEST&instrument_uid=probe')
-          test "$code" = "503" || { echo "expected 503, got $code"; cat /tmp/quote.json; exit 1; }
-          python -c "import json; d=json.load(open('/tmp/quote.json')); assert d['details']['capability']=='MARKET_DATA', d; assert d['details']['owner'], d; print(' ', d['details']['capability'], d['details']['owner'])"
-
-          echo "the served document matches the committed one:"
-          curl -sf "${auth[@]}" http://127.0.0.1:18099/api/v1/openapi.json -o /tmp/served.json
-          python -c "import json; a=json.load(open('/tmp/served.json')); b=json.load(open('docs/api/openapi.json')); assert a==b, 'the served OpenAPI differs from the committed artefact'; print('  identical')"
-
-          echo "an unknown route is a typed 404:"
-          curl -s "${auth[@]}" -o /tmp/nf.json -w '  %{http_code}\n' http://127.0.0.1:18099/api/v2/whatever
-          python -c "import json; d=json.load(open('/tmp/nf.json')); assert d['category']=='NOT_FOUND', d; print('  typed error envelope')"
+          VOX_API_BASE_URL=http://127.0.0.1:18099 \
+            npm --prefix frontend/api-client run test:session

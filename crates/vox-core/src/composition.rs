@@ -46,7 +46,7 @@ pub struct ServerConfig {
 impl ServerConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         let core = CoreConfig::from_env().context("load core environment")?;
-        let bind = std::env::var("VOX_API_BIND")
+        let bind: SocketAddr = std::env::var("VOX_API_BIND")
             .unwrap_or_else(|_| "127.0.0.1:8080".to_owned())
             .parse()
             .context("parse VOX_API_BIND")?;
@@ -58,14 +58,18 @@ impl ServerConfig {
                 .context("load external KEK keyring")?;
         let user_id = UserId::parse(required_env("VOX_BOOTSTRAP_USER_ID")?)
             .context("parse VOX_BOOTSTRAP_USER_ID")?;
-        let session_token = SecretBytes::new(required_env("VOX_BOOTSTRAP_SESSION_TOKEN")?)
-            .context("load bootstrap session")?;
-        let csrf_token = SecretBytes::new(required_env("VOX_BOOTSTRAP_CSRF_TOKEN")?)
-            .context("load bootstrap CSRF token")?;
-        let expires_at_unix_ms = required_env("VOX_BOOTSTRAP_SESSION_EXPIRES_UNIX_MS")?
+        let bootstrap_credential = SecretBytes::new(required_env("VOX_BOOTSTRAP_CREDENTIAL")?)
+            .context("load bootstrap credential")?;
+        let expires_at_unix_ms = required_env("VOX_BOOTSTRAP_EXPIRES_UNIX_MS")?
             .parse::<i64>()
-            .context("parse VOX_BOOTSTRAP_SESSION_EXPIRES_UNIX_MS")?;
+            .context("parse VOX_BOOTSTRAP_EXPIRES_UNIX_MS")?;
         let tinvest_enabled = optional_bool("VOX_TINVEST_ENABLED", true)?;
+        let cookie_secure = optional_bool("VOX_SESSION_COOKIE_SECURE", true)?;
+        if !cookie_secure && !bind.ip().is_loopback() {
+            return Err(anyhow!(
+                "VOX_SESSION_COOKIE_SECURE=false is allowed only on a loopback API bind"
+            ));
+        }
         Ok(Self {
             core,
             bind,
@@ -77,9 +81,9 @@ impl ServerConfig {
                 user_id,
                 display_name: "Vox bootstrap operator".to_owned(),
                 permissions: bootstrap_permissions(),
-                session_token,
-                csrf_token,
+                bootstrap_credential,
                 expires_at_unix_ms,
+                cookie_secure,
             },
             tinvest_enabled,
         })
@@ -165,6 +169,7 @@ impl ApplicationComposition {
             account_reads,
             runtime.clone(),
             connection_admin,
+            Arc::new(auth.clone()),
         );
         let router = vox_api::router(state)
             .layer(DefaultBodyLimit::max(128 * 1024))

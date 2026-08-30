@@ -17,6 +17,12 @@ export type ApiError = {
   details?: unknown;
 };
 
+/** Browser-readable anti-CSRF state. Authentication remains in HttpOnly cookie. */
+export type AuthSessionDto = {
+  csrf_token: string;
+  expires_at_unix_ms: number;
+};
+
 export type BindBrokerAccountRequest = {
   provider_account_id: string;
   account_id: string;
@@ -174,6 +180,11 @@ export type CreateBrokerConnectionRequest = {
   environment: BrokerEnvironment;
   display_label: string;
   credential: string;
+};
+
+/** Trusted bootstrap credential. Never returned by Vox. */
+export type CreateSessionRequest = {
+  bootstrap_credential: string;
 };
 
 export type CredentialClassDto = "UNKNOWN" | "READ_ONLY" | "FULL_ACCESS" | "TRANSFER_ACCESS" | "SANDBOX";
