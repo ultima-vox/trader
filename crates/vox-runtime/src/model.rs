@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
-use vox_domain::ProtectionLeg;
+use vox_domain::{OrderSide, ProtectionLeg};
 pub use vox_domain::RuntimeExecutionCommand;
 
 pub const EXECUTION_QUEUE_CAPACITY: usize = 256;
@@ -609,8 +609,36 @@ pub struct OrderFact {
     pub broker_order_id: String,
     pub logical_request_id: Option<String>,
     pub instrument_uid: String,
+    /// Provider-authoritative direction. None means the provider value was unknown and
+    /// directional exposure must fail closed rather than being guessed.
+    pub side: Option<OrderSide>,
+    pub lots_requested: i64,
+    pub lots_executed: i64,
     pub status: OrderExecutionStatus,
     pub status_cause: Option<ProviderStatusCause>,
+}
+
+impl OrderFact {
+    pub fn remaining_lots(&self) -> Result<i64, ModelError> {
+        if self.lots_requested < 0
+            || self.lots_executed < 0
+            || self.lots_executed > self.lots_requested
+        {
+            return Err(ModelError::InvalidField("order lot progress"));
+        }
+        Ok(self.lots_requested - self.lots_executed)
+    }
+
+    pub fn signed_remaining_lots(&self) -> Result<i64, ModelError> {
+        let remaining = self.remaining_lots()?;
+        match self.side {
+            Some(OrderSide::Buy) => Ok(remaining),
+            Some(OrderSide::Sell) => remaining
+                .checked_neg()
+                .ok_or(ModelError::InvalidField("order lot progress")),
+            None => Err(ModelError::InvalidField("order direction")),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
