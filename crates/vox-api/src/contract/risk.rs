@@ -29,6 +29,16 @@ pub enum RiskStateDto {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RiskActionKindDto {
+    DirectionalOrder,
+    ReplaceDirectionalOrder,
+    CancelOrder,
+    ProtectionMaintenance,
+    CancelProtection,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RiskReasonCodeDto {
     Approved,
     ResizedToProviderLimit,
@@ -83,6 +93,7 @@ pub struct RiskValidityDto {
 pub struct RiskDecisionDto {
     pub decision_id: String,
     pub policy_revision: u64,
+    pub action: RiskActionKindDto,
     pub requested_delta_lots: i64,
     pub approved_delta_lots: i64,
     pub outcome: RiskOutcomeDto,
