@@ -95,8 +95,7 @@ impl RiskStore for SqliteRiskStore {
             return Err(RiskStoreError::InvalidCapacity);
         }
         let mut connection = self.connection()?;
-        let transaction =
-            connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
         if let Some(existing) = reservation_for_request_tx(
             &transaction,
@@ -134,11 +133,7 @@ impl RiskStore for SqliteRiskStore {
         account_id: &str,
         logical_request_id: &str,
     ) -> Result<Option<RiskReservation>, RiskStoreError> {
-        reservation_for_request_connection(
-            &self.connection()?,
-            account_id,
-            logical_request_id,
-        )
+        reservation_for_request_connection(&self.connection()?, account_id, logical_request_id)
     }
 
     fn active_reserved_delta(
@@ -185,8 +180,8 @@ impl RiskStore for SqliteRiskStore {
                 now_unix_ms
             ],
         )?;
-        let updated =
-            reservation_by_id(&transaction, reservation_id)?.ok_or(RiskStoreError::ReservationNotFound)?;
+        let updated = reservation_by_id(&transaction, reservation_id)?
+            .ok_or(RiskStoreError::ReservationNotFound)?;
         transaction.commit()?;
         Ok(updated)
     }
@@ -337,15 +332,14 @@ fn parse_source(value: String) -> Result<RiskSource, &'static str> {
 }
 
 fn text_conversion_error(message: &'static str) -> rusqlite::Error {
-    conversion_error(std::io::Error::new(std::io::ErrorKind::InvalidData, message))
+    conversion_error(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        message,
+    ))
 }
 
 fn conversion_error(error: impl std::error::Error + Send + Sync + 'static) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(
-        0,
-        rusqlite::types::Type::Text,
-        Box::new(error),
-    )
+    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
 }
 
 const SCHEMA: &str = "
