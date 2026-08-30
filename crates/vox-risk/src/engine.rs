@@ -123,7 +123,7 @@ impl RiskEngine {
 
         if let Some(max_loss) = policy.max_daily_loss_nanos
             && let Some(day_pnl) = request.snapshot.broker_daily_pnl_nanos
-            && day_pnl < -max_loss.abs()
+            && day_pnl < -positive_limit(max_loss, "max_daily_loss_nanos")?
             && increasing_lots > 0
         {
             return Ok(reject(
@@ -152,9 +152,9 @@ impl RiskEngine {
             let projected = request
                 .snapshot
                 .gross_exposure_nanos
-                .checked_add(request.requested_notional_nanos.abs())
+                .checked_add(checked_abs(request.requested_notional_nanos)?)
                 .ok_or(RiskEngineError::ArithmeticOverflow)?;
-            if projected > max_gross.abs() && increasing_lots > 0 {
+            if projected > positive_limit(max_gross, "max_gross_exposure_nanos")? && increasing_lots > 0 {
                 return Ok(reject(
                     policy,
                     request,
@@ -171,7 +171,7 @@ impl RiskEngine {
                 .net_exposure_nanos
                 .checked_add(request.requested_notional_nanos)
                 .ok_or(RiskEngineError::ArithmeticOverflow)?;
-            if projected.abs() > max_net.abs() && increasing_lots > 0 {
+            if checked_abs(projected)? > positive_limit(max_net, "max_net_exposure_abs_nanos")? && increasing_lots > 0 {
                 return Ok(reject(
                     policy,
                     request,
@@ -188,7 +188,7 @@ impl RiskEngine {
                 .instrument_exposure_nanos
                 .checked_add(request.requested_notional_nanos)
                 .ok_or(RiskEngineError::ArithmeticOverflow)?;
-            if projected.abs() > max_instrument.abs() && increasing_lots > 0 {
+            if checked_abs(projected)? > positive_limit(max_instrument, "max_instrument_exposure_nanos")? && increasing_lots > 0 {
                 return Ok(reject(
                     policy,
                     request,
@@ -377,6 +377,17 @@ fn selected_sell_limit(limit: SellLotLimit) -> Result<i64, RiskEngineError> {
         return Err(RiskEngineError::InvalidProviderFact(
             "broker sell max-lots value cannot be negative",
         ));
+    }
+    Ok(value)
+}
+
+fn checked_abs(value: i128) -> Result<i128, RiskEngineError> {
+    value.checked_abs().ok_or(RiskEngineError::ArithmeticOverflow)
+}
+
+fn positive_limit(value: i128, field: &'static str) -> Result<i128, RiskEngineError> {
+    if value <= 0 {
+        return Err(RiskEngineError::InvalidPolicy(field));
     }
     Ok(value)
 }
