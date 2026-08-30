@@ -47,9 +47,34 @@ pub struct CredentialResolution {
     pub execution_authorized: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeExecutionPurpose {
+    SandboxMutation,
+    ProductionManual,
+    ProductionAutomated,
+}
+
 #[async_trait]
 pub trait CredentialResolverPort: Send + Sync {
     async fn resolve(&self, scope: &RuntimeScope) -> Result<CredentialResolution, BrokerPortError>;
+
+    async fn authorize_execution(
+        &self,
+        scope: &RuntimeScope,
+        _purpose: RuntimeExecutionPurpose,
+    ) -> Result<(), BrokerPortError> {
+        if self.resolve(scope).await?.execution_authorized {
+            Ok(())
+        } else {
+            Err(BrokerPortError {
+                service: "CredentialResolver",
+                method: "AuthorizeExecution",
+                class: BrokerResultClass::Permission,
+                message: "execution authorization disabled".to_owned(),
+                retry_after: None,
+            })
+        }
+    }
 }
 
 #[async_trait]
@@ -101,6 +126,7 @@ pub trait ExecutionPort: Send + Sync {
     async fn dispatch_once(
         &self,
         scope: &RuntimeScope,
+        purpose: RuntimeExecutionPurpose,
         command: &RuntimeExecutionCommand,
         mutation: &MutationRecord,
     ) -> Result<ExecutionResult, BrokerPortError>;
@@ -143,6 +169,12 @@ pub trait RuntimeStore: Clone + Send + Sync + 'static {
     ) -> Result<(), StoreError>;
     fn record_transition(&self, transition: &StateTransition) -> Result<(), StoreError>;
     fn insert_mutation(&self, record: &MutationRecord) -> Result<(), StoreError>;
+    fn mutation(
+        &self,
+        scope_key: &str,
+        logical_request_id: &str,
+    ) -> Result<Option<MutationRecord>, StoreError>;
+    fn mutations(&self, scope_key: &str) -> Result<Vec<MutationRecord>, StoreError>;
     fn claim_dispatch_unknown(
         &self,
         scope_key: &str,

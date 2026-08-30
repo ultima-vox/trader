@@ -3,20 +3,26 @@
 //! Handlers only translate: they take a typed request, call an application port and shape a
 //! typed response. No business rule, no risk decision, no precedence arithmetic lives here.
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::routing::{delete, get, post, put};
+use axum::{Extension, Json, Router};
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
 
-use crate::application::AppState;
+use crate::application::{AppState, AuthenticatedActor, ConnectionRequestContext};
 use crate::contract::account::{
     BrokerAccountDto, OperationsPageDto, OrderDto, PortfolioDto, PositionDto, ReconciliationDto,
     StopOrderDto,
 };
 use crate::contract::capability::CapabilitySet;
+use crate::contract::connections::{
+    BindBrokerAccountRequest, BrokerAccountBindingDto, BrokerConnectionMetadataDto,
+    ChangeExecutionAuthorizationRequest, ConnectionDetailsDto, CreateBrokerConnectionRequest,
+    CredentialRotationResultDto, DiscoveredBrokerAccountDto, ExecutionAuthorizationDto,
+    RotateCredentialRequest,
+};
 use crate::contract::execution::{
     CancelOrderRequest, JournalStateDto, MutationReceiptDto, ReplaceOrderRequest,
     SubmitOrderRequest, SubmitProtectionRequest, SubmitStopOrderRequest,
@@ -144,8 +150,252 @@ pub async fn runtime_scopes(
 pub async fn capabilities(
     State(state): State<AppState>,
     Query(params): Query<CapabilityQuery>,
-) -> Json<CapabilitySet> {
-    Json(state.capabilities(params.account_id))
+) -> Result<Json<CapabilitySet>, ApiError> {
+    if let Some(runtime) = state.runtime.as_ref()
+        && let Some(capabilities) = runtime.capabilities(params.account_id.as_deref()).await?
+    {
+        return Ok(Json(capabilities));
+    }
+    Ok(Json(state.capabilities(params.account_id)))
+}
+
+fn connection_context(
+    actor: Option<Extension<AuthenticatedActor>>,
+) -> Result<ConnectionRequestContext, ApiError> {
+    let actor = actor.map(|Extension(value)| value).ok_or_else(|| {
+        ApiError::new(
+            ErrorCategory::Authentication,
+            "AUTHENTICATED_ACTOR_REQUIRED",
+            "authenticated actor context is required",
+        )
+    })?;
+    Ok(ConnectionRequestContext {
+        actor,
+        correlation_id: uuid::Uuid::new_v4().to_string(),
+        now_unix_ms: now_unix_ms(),
+    })
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/broker-connections", tag = "connections",
+    responses((status = 200, body = Vec<BrokerConnectionMetadataDto>), (status = 401, body = ApiError), (status = 403, body = ApiError))
+)]
+pub async fn broker_connections(
+    State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
+) -> Result<Json<Vec<BrokerConnectionMetadataDto>>, ApiError> {
+    let context = connection_context(actor)?;
+    Ok(Json(
+        state.connections_port()?.list_connections(&context).await?,
+    ))
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/broker-connections", tag = "connections",
+    request_body = CreateBrokerConnectionRequest,
+    responses((status = 201, body = BrokerConnectionMetadataDto), (status = 400, body = ApiError), (status = 401, body = ApiError), (status = 403, body = ApiError))
+)]
+pub async fn create_broker_connection(
+    State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Json(request): Json<CreateBrokerConnectionRequest>,
+) -> Result<(StatusCode, Json<BrokerConnectionMetadataDto>), ApiError> {
+    let context = connection_context(actor)?;
+    let result = state
+        .connections_port()?
+        .create_connection(&context, request)
+        .await?;
+    Ok((StatusCode::CREATED, Json(result)))
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/broker-connections/{connection_id}", tag = "connections",
+    params(("connection_id" = String, Path)),
+    responses((status = 200, body = ConnectionDetailsDto), (status = 401, body = ApiError), (status = 404, body = ApiError))
+)]
+pub async fn broker_connection_details(
+    State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Path(connection_id): Path<String>,
+) -> Result<Json<ConnectionDetailsDto>, ApiError> {
+    let context = connection_context(actor)?;
+    Ok(Json(
+        state
+            .connections_port()?
+            .connection_details(&context, &connection_id)
+            .await?,
+    ))
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/broker-connections/{connection_id}/validate", tag = "connections",
+    params(("connection_id" = String, Path)),
+    responses((status = 200, body = BrokerConnectionMetadataDto), (status = 401, body = ApiError), (status = 409, body = ApiError), (status = 503, body = ApiError))
+)]
+pub async fn validate_broker_connection(
+    State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Path(connection_id): Path<String>,
+) -> Result<Json<BrokerConnectionMetadataDto>, ApiError> {
+    let context = connection_context(actor)?;
+    Ok(Json(
+        state
+            .connections_port()?
+            .revalidate_connection(&context, &connection_id)
+            .await?,
+    ))
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/broker-connections/{connection_id}/credential", tag = "connections",
+    params(("connection_id" = String, Path)), request_body = RotateCredentialRequest,
+    responses((status = 200, body = CredentialRotationResultDto), (status = 400, body = ApiError), (status = 401, body = ApiError), (status = 409, body = ApiError))
+)]
+pub async fn rotate_broker_credential(
+    State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Path(connection_id): Path<String>,
+    Json(request): Json<RotateCredentialRequest>,
+) -> Result<Json<CredentialRotationResultDto>, ApiError> {
+    let context = connection_context(actor)?;
+    Ok(Json(
+        state
+            .connections_port()?
+            .rotate_credential(&context, &connection_id, request)
+            .await?,
+    ))
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/broker-connections/{connection_id}/disable", tag = "connections",
+    params(("connection_id" = String, Path)),
+    responses((status = 200, body = BrokerConnectionMetadataDto), (status = 401, body = ApiError), (status = 403, body = ApiError))
+)]
+pub async fn disable_broker_connection(
+    State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Path(connection_id): Path<String>,
+) -> Result<Json<BrokerConnectionMetadataDto>, ApiError> {
+    let context = connection_context(actor)?;
+    Ok(Json(
+        state
+            .connections_port()?
+            .disable_connection(&context, &connection_id)
+            .await?,
+    ))
+}
+
+#[utoipa::path(
+    delete, path = "/api/v1/broker-connections/{connection_id}", tag = "connections",
+    params(("connection_id" = String, Path)),
+    responses((status = 204), (status = 401, body = ApiError), (status = 409, body = ApiError))
+)]
+pub async fn delete_broker_connection(
+    State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Path(connection_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let context = connection_context(actor)?;
+    state
+        .connections_port()?
+        .delete_connection(&context, &connection_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/broker-connections/{connection_id}/accounts", tag = "connections",
+    params(("connection_id" = String, Path)),
+    responses((status = 200, body = Vec<DiscoveredBrokerAccountDto>), (status = 401, body = ApiError), (status = 404, body = ApiError))
+)]
+pub async fn discovered_broker_accounts(
+    State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Path(connection_id): Path<String>,
+) -> Result<Json<Vec<DiscoveredBrokerAccountDto>>, ApiError> {
+    let context = connection_context(actor)?;
+    Ok(Json(
+        state
+            .connections_port()?
+            .accounts(&context, &connection_id)
+            .await?,
+    ))
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/broker-connections/{connection_id}/bindings", tag = "connections",
+    params(("connection_id" = String, Path)),
+    responses((status = 200, body = Vec<BrokerAccountBindingDto>), (status = 401, body = ApiError))
+)]
+pub async fn broker_account_bindings(
+    State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Path(connection_id): Path<String>,
+) -> Result<Json<Vec<BrokerAccountBindingDto>>, ApiError> {
+    let context = connection_context(actor)?;
+    Ok(Json(
+        state
+            .connections_port()?
+            .bindings(&context, &connection_id)
+            .await?,
+    ))
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/broker-connections/{connection_id}/bindings", tag = "connections",
+    params(("connection_id" = String, Path)), request_body = BindBrokerAccountRequest,
+    responses((status = 201, body = BrokerAccountBindingDto), (status = 400, body = ApiError), (status = 401, body = ApiError), (status = 409, body = ApiError))
+)]
+pub async fn bind_broker_account(
+    State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Path(connection_id): Path<String>,
+    Json(request): Json<BindBrokerAccountRequest>,
+) -> Result<(StatusCode, Json<BrokerAccountBindingDto>), ApiError> {
+    let context = connection_context(actor)?;
+    let result = state
+        .connections_port()?
+        .bind_account(&context, &connection_id, request)
+        .await?;
+    Ok((StatusCode::CREATED, Json(result)))
+}
+
+#[utoipa::path(
+    delete, path = "/api/v1/broker-bindings/{binding_id}", tag = "connections",
+    params(("binding_id" = String, Path)),
+    responses((status = 204), (status = 401, body = ApiError), (status = 404, body = ApiError))
+)]
+pub async fn unbind_broker_account(
+    State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Path(binding_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let context = connection_context(actor)?;
+    state
+        .connections_port()?
+        .unbind_account(&context, &binding_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/broker-connections/{connection_id}/execution-authorization", tag = "connections",
+    params(("connection_id" = String, Path)), request_body = ChangeExecutionAuthorizationRequest,
+    responses((status = 200, body = ExecutionAuthorizationDto), (status = 401, body = ApiError), (status = 403, body = ApiError), (status = 409, body = ApiError))
+)]
+pub async fn change_execution_authorization(
+    State(state): State<AppState>,
+    actor: Option<Extension<AuthenticatedActor>>,
+    Path(connection_id): Path<String>,
+    Json(request): Json<ChangeExecutionAuthorizationRequest>,
+) -> Result<Json<ExecutionAuthorizationDto>, ApiError> {
+    let context = connection_context(actor)?;
+    Ok(Json(
+        state
+            .connections_port()?
+            .change_execution_authorization(&context, &connection_id, request)
+            .await?,
+    ))
 }
 
 #[derive(Clone, Debug, Deserialize, IntoParams, ToSchema)]
@@ -679,6 +929,42 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/system/health", get(system_health))
         .route("/api/v1/capabilities", get(capabilities))
+        .route(
+            "/api/v1/broker-connections",
+            get(broker_connections).post(create_broker_connection),
+        )
+        .route(
+            "/api/v1/broker-connections/{connection_id}",
+            get(broker_connection_details).delete(delete_broker_connection),
+        )
+        .route(
+            "/api/v1/broker-connections/{connection_id}/validate",
+            post(validate_broker_connection),
+        )
+        .route(
+            "/api/v1/broker-connections/{connection_id}/credential",
+            put(rotate_broker_credential),
+        )
+        .route(
+            "/api/v1/broker-connections/{connection_id}/disable",
+            post(disable_broker_connection),
+        )
+        .route(
+            "/api/v1/broker-connections/{connection_id}/accounts",
+            get(discovered_broker_accounts),
+        )
+        .route(
+            "/api/v1/broker-connections/{connection_id}/bindings",
+            get(broker_account_bindings).post(bind_broker_account),
+        )
+        .route(
+            "/api/v1/broker-connections/{connection_id}/execution-authorization",
+            put(change_execution_authorization),
+        )
+        .route(
+            "/api/v1/broker-bindings/{binding_id}",
+            delete(unbind_broker_account),
+        )
         .route("/api/v1/runtime", get(runtime_health))
         .route("/api/v1/runtime/scopes", get(runtime_scopes))
         .route("/api/v1/reconciliation", get(reconciliation))
@@ -737,6 +1023,16 @@ mod tests {
             .expect("1m");
         assert!(minute.historical_supported);
         assert!(minute.streaming_supported);
+    }
+
+    #[tokio::test]
+    async fn connection_administration_requires_authenticated_actor() {
+        let state = AppState::detached(ProviderDto::TInvest, BrokerEnvironment::Sandbox);
+        let error = broker_connections(State(state), None)
+            .await
+            .expect_err("anonymous connection metadata must fail closed");
+        assert_eq!(error.category, ErrorCategory::Authentication);
+        assert_eq!(error.code, "AUTHENTICATED_ACTOR_REQUIRED");
     }
 
     fn sample_scope() -> Result<ExecutionScope, crate::contract::scope::ScopeError> {

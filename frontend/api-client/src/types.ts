@@ -17,6 +17,23 @@ export type ApiError = {
   details?: unknown;
 };
 
+export type BindBrokerAccountRequest = {
+  provider_account_id: string;
+  account_id: string;
+};
+
+export type BrokerAccountBindingDto = {
+  binding_id: string;
+  connection_id: string;
+  provider: ProviderDto;
+  environment: BrokerEnvironment;
+  provider_account_id: string;
+  account_id: string;
+  enabled: boolean;
+  created_at_unix_ms: number;
+  updated_at_unix_ms: number;
+};
+
 /** A broker account discovered through a connection. */
 export type BrokerAccountDto = {
   /** Canonical Vox account/binding identity. */
@@ -26,6 +43,21 @@ export type BrokerAccountDto = {
   open: boolean;
   /** Whether the runtime can currently read this account. */
   accessible: boolean;
+};
+
+export type BrokerConnectionMetadataDto = {
+  connection_id: string;
+  provider: ProviderDto;
+  environment: BrokerEnvironment;
+  display_label: string;
+  enabled: boolean;
+  credential_status: CredentialStatusDto;
+  credential_class: CredentialClassDto;
+  credential_scope: CredentialScopeDto;
+  capabilities: Array<ConnectionCapabilityDto>;
+  health: ConnectionHealthDto;
+  created_at_unix_ms: number;
+  updated_at_unix_ms: number;
 };
 
 /** The broker-side environment of a connection. Exactly the runtime contract's two values. */
@@ -91,6 +123,13 @@ export type CapabilitySet = {
   unavailable: Array<UnavailableCapability>;
 };
 
+export type ChangeExecutionAuthorizationRequest = {
+  provider_account_id: string;
+  mode: ExecutionAuthorizationModeDto;
+  /** Compare-and-swap token returned by the latest authorization read. */
+  expected_authorization_revision: number;
+};
+
 /** What a client may send. */
 export type ClientMessage = {
   /** Client-generated id, echoed on every event of this subscription. */
@@ -109,6 +148,45 @@ export type ClientMessage = {
   type: "PING";
 };
 
+export type ConnectionCapabilityDto = "ACCOUNT_DISCOVERY" | "PORTFOLIO_READ" | "POSITIONS_READ" | "OPERATIONS_READ" | "STREAM_HEALTH" | "SANDBOX_ORDERS" | "PRODUCTION_ORDERS_PROVIDER_ALLOWED";
+
+export type ConnectionDetailsDto = {
+  connection: BrokerConnectionMetadataDto;
+  accounts: Array<DiscoveredBrokerAccountDto>;
+  bindings: Array<BrokerAccountBindingDto>;
+  execution_authorizations: Array<ExecutionAuthorizationDto>;
+};
+
+export type ConnectionHealthDto = {
+  state: ConnectionHealthStateDto;
+  checked_at_unix_ms?: number | null;
+  reason_code: ConnectionHealthReasonDto;
+  safe_detail?: string | null;
+  retryable: boolean;
+};
+
+export type ConnectionHealthReasonDto = "NONE" | "INVALID_CREDENTIAL" | "EXPIRED_OR_INACTIVE" | "PERMISSION_DENIED" | "WRONG_ENVIRONMENT" | "PROVIDER_UNAVAILABLE" | "ACCOUNT_ACCESS_CHANGED" | "DISABLED_BY_OPERATOR";
+
+export type ConnectionHealthStateDto = "UNKNOWN" | "VALIDATING" | "HEALTHY" | "INVALID_CREDENTIAL" | "INSUFFICIENT_PERMISSION" | "PROVIDER_UNAVAILABLE" | "ACCOUNT_ACCESS_CHANGED" | "DISABLED";
+
+export type CreateBrokerConnectionRequest = {
+  provider: ProviderDto;
+  environment: BrokerEnvironment;
+  display_label: string;
+  credential: string;
+};
+
+export type CredentialClassDto = "UNKNOWN" | "READ_ONLY" | "FULL_ACCESS" | "TRANSFER_ACCESS" | "SANDBOX";
+
+export type CredentialRotationResultDto = {
+  connection: BrokerConnectionMetadataDto;
+  reconnect_required: boolean;
+};
+
+export type CredentialScopeDto = "NOT_CONFIRMED" | "SINGLE_ACCOUNT_RESTRICTED" | "ALL_ACCESSIBLE_ACCOUNTS";
+
+export type CredentialStatusDto = "PENDING_VALIDATION" | "VALID" | "INVALID" | "EXPIRED_OR_INACTIVE" | "PENDING_DISABLE" | "DISABLED" | "PENDING_DELETE";
+
 /** One currency balance, exact. */
 export type CurrencyBalanceDto = {
   currency: string;
@@ -125,6 +203,22 @@ export type DepthLevelDto = {
   size_units: number;
   /** Cumulative size from the top of book down to this level. */
   cumulative_units: number;
+};
+
+export type DiscoveredBrokerAccountDto = {
+  connection_id: string;
+  provider: ProviderDto;
+  environment: BrokerEnvironment;
+  provider_account_id: string;
+  display_name?: string | null;
+  account_type: string;
+  account_status: string;
+  access_level: string;
+  opened_at_unix_ms?: number | null;
+  closed_at_unix_ms?: number | null;
+  accessible: boolean;
+  capabilities: Array<ConnectionCapabilityDto>;
+  discovered_at_unix_ms: number;
 };
 
 /** The class of failure, which decides what the operator can do about it. */
@@ -165,6 +259,17 @@ export type EventPayload = {
   data: PortfolioDto;
   topic: "PORTFOLIO";
 };
+
+export type ExecutionAuthorizationDto = {
+  connection_id: string;
+  provider_account_id: string;
+  mode: ExecutionAuthorizationModeDto;
+  authorization_revision: number;
+  changed_by: string;
+  changed_at_unix_ms: number;
+};
+
+export type ExecutionAuthorizationModeDto = "DISABLED" | "MANUAL_ALLOWED" | "AUTOMATED_ALLOWED";
 
 /** The immutable target of a read or a capital-affecting command. `broker_connection_id` is the application connection identity, never a credential. `account_id` is the canonical Vox account/binding identity. Provider broker-account identifiers are read-side metadata, not this key. */
 export type ExecutionScope = {
@@ -336,6 +441,8 @@ export type PositionDto = {
   broker_observed_at_unix_ms?: number | null;
 };
 
+export type PositionSideDto = "LONG" | "SHORT";
+
 export type PriceConventionDto = "SETTLEMENT_CURRENCY" | "POINTS";
 
 /** Stop loss and take profit are independent and both optional. */
@@ -408,6 +515,13 @@ export type ReplaceOrderRequest = {
   logical_request_id?: string | null;
   quantity_lots: number;
   price?: null | Decimal;
+  price_convention: PriceConventionDto;
+  /** Explicit broker margin acknowledgement. Never inferred by server. */
+  confirm_margin_trade: boolean;
+};
+
+export type RotateCredentialRequest = {
+  credential: string;
 };
 
 /** Everything the shell needs to answer "can I trade right now, and if not why". */
@@ -545,6 +659,8 @@ export type SubmitOrderRequest = {
   price?: null | Decimal;
   price_convention: PriceConventionDto;
   time_in_force: TimeInForceDto;
+  /** Explicit broker margin acknowledgement. Never inferred by server. */
+  confirm_margin_trade: boolean;
   protection?: null | ProtectionPlanDto;
 };
 
@@ -553,6 +669,11 @@ export type SubmitProtectionRequest = {
   scope: ExecutionScope;
   instrument_id: string;
   client_request_id: string;
+  quantity_lots: number;
+  position_side: PositionSideDto;
+  reference_price: Decimal;
+  price_convention: PriceConventionDto;
+  confirm_margin_trade: boolean;
   plan: ProtectionPlanDto;
 };
 
@@ -562,9 +683,15 @@ export type SubmitStopOrderRequest = {
   instrument_id: string;
   client_request_id: string;
   side: OrderSideDto;
+  /** Position protected by this stop. Order side alone is not authoritative proof. */
+  position_side: PositionSideDto;
   quantity_lots: number;
+  /** Exact current/reference price used by broker validation. */
+  reference_price: Decimal;
   trigger_price: Decimal;
   limit_price?: null | Decimal;
+  price_convention: PriceConventionDto;
+  confirm_margin_trade: boolean;
 };
 
 /** Why a subscription is in its current status. */

@@ -23,6 +23,7 @@ tracing.workspace = true
 utoipa.workspace = true
 uuid.workspace = true
 vox-domain = { path = "../vox-domain" }
+vox-connections = { path = "../vox-connections" }
 vox-runtime = { path = "../vox-runtime" }
 
 [dev-dependencies]
@@ -30,3 +31,4 @@ async-trait.workspace = true
 futures-util.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net"] }
 tokio-tungstenite.workspace = true
+tower = { version = "0.5", features = ["util"] }

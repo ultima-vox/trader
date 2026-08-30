@@ -101,6 +101,11 @@ impl Decimal {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Converts already-validated public decimal into canonical exact domain value.
+    pub fn to_fixed_point(&self) -> Result<FixedPoint, DecimalError> {
+        Ok(FixedPoint::from_total_nanos(parse_nanos(&self.0)?))
+    }
 }
 
 impl<'de> Deserialize<'de> for Decimal {

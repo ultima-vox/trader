@@ -1,10 +1,11 @@
 use std::fmt;
 
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 /// T-Invest bearer credential. Formatting never reveals its contents.
 #[derive(Clone, PartialEq, Eq)]
-pub struct SecretToken(Box<str>);
+pub struct SecretToken(Zeroizing<String>);
 
 impl SecretToken {
     pub fn new(value: impl Into<String>) -> Result<Self, SecretTokenError> {
@@ -15,7 +16,7 @@ impl SecretToken {
         if value.chars().any(char::is_whitespace) || value.chars().any(char::is_control) {
             return Err(SecretTokenError::InvalidBearerValue);
         }
-        Ok(Self(value.into_boxed_str()))
+        Ok(Self(Zeroizing::new(value)))
     }
 
     pub(crate) fn expose_secret(&self) -> &str {

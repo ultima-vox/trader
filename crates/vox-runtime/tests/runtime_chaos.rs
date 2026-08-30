@@ -18,8 +18,9 @@ use vox_runtime::{
     InMemoryMetrics, JournalState, MetricLabel, MetricName, MutationEvidence, MutationKind,
     MutationRecord, OpaqueRef, OperationFact, OperationsPage, OrderExecutionStatus, OrderFact,
     PortfolioFact, Provider, ReasonCode, ReconciliationConfig, RuntimeConfig, RuntimeCoordinator,
-    RuntimeEnvironment, RuntimeError, RuntimeExecutionCommand, RuntimeScope, RuntimeState,
-    RuntimeStore, SqliteRuntimeStore, StopExecutionStatus, StopFact, StreamKind, StreamSignal,
+    RuntimeEnvironment, RuntimeError, RuntimeExecutionCommand, RuntimeExecutionPurpose,
+    RuntimeScope, RuntimeState, RuntimeStore, SqliteRuntimeStore, StopExecutionStatus, StopFact,
+    StreamKind, StreamSignal,
 };
 
 #[derive(Clone)]
@@ -208,6 +209,7 @@ impl ExecutionPort for FakeExecution {
     async fn dispatch_once(
         &self,
         _: &RuntimeScope,
+        _: RuntimeExecutionPurpose,
         command: &RuntimeExecutionCommand,
         _: &MutationRecord,
     ) -> Result<ExecutionResult, BrokerPortError> {
@@ -410,6 +412,36 @@ async fn clean_startup_existing_position_and_read_only_authorization_are_safe()
             .await,
         Err(RuntimeError::ExecutionGateClosed)
     ));
+    harness.coordinator.shutdown().await?;
+    harness.cleanup();
+    Ok(())
+}
+
+#[tokio::test]
+async fn authorization_revocation_after_ready_blocks_dispatch_before_broker_call()
+-> Result<(), Box<dyn std::error::Error>> {
+    let harness = Harness::new(FakeSnapshot::flat("account-1"), [], true)?;
+    harness.coordinator.start().await?;
+    assert!(harness.coordinator.health().await.new_exposure_allowed);
+
+    harness
+        .credentials
+        .execution_authorized
+        .store(false, Ordering::SeqCst);
+    assert!(matches!(
+        harness
+            .coordinator
+            .dispatch(
+                regular_command("request-revoked"),
+                "request-revoked",
+                "correlation-revoked"
+            )
+            .await,
+        Err(RuntimeError::ExecutionGateClosed)
+    ));
+    assert_eq!(harness.execution.calls.load(Ordering::SeqCst), 0);
+    assert!(!harness.coordinator.health().await.new_exposure_allowed);
+
     harness.coordinator.shutdown().await?;
     harness.cleanup();
     Ok(())

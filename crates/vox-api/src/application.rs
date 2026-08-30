@@ -12,7 +12,13 @@ use crate::contract::account::{
     BrokerAccountDto, OperationsPageDto, OrderDto, PortfolioDto, PositionDto, ReconciliationDto,
     StopOrderDto,
 };
-use crate::contract::capability::CapabilitySet;
+use crate::contract::capability::{AttachedBackends, CapabilitySet};
+use crate::contract::connections::{
+    BindBrokerAccountRequest, BrokerAccountBindingDto, BrokerConnectionMetadataDto,
+    ChangeExecutionAuthorizationRequest, ConnectionDetailsDto, CreateBrokerConnectionRequest,
+    CredentialRotationResultDto, DiscoveredBrokerAccountDto, ExecutionAuthorizationDto,
+    RotateCredentialRequest,
+};
 use crate::contract::execution::{CancelOrderRequest, MutationReceiptDto, SubmitOrderRequest};
 use crate::contract::market::{
     CandleIntervalDto, CandlesDto, InstrumentSummaryDto, OrderBookDto, QuoteDto, SessionDto,
@@ -29,6 +35,13 @@ pub trait RuntimeQueries: Send + Sync {
     async fn health(&self) -> Result<RuntimeHealthDto, ApiError>;
     /// Scopes the operator may select. Empty until #17 bindings exist.
     async fn scopes(&self) -> Result<Vec<ExecutionScope>, ApiError>;
+
+    async fn capabilities(
+        &self,
+        _account_id: Option<&str>,
+    ) -> Result<Option<CapabilitySet>, ApiError> {
+        Ok(None)
+    }
 }
 
 /// The per-account read side, owned by #9 and #11.
@@ -128,6 +141,90 @@ pub trait MarketDataQueries: Send + Sync {
     ) -> Result<SessionDto, ApiError>;
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthenticatedActor {
+    pub user_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConnectionRequestContext {
+    pub actor: AuthenticatedActor,
+    pub correlation_id: String,
+    pub now_unix_ms: i64,
+}
+
+#[async_trait]
+pub trait ConnectionAdministration: Send + Sync {
+    async fn list_connections(
+        &self,
+        context: &ConnectionRequestContext,
+    ) -> Result<Vec<BrokerConnectionMetadataDto>, ApiError>;
+    async fn create_connection(
+        &self,
+        context: &ConnectionRequestContext,
+        request: CreateBrokerConnectionRequest,
+    ) -> Result<BrokerConnectionMetadataDto, ApiError>;
+    async fn connection_details(
+        &self,
+        context: &ConnectionRequestContext,
+        connection_id: &str,
+    ) -> Result<ConnectionDetailsDto, ApiError>;
+    async fn revalidate_connection(
+        &self,
+        context: &ConnectionRequestContext,
+        connection_id: &str,
+    ) -> Result<BrokerConnectionMetadataDto, ApiError>;
+    async fn rotate_credential(
+        &self,
+        context: &ConnectionRequestContext,
+        connection_id: &str,
+        request: RotateCredentialRequest,
+    ) -> Result<CredentialRotationResultDto, ApiError>;
+    async fn disable_connection(
+        &self,
+        context: &ConnectionRequestContext,
+        connection_id: &str,
+    ) -> Result<BrokerConnectionMetadataDto, ApiError>;
+    async fn delete_connection(
+        &self,
+        context: &ConnectionRequestContext,
+        connection_id: &str,
+    ) -> Result<(), ApiError>;
+    async fn accounts(
+        &self,
+        context: &ConnectionRequestContext,
+        connection_id: &str,
+    ) -> Result<Vec<DiscoveredBrokerAccountDto>, ApiError>;
+    async fn bindings(
+        &self,
+        context: &ConnectionRequestContext,
+        connection_id: &str,
+    ) -> Result<Vec<BrokerAccountBindingDto>, ApiError>;
+    async fn bind_account(
+        &self,
+        context: &ConnectionRequestContext,
+        connection_id: &str,
+        request: BindBrokerAccountRequest,
+    ) -> Result<BrokerAccountBindingDto, ApiError>;
+    async fn unbind_account(
+        &self,
+        context: &ConnectionRequestContext,
+        binding_id: &str,
+    ) -> Result<(), ApiError>;
+    async fn change_execution_authorization(
+        &self,
+        context: &ConnectionRequestContext,
+        connection_id: &str,
+        request: ChangeExecutionAuthorizationRequest,
+    ) -> Result<ExecutionAuthorizationDto, ApiError>;
+}
+
+/// Production process hook for invalidating runtime clients after credential lifecycle changes.
+#[async_trait]
+pub trait ConnectionLifecycleObserver: Send + Sync {
+    async fn connection_changed(&self, connection_id: &str);
+}
+
 /// What the process serves. A `None` port is a capability this deployment does not have.
 #[derive(Clone)]
 pub struct AppState {
@@ -137,11 +234,34 @@ pub struct AppState {
     pub accounts: Option<Arc<dyn AccountQueries>>,
     pub execution: Option<Arc<dyn ExecutionCommands>>,
     pub market_data: Option<Arc<dyn MarketDataQueries>>,
+    pub connections: Option<Arc<dyn ConnectionAdministration>>,
     /// Application-side live bus. Not a broker stream.
     pub events: ApplicationEventBus,
 }
 
 impl AppState {
+    /// Production composition with mandatory #17/#11/#10 ports attached atomically.
+    #[must_use]
+    pub fn production(
+        provider: ProviderDto,
+        environment: BrokerEnvironment,
+        runtime: Arc<dyn RuntimeQueries>,
+        accounts: Arc<dyn AccountQueries>,
+        execution: Arc<dyn ExecutionCommands>,
+        connections: Arc<dyn ConnectionAdministration>,
+    ) -> Self {
+        Self {
+            provider,
+            environment,
+            runtime: Some(runtime),
+            accounts: Some(accounts),
+            execution: Some(execution),
+            market_data: None,
+            connections: Some(connections),
+            events: ApplicationEventBus::new(),
+        }
+    }
+
     /// A process with no broker runtime attached: it can describe itself and nothing else.
     #[must_use]
     pub fn detached(provider: ProviderDto, environment: BrokerEnvironment) -> Self {
@@ -152,6 +272,7 @@ impl AppState {
             accounts: None,
             execution: None,
             market_data: None,
+            connections: None,
             events: ApplicationEventBus::new(),
         }
     }
@@ -196,15 +317,24 @@ impl AppState {
     }
 
     #[must_use]
+    pub fn with_connections(mut self, connections: Arc<dyn ConnectionAdministration>) -> Self {
+        self.connections = Some(connections);
+        self
+    }
+
+    #[must_use]
     pub fn capabilities(&self, account_id: Option<String>) -> CapabilitySet {
         CapabilitySet::without_backend_owners(
             self.provider,
             self.environment,
             account_id,
-            self.runtime.is_some(),
-            self.accounts.is_some(),
-            self.execution.is_some(),
-            self.market_data.is_some(),
+            AttachedBackends {
+                runtime: self.runtime.is_some(),
+                accounts: self.accounts.is_some(),
+                execution: self.execution.is_some(),
+                market_data: self.market_data.is_some(),
+                connections: self.connections.is_some(),
+            },
         )
     }
 
@@ -230,6 +360,12 @@ impl AppState {
         self.execution
             .as_ref()
             .ok_or_else(|| ApiError::capability_unavailable("ORDER_EXECUTION", "#10"))
+    }
+
+    pub(crate) fn connections_port(&self) -> Result<&Arc<dyn ConnectionAdministration>, ApiError> {
+        self.connections
+            .as_ref()
+            .ok_or_else(|| ApiError::capability_unavailable("BROKER_CONNECTIONS", "#17"))
     }
 }
 

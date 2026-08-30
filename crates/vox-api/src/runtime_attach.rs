@@ -186,7 +186,10 @@ pub fn runtime_scope_from_binding(
         scope.environment.into(),
         binding.broker_account_id().to_owned(),
         connection_ref,
-        opaque_credential_ref,
+        binding
+            .credential_ref()
+            .cloned()
+            .unwrap_or(opaque_credential_ref),
     )
     .map_err(|error| {
         ApiError::new(
@@ -214,10 +217,17 @@ where
             .accounts(&runtime_scope)
             .await
             .map_err(map_broker_error)?;
-        accounts
+        let matching = accounts
             .iter()
-            .map(|fact| BrokerAccountDto::from_bound_fact(&binding, fact))
-            .collect()
+            .find(|fact| fact.account_id == binding.broker_account_id())
+            .ok_or_else(|| {
+                ApiError::new(
+                    ErrorCategory::Conflict,
+                    "BROKER_ACCOUNT_ACCESS_CHANGED",
+                    "bound broker account is absent from authoritative account discovery",
+                )
+            })?;
+        Ok(vec![BrokerAccountDto::from_bound_fact(&binding, matching)?])
     }
 
     async fn portfolio(&self, scope: &ExecutionScope) -> Result<PortfolioDto, ApiError> {
@@ -352,6 +362,11 @@ fn map_binding_error(error: BindingError) -> ApiError {
         | BindingError::DuplicateAccount(_) => ApiError::new(
             ErrorCategory::Validation,
             "INVALID_ACCOUNT_BINDING",
+            error.to_string(),
+        ),
+        BindingError::Unavailable => ApiError::new(
+            ErrorCategory::Transient,
+            "ACCOUNT_BINDING_UNAVAILABLE",
             error.to_string(),
         ),
     }

@@ -88,6 +88,655 @@
         }
       }
     },
+    "/api/v1/broker-bindings/{binding_id}": {
+      "delete": {
+        "tags": [
+          "connections"
+        ],
+        "operationId": "unbind_broker_account",
+        "parameters": [
+          {
+            "name": "binding_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/broker-connections": {
+      "get": {
+        "tags": [
+          "connections"
+        ],
+        "operationId": "broker_connections",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BrokerConnectionMetadataDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "connections"
+        ],
+        "operationId": "create_broker_connection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBrokerConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrokerConnectionMetadataDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/broker-connections/{connection_id}": {
+      "get": {
+        "tags": [
+          "connections"
+        ],
+        "operationId": "broker_connection_details",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionDetailsDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "connections"
+        ],
+        "operationId": "delete_broker_connection",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/broker-connections/{connection_id}/accounts": {
+      "get": {
+        "tags": [
+          "connections"
+        ],
+        "operationId": "discovered_broker_accounts",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DiscoveredBrokerAccountDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/broker-connections/{connection_id}/bindings": {
+      "get": {
+        "tags": [
+          "connections"
+        ],
+        "operationId": "broker_account_bindings",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BrokerAccountBindingDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "connections"
+        ],
+        "operationId": "bind_broker_account",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BindBrokerAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrokerAccountBindingDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/broker-connections/{connection_id}/credential": {
+      "put": {
+        "tags": [
+          "connections"
+        ],
+        "operationId": "rotate_broker_credential",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateCredentialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialRotationResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/broker-connections/{connection_id}/disable": {
+      "post": {
+        "tags": [
+          "connections"
+        ],
+        "operationId": "disable_broker_connection",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrokerConnectionMetadataDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/broker-connections/{connection_id}/execution-authorization": {
+      "put": {
+        "tags": [
+          "connections"
+        ],
+        "operationId": "change_execution_authorization",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeExecutionAuthorizationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionAuthorizationDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/broker-connections/{connection_id}/validate": {
+      "post": {
+        "tags": [
+          "connections"
+        ],
+        "operationId": "validate_broker_connection",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrokerConnectionMetadataDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/capabilities": {
       "get": {
         "tags": [
@@ -1560,6 +2209,66 @@
           }
         }
       },
+      "BindBrokerAccountRequest": {
+        "type": "object",
+        "required": [
+          "provider_account_id",
+          "account_id"
+        ],
+        "properties": {
+          "provider_account_id": {
+            "type": "string"
+          },
+          "account_id": {
+            "type": "string"
+          }
+        }
+      },
+      "BrokerAccountBindingDto": {
+        "type": "object",
+        "required": [
+          "binding_id",
+          "connection_id",
+          "provider",
+          "environment",
+          "provider_account_id",
+          "account_id",
+          "enabled",
+          "created_at_unix_ms",
+          "updated_at_unix_ms"
+        ],
+        "properties": {
+          "binding_id": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ProviderDto"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/BrokerEnvironment"
+          },
+          "provider_account_id": {
+            "type": "string"
+          },
+          "account_id": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "created_at_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updated_at_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "BrokerAccountDto": {
         "type": "object",
         "description": "A broker account discovered through a connection.",
@@ -1584,6 +2293,66 @@
           "accessible": {
             "type": "boolean",
             "description": "Whether the runtime can currently read this account."
+          }
+        }
+      },
+      "BrokerConnectionMetadataDto": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "provider",
+          "environment",
+          "display_label",
+          "enabled",
+          "credential_status",
+          "credential_class",
+          "credential_scope",
+          "capabilities",
+          "health",
+          "created_at_unix_ms",
+          "updated_at_unix_ms"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ProviderDto"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/BrokerEnvironment"
+          },
+          "display_label": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "credential_status": {
+            "$ref": "#/components/schemas/CredentialStatusDto"
+          },
+          "credential_class": {
+            "$ref": "#/components/schemas/CredentialClassDto"
+          },
+          "credential_scope": {
+            "$ref": "#/components/schemas/CredentialScopeDto"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectionCapabilityDto"
+            }
+          },
+          "health": {
+            "$ref": "#/components/schemas/ConnectionHealthDto"
+          },
+          "created_at_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updated_at_unix_ms": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -1818,6 +2587,28 @@
           }
         }
       },
+      "ChangeExecutionAuthorizationRequest": {
+        "type": "object",
+        "required": [
+          "provider_account_id",
+          "mode",
+          "expected_authorization_revision"
+        ],
+        "properties": {
+          "provider_account_id": {
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExecutionAuthorizationModeDto"
+          },
+          "expected_authorization_revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Compare-and-swap token returned by the latest authorization read.",
+            "minimum": 0
+          }
+        }
+      },
       "ClientMessage": {
         "oneOf": [
           {
@@ -1913,6 +2704,177 @@
         ],
         "description": "What a client may send."
       },
+      "ConnectionCapabilityDto": {
+        "type": "string",
+        "enum": [
+          "ACCOUNT_DISCOVERY",
+          "PORTFOLIO_READ",
+          "POSITIONS_READ",
+          "OPERATIONS_READ",
+          "STREAM_HEALTH",
+          "SANDBOX_ORDERS",
+          "PRODUCTION_ORDERS_PROVIDER_ALLOWED"
+        ]
+      },
+      "ConnectionDetailsDto": {
+        "type": "object",
+        "required": [
+          "connection",
+          "accounts",
+          "bindings",
+          "execution_authorizations"
+        ],
+        "properties": {
+          "connection": {
+            "$ref": "#/components/schemas/BrokerConnectionMetadataDto"
+          },
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiscoveredBrokerAccountDto"
+            }
+          },
+          "bindings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrokerAccountBindingDto"
+            }
+          },
+          "execution_authorizations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExecutionAuthorizationDto"
+            }
+          }
+        }
+      },
+      "ConnectionHealthDto": {
+        "type": "object",
+        "required": [
+          "state",
+          "reason_code",
+          "retryable"
+        ],
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/ConnectionHealthStateDto"
+          },
+          "checked_at_unix_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "reason_code": {
+            "$ref": "#/components/schemas/ConnectionHealthReasonDto"
+          },
+          "safe_detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConnectionHealthReasonDto": {
+        "type": "string",
+        "enum": [
+          "NONE",
+          "INVALID_CREDENTIAL",
+          "EXPIRED_OR_INACTIVE",
+          "PERMISSION_DENIED",
+          "WRONG_ENVIRONMENT",
+          "PROVIDER_UNAVAILABLE",
+          "ACCOUNT_ACCESS_CHANGED",
+          "DISABLED_BY_OPERATOR"
+        ]
+      },
+      "ConnectionHealthStateDto": {
+        "type": "string",
+        "enum": [
+          "UNKNOWN",
+          "VALIDATING",
+          "HEALTHY",
+          "INVALID_CREDENTIAL",
+          "INSUFFICIENT_PERMISSION",
+          "PROVIDER_UNAVAILABLE",
+          "ACCOUNT_ACCESS_CHANGED",
+          "DISABLED"
+        ]
+      },
+      "CreateBrokerConnectionRequest": {
+        "type": "object",
+        "required": [
+          "provider",
+          "environment",
+          "display_label",
+          "credential"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderDto"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/BrokerEnvironment"
+          },
+          "display_label": {
+            "type": "string"
+          },
+          "credential": {
+            "type": "string",
+            "writeOnly": true
+          }
+        }
+      },
+      "CredentialClassDto": {
+        "type": "string",
+        "enum": [
+          "UNKNOWN",
+          "READ_ONLY",
+          "FULL_ACCESS",
+          "TRANSFER_ACCESS",
+          "SANDBOX"
+        ]
+      },
+      "CredentialRotationResultDto": {
+        "type": "object",
+        "required": [
+          "connection",
+          "reconnect_required"
+        ],
+        "properties": {
+          "connection": {
+            "$ref": "#/components/schemas/BrokerConnectionMetadataDto"
+          },
+          "reconnect_required": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CredentialScopeDto": {
+        "type": "string",
+        "enum": [
+          "NOT_CONFIRMED",
+          "SINGLE_ACCOUNT_RESTRICTED",
+          "ALL_ACCESSIBLE_ACCOUNTS"
+        ]
+      },
+      "CredentialStatusDto": {
+        "type": "string",
+        "enum": [
+          "PENDING_VALIDATION",
+          "VALID",
+          "INVALID",
+          "EXPIRED_OR_INACTIVE",
+          "PENDING_DISABLE",
+          "DISABLED",
+          "PENDING_DELETE"
+        ]
+      },
       "CurrencyBalanceDto": {
         "type": "object",
         "description": "One currency balance, exact.",
@@ -1957,6 +2919,77 @@
             "type": "integer",
             "format": "int64",
             "description": "Cumulative size from the top of book down to this level."
+          }
+        }
+      },
+      "DiscoveredBrokerAccountDto": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "provider",
+          "environment",
+          "provider_account_id",
+          "account_type",
+          "account_status",
+          "access_level",
+          "accessible",
+          "capabilities",
+          "discovered_at_unix_ms"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ProviderDto"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/BrokerEnvironment"
+          },
+          "provider_account_id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "account_type": {
+            "type": "string"
+          },
+          "account_status": {
+            "type": "string"
+          },
+          "access_level": {
+            "type": "string"
+          },
+          "opened_at_unix_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "closed_at_unix_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "accessible": {
+            "type": "boolean"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectionCapabilityDto"
+            }
+          },
+          "discovered_at_unix_ms": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -2193,6 +3226,48 @@
           }
         ],
         "description": "The payload of an event, keyed by topic."
+      },
+      "ExecutionAuthorizationDto": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "provider_account_id",
+          "mode",
+          "authorization_revision",
+          "changed_by",
+          "changed_at_unix_ms"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "provider_account_id": {
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExecutionAuthorizationModeDto"
+          },
+          "authorization_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "changed_by": {
+            "type": "string"
+          },
+          "changed_at_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ExecutionAuthorizationModeDto": {
+        "type": "string",
+        "enum": [
+          "DISABLED",
+          "MANUAL_ALLOWED",
+          "AUTOMATED_ALLOWED"
+        ]
       },
       "ExecutionScope": {
         "type": "object",
@@ -2800,6 +3875,13 @@
           }
         }
       },
+      "PositionSideDto": {
+        "type": "string",
+        "enum": [
+          "LONG",
+          "SHORT"
+        ]
+      },
       "PriceConventionDto": {
         "type": "string",
         "enum": [
@@ -3161,7 +4243,9 @@
           "scope",
           "instrument_id",
           "client_request_id",
-          "quantity_lots"
+          "quantity_lots",
+          "price_convention",
+          "confirm_margin_trade"
         ],
         "properties": {
           "scope": {
@@ -3198,6 +4282,25 @@
                 "$ref": "#/components/schemas/Decimal"
               }
             ]
+          },
+          "price_convention": {
+            "$ref": "#/components/schemas/PriceConventionDto"
+          },
+          "confirm_margin_trade": {
+            "type": "boolean",
+            "description": "Explicit broker margin acknowledgement. Never inferred by server."
+          }
+        }
+      },
+      "RotateCredentialRequest": {
+        "type": "object",
+        "required": [
+          "credential"
+        ],
+        "properties": {
+          "credential": {
+            "type": "string",
+            "writeOnly": true
           }
         }
       },
@@ -3762,7 +4865,8 @@
           "order_type",
           "quantity_lots",
           "price_convention",
-          "time_in_force"
+          "time_in_force",
+          "confirm_margin_trade"
         ],
         "properties": {
           "scope": {
@@ -3805,6 +4909,10 @@
           "time_in_force": {
             "$ref": "#/components/schemas/TimeInForceDto"
           },
+          "confirm_margin_trade": {
+            "type": "boolean",
+            "description": "Explicit broker margin acknowledgement. Never inferred by server."
+          },
           "protection": {
             "oneOf": [
               {
@@ -3824,6 +4932,11 @@
           "scope",
           "instrument_id",
           "client_request_id",
+          "quantity_lots",
+          "position_side",
+          "reference_price",
+          "price_convention",
+          "confirm_margin_trade",
           "plan"
         ],
         "properties": {
@@ -3835,6 +4948,22 @@
           },
           "client_request_id": {
             "type": "string"
+          },
+          "quantity_lots": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "position_side": {
+            "$ref": "#/components/schemas/PositionSideDto"
+          },
+          "reference_price": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "price_convention": {
+            "$ref": "#/components/schemas/PriceConventionDto"
+          },
+          "confirm_margin_trade": {
+            "type": "boolean"
           },
           "plan": {
             "$ref": "#/components/schemas/ProtectionPlanDto"
@@ -3849,8 +4978,12 @@
           "instrument_id",
           "client_request_id",
           "side",
+          "position_side",
           "quantity_lots",
-          "trigger_price"
+          "reference_price",
+          "trigger_price",
+          "price_convention",
+          "confirm_margin_trade"
         ],
         "properties": {
           "scope": {
@@ -3865,9 +4998,17 @@
           "side": {
             "$ref": "#/components/schemas/OrderSideDto"
           },
+          "position_side": {
+            "$ref": "#/components/schemas/PositionSideDto",
+            "description": "Position protected by this stop. Order side alone is not authoritative proof."
+          },
           "quantity_lots": {
             "type": "integer",
             "format": "int64"
+          },
+          "reference_price": {
+            "$ref": "#/components/schemas/Decimal",
+            "description": "Exact current/reference price used by broker validation."
           },
           "trigger_price": {
             "$ref": "#/components/schemas/Decimal"
@@ -3881,6 +5022,12 @@
                 "$ref": "#/components/schemas/Decimal"
               }
             ]
+          },
+          "price_convention": {
+            "$ref": "#/components/schemas/PriceConventionDto"
+          },
+          "confirm_margin_trade": {
+            "type": "boolean"
           }
         }
       },
@@ -4072,6 +5219,10 @@
     {
       "name": "execution",
       "description": "Capital-affecting commands"
+    },
+    {
+      "name": "connections",
+      "description": "Broker connections, accounts, bindings and execution authorization"
     },
     {
       "name": "market",

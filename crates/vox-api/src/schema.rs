@@ -14,6 +14,14 @@ use crate::contract::account::{
     StopExecutionStatusDto, StopOrderDto,
 };
 use crate::contract::capability::{Capability, CapabilitySet, UnavailableCapability};
+use crate::contract::connections::{
+    BindBrokerAccountRequest, BrokerAccountBindingDto, BrokerConnectionMetadataDto,
+    ChangeExecutionAuthorizationRequest, ConnectionCapabilityDto, ConnectionDetailsDto,
+    ConnectionHealthDto, ConnectionHealthReasonDto, ConnectionHealthStateDto,
+    CreateBrokerConnectionRequest, CredentialClassDto, CredentialRotationResultDto,
+    CredentialScopeDto, CredentialStatusDto, DiscoveredBrokerAccountDto, ExecutionAuthorizationDto,
+    ExecutionAuthorizationModeDto, RotateCredentialRequest,
+};
 use crate::contract::execution::{
     CancelOrderRequest, JournalStateDto, MutationDecisionDto, MutationKindDto, MutationReceiptDto,
     OrderSideDto, OrderTypeDto, PriceConventionDto, ProtectionPlanDto, ProtectionStateDto,
@@ -50,6 +58,18 @@ use crate::transport::http;
     paths(
         http::system_health,
         http::capabilities,
+        http::broker_connections,
+        http::create_broker_connection,
+        http::broker_connection_details,
+        http::validate_broker_connection,
+        http::rotate_broker_credential,
+        http::disable_broker_connection,
+        http::delete_broker_connection,
+        http::discovered_broker_accounts,
+        http::broker_account_bindings,
+        http::bind_broker_account,
+        http::unbind_broker_account,
+        http::change_execution_authorization,
         http::runtime_health,
         http::runtime_scopes,
         http::reconciliation,
@@ -88,6 +108,13 @@ use crate::transport::http;
         PriceConventionDto, ProtectionPlanDto, ProtectionStateDto, TrailingDistanceDto,
         TrailingModeDto, Decimal,
         Capability, CapabilitySet, UnavailableCapability,
+        BrokerConnectionMetadataDto, ConnectionDetailsDto, ConnectionHealthDto,
+        ConnectionHealthStateDto, ConnectionHealthReasonDto, ConnectionCapabilityDto,
+        CredentialStatusDto, CredentialClassDto, CredentialScopeDto,
+        CreateBrokerConnectionRequest, RotateCredentialRequest, CredentialRotationResultDto,
+        DiscoveredBrokerAccountDto, BrokerAccountBindingDto, BindBrokerAccountRequest,
+        ExecutionAuthorizationModeDto, ChangeExecutionAuthorizationRequest,
+        ExecutionAuthorizationDto,
         InstrumentIdentityDto, InstrumentSummaryDto, MarketFreshness, TradingStatusDto, SessionDto,
         QuoteDto, DepthLevelDto, OrderBookDto, TradeDirectionDto, TradeTickDto, CandleIntervalDto,
         CandleIntervalCapability, CandleStateDto, CandleDto, CandlesDto,
@@ -98,6 +125,7 @@ use crate::transport::http;
         (name = "runtime", description = "Runtime state, readiness and reconciliation"),
         (name = "accounts", description = "Account-scoped read side"),
         (name = "execution", description = "Capital-affecting commands"),
+        (name = "connections", description = "Broker connections, accounts, bindings and execution authorization"),
         (name = "market", description = "Provider-neutral market data, projected over the #8 adapter layer"),
     )
 )]
@@ -175,6 +203,32 @@ mod tests {
                 !json.contains(forbidden),
                 "a secret-shaped field is in the public schema: {forbidden}"
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn credential_material_is_write_only_and_absent_from_responses() -> Result<(), serde_json::Error>
+    {
+        let doc: serde_json::Value = serde_json::from_str(&openapi_json()?)?;
+        let schemas = &doc["components"]["schemas"];
+        assert_eq!(
+            schemas["CreateBrokerConnectionRequest"]["properties"]["credential"]["writeOnly"],
+            true
+        );
+        assert_eq!(
+            schemas["RotateCredentialRequest"]["properties"]["credential"]["writeOnly"],
+            true
+        );
+        let response =
+            serde_json::to_string(&schemas["BrokerConnectionMetadataDto"])?.to_ascii_lowercase();
+        for forbidden in [
+            "credential_ref",
+            "credential_fingerprint",
+            "ciphertext",
+            "token",
+        ] {
+            assert!(!response.contains(forbidden), "response leaks {forbidden}");
         }
         Ok(())
     }

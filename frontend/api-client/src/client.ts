@@ -29,10 +29,16 @@ export class VoxClient {
   }
 
   private async request<R>(method: string, path: string, query?: Record<string, unknown>, body?: unknown): Promise<R> {
-    const url = new URL(this.baseUrl + path, this.baseUrl || "http://localhost");
+    let resolvedPath = path;
+    const remainingQuery: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(query ?? {})) {
-      if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+      if (value === undefined || value === null) continue;
+      const marker = `{${key}}`;
+      if (resolvedPath.includes(marker)) resolvedPath = resolvedPath.replaceAll(marker, encodeURIComponent(String(value)));
+      else remainingQuery[key] = value;
     }
+    const url = new URL(this.baseUrl + resolvedPath, this.baseUrl || "http://localhost");
+    for (const [key, value] of Object.entries(remainingQuery)) url.searchParams.set(key, String(value));
     const init: RequestInit = { method };
     if (body !== undefined) {
       init.headers = { "content-type": "application/json" };
@@ -48,6 +54,54 @@ export class VoxClient {
   /** Accounts discovered through the connection. */
   accounts(query: { account_id: string; broker_connection_id: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<Array<T.BrokerAccountDto>> {
     return this.request("GET", "/api/v1/accounts", query);
+  }
+
+  deleteBrokerBindingsBinding_id(query: { binding_id: string }): Promise<void> {
+    return this.request("DELETE", "/api/v1/broker-bindings/{binding_id}", query);
+  }
+
+  brokerConnections(): Promise<Array<T.BrokerConnectionMetadataDto>> {
+    return this.request("GET", "/api/v1/broker-connections", undefined);
+  }
+
+  postBrokerConnections(body: T.CreateBrokerConnectionRequest): Promise<T.BrokerConnectionMetadataDto> {
+    return this.request("POST", "/api/v1/broker-connections", undefined, body);
+  }
+
+  deleteBrokerConnectionsConnection_id(query: { connection_id: string }): Promise<void> {
+    return this.request("DELETE", "/api/v1/broker-connections/{connection_id}", query);
+  }
+
+  brokerConnectionsConnection_id(query: { connection_id: string }): Promise<T.ConnectionDetailsDto> {
+    return this.request("GET", "/api/v1/broker-connections/{connection_id}", query);
+  }
+
+  brokerConnectionsConnection_idAccounts(query: { connection_id: string }): Promise<Array<T.DiscoveredBrokerAccountDto>> {
+    return this.request("GET", "/api/v1/broker-connections/{connection_id}/accounts", query);
+  }
+
+  brokerConnectionsConnection_idBindings(query: { connection_id: string }): Promise<Array<T.BrokerAccountBindingDto>> {
+    return this.request("GET", "/api/v1/broker-connections/{connection_id}/bindings", query);
+  }
+
+  postBrokerConnectionsConnection_idBindings(query: { connection_id: string }, body: T.BindBrokerAccountRequest): Promise<T.BrokerAccountBindingDto> {
+    return this.request("POST", "/api/v1/broker-connections/{connection_id}/bindings", query, body);
+  }
+
+  putBrokerConnectionsConnection_idCredential(query: { connection_id: string }, body: T.RotateCredentialRequest): Promise<T.CredentialRotationResultDto> {
+    return this.request("PUT", "/api/v1/broker-connections/{connection_id}/credential", query, body);
+  }
+
+  postBrokerConnectionsConnection_idDisable(query: { connection_id: string }): Promise<T.BrokerConnectionMetadataDto> {
+    return this.request("POST", "/api/v1/broker-connections/{connection_id}/disable", query);
+  }
+
+  putBrokerConnectionsConnection_idExecutionAuthorization(query: { connection_id: string }, body: T.ChangeExecutionAuthorizationRequest): Promise<T.ExecutionAuthorizationDto> {
+    return this.request("PUT", "/api/v1/broker-connections/{connection_id}/execution-authorization", query, body);
+  }
+
+  postBrokerConnectionsConnection_idValidate(query: { connection_id: string }): Promise<T.BrokerConnectionMetadataDto> {
+    return this.request("POST", "/api/v1/broker-connections/{connection_id}/validate", query);
   }
 
   /** What this deployment can actually do. */

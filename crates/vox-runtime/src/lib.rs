@@ -4,6 +4,7 @@
 //! mutation uncertainty, typed identity links, fencing epochs, checkpoints,
 //! bounded dedupe evidence, audit and derived readiness observations.
 
+pub mod connection_credentials;
 pub mod coordinator;
 pub mod metrics;
 pub mod model;
@@ -12,6 +13,7 @@ pub mod ports;
 pub mod reconcile;
 pub mod store;
 
+pub use connection_credentials::StoredCredentialResolver;
 pub use coordinator::{DispatchReceipt, RuntimeConfig, RuntimeCoordinator, RuntimeError};
 pub use metrics::{InMemoryMetrics, MetricValue};
 pub use model::*;

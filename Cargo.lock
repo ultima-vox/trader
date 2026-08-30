@@ -2958,12 +2958,29 @@ dependencies = [
  "time",
  "tokio",
  "tokio-tungstenite 0.28.0",
+ "tower",
  "tower-http",
  "tracing",
  "utoipa",
  "uuid",
+ "vox-connections",
  "vox-domain",
  "vox-runtime",
+]
+
+[[package]]
+name = "vox-connections"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "ring",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -2971,15 +2988,24 @@ name = "vox-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
+ "ring",
+ "rusqlite",
+ "serde_json",
+ "subtle",
  "thiserror",
  "time",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "vox-api",
+ "vox-connections",
  "vox-domain",
  "vox-nautilus",
+ "vox-runtime",
  "vox-tinvest",
 ]
 
@@ -3017,6 +3043,7 @@ dependencies = [
  "tonic",
  "tracing",
  "uuid",
+ "vox-connections",
  "vox-domain",
  "vox-tinvest",
 ]
@@ -3045,7 +3072,10 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "vox-connections",
  "vox-domain",
+ "vox-runtime",
+ "zeroize",
 ]
 
 [[package]]
