@@ -1,8 +1,8 @@
 use thiserror::Error;
 
 use crate::model::{
-    BrokerLotLimits, LotLimit, RiskDecision, RiskOutcome, RiskPolicySet, RiskReason,
-    RiskReasonCode, RiskRequest, RiskState,
+    BuyLotLimit, RiskDecision, RiskOutcome, RiskPolicySet, RiskReason, RiskReasonCode, RiskRequest,
+    RiskState, SellLotLimit,
 };
 
 pub struct RiskEngine;
@@ -341,22 +341,23 @@ fn provider_limit(
         return Ok(None);
     }
     let selected = if request.requested_delta_lots > 0 {
-        if wants_margin {
+        let limit = if wants_margin {
             limits.buy_margin
         } else {
             limits.buy_own
-        }
+        };
+        return limit
+            .map(|limit| selected_buy_limit(limit, request.is_market_order))
+            .transpose();
     } else if wants_margin {
         limits.sell_margin
     } else {
         limits.sell_own
     };
-    selected
-        .map(|limit| selected_lot_limit(limit, request.is_market_order))
-        .transpose()
+    selected.map(selected_sell_limit).transpose()
 }
 
-fn selected_lot_limit(limit: LotLimit, market: bool) -> Result<i64, RiskEngineError> {
+fn selected_buy_limit(limit: BuyLotLimit, market: bool) -> Result<i64, RiskEngineError> {
     let value = if market {
         limit.max_market_lots
     } else {
@@ -364,7 +365,17 @@ fn selected_lot_limit(limit: LotLimit, market: bool) -> Result<i64, RiskEngineEr
     };
     if value < 0 {
         return Err(RiskEngineError::InvalidProviderFact(
-            "broker max-lots value cannot be negative",
+            "broker buy max-lots value cannot be negative",
+        ));
+    }
+    Ok(value)
+}
+
+fn selected_sell_limit(limit: SellLotLimit) -> Result<i64, RiskEngineError> {
+    let value = limit.max_lots;
+    if value < 0 {
+        return Err(RiskEngineError::InvalidProviderFact(
+            "broker sell max-lots value cannot be negative",
         ));
     }
     Ok(value)
@@ -420,7 +431,9 @@ pub enum RiskEngineError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{BrokerLotLimits, LotLimit, RiskSnapshot, RiskSource, RiskValidityContext};
+    use crate::model::{
+        BrokerLotLimits, BuyLotLimit, RiskSnapshot, RiskSource, RiskValidityContext, SellLotLimit,
+    };
 
     fn request(base: i64, delta: i64) -> RiskRequest {
         RiskRequest {
@@ -450,22 +463,16 @@ mod tests {
                 instrument_exposure_nanos: 0,
                 broker_daily_pnl_nanos: None,
                 broker_lot_limits: Some(BrokerLotLimits {
-                    buy_own: Some(LotLimit {
+                    buy_own: Some(BuyLotLimit {
                         max_lots: 100,
                         max_market_lots: 90,
                     }),
-                    buy_margin: Some(LotLimit {
+                    buy_margin: Some(BuyLotLimit {
                         max_lots: 200,
                         max_market_lots: 180,
                     }),
-                    sell_own: Some(LotLimit {
-                        max_lots: 100,
-                        max_market_lots: 90,
-                    }),
-                    sell_margin: Some(LotLimit {
-                        max_lots: 200,
-                        max_market_lots: 180,
-                    }),
+                    sell_own: Some(SellLotLimit { max_lots: 100 }),
+                    sell_margin: Some(SellLotLimit { max_lots: 200 }),
                 }),
                 margin: None,
                 validity: RiskValidityContext {
