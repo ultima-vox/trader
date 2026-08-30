@@ -154,7 +154,9 @@ impl RiskEngine {
                 .gross_exposure_nanos
                 .checked_add(checked_abs(request.requested_notional_nanos)?)
                 .ok_or(RiskEngineError::ArithmeticOverflow)?;
-            if projected > positive_limit(max_gross, "max_gross_exposure_nanos")? && increasing_lots > 0 {
+            if projected > positive_limit(max_gross, "max_gross_exposure_nanos")?
+                && increasing_lots > 0
+            {
                 return Ok(reject(
                     policy,
                     request,
@@ -171,7 +173,9 @@ impl RiskEngine {
                 .net_exposure_nanos
                 .checked_add(request.requested_notional_nanos)
                 .ok_or(RiskEngineError::ArithmeticOverflow)?;
-            if checked_abs(projected)? > positive_limit(max_net, "max_net_exposure_abs_nanos")? && increasing_lots > 0 {
+            if checked_abs(projected)? > positive_limit(max_net, "max_net_exposure_abs_nanos")?
+                && increasing_lots > 0
+            {
                 return Ok(reject(
                     policy,
                     request,
@@ -188,7 +192,10 @@ impl RiskEngine {
                 .instrument_exposure_nanos
                 .checked_add(request.requested_notional_nanos)
                 .ok_or(RiskEngineError::ArithmeticOverflow)?;
-            if checked_abs(projected)? > positive_limit(max_instrument, "max_instrument_exposure_nanos")? && increasing_lots > 0 {
+            if checked_abs(projected)?
+                > positive_limit(max_instrument, "max_instrument_exposure_nanos")?
+                && increasing_lots > 0
+            {
                 return Ok(reject(
                     policy,
                     request,
@@ -382,7 +389,9 @@ fn selected_sell_limit(limit: SellLotLimit) -> Result<i64, RiskEngineError> {
 }
 
 fn checked_abs(value: i128) -> Result<i128, RiskEngineError> {
-    value.checked_abs().ok_or(RiskEngineError::ArithmeticOverflow)
+    value
+        .checked_abs()
+        .ok_or(RiskEngineError::ArithmeticOverflow)
 }
 
 fn positive_limit(value: i128, field: &'static str) -> Result<i128, RiskEngineError> {
