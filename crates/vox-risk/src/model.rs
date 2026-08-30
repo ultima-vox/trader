@@ -30,6 +30,16 @@ pub enum RiskSource {
     EmergencyOperator,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RiskActionKind {
+    DirectionalOrder,
+    ReplaceDirectionalOrder,
+    CancelOrder,
+    ProtectionMaintenance,
+    CancelProtection,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RiskReasonCode {
@@ -149,7 +159,8 @@ pub struct RiskRequest {
     pub instrument_id: String,
     pub strategy_id: Option<String>,
     pub source: RiskSource,
-    /// Signed lots: buy is positive, sell is negative.
+    pub action: RiskActionKind,
+    /// Signed lots: buy is positive, sell is negative. Non-directional maintenance actions use 0.
     pub requested_delta_lots: i64,
     pub requested_notional_nanos: i128,
     pub is_market_order: bool,
