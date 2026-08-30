@@ -15,6 +15,7 @@ use vox_runtime::{
     BrokerAccount, BrokerEvent, BrokerEventClass, BrokerIdentityLinks, BrokerMethod,
     BrokerPortError, BrokerReadPort, BrokerResultClass, CredentialResolution,
     CredentialResolverPort, ExecutionPort, ExecutionResult, ExecutionStreamPort, HealthReadPort,
+    RiskAdmission, RiskAdmissionError, RiskAdmissionPort,
     InMemoryMetrics, JournalState, MetricLabel, MetricName, MutationEvidence, MutationKind,
     MutationRecord, OpaqueRef, OperationFact, OperationsPage, OrderExecutionStatus, OrderFact,
     PortfolioFact, Provider, ReasonCode, ReconciliationConfig, RuntimeConfig, RuntimeCoordinator,
@@ -277,6 +278,34 @@ impl ExecutionStreamPort for FakeStreams {
     async fn disconnect(&self) -> Result<(), BrokerPortError> {
         self.disconnects.fetch_add(1, Ordering::SeqCst);
         Ok(())
+    }
+}
+
+struct FakeRiskAdmission;
+
+#[async_trait]
+impl RiskAdmissionPort for FakeRiskAdmission {
+    async fn admit(
+        &self,
+        _: &RuntimeScope,
+        _: vox_runtime::RuntimeExecutionPurpose,
+        command: &RuntimeExecutionCommand,
+        logical_request_id: &str,
+    ) -> Result<RiskAdmission, RiskAdmissionError> {
+        let approved_delta_lots = match command {
+            RuntimeExecutionCommand::RegularOrder(command)
+            | RuntimeExecutionCommand::PostOrderAsync(command) => command.quantity_lots,
+            RuntimeExecutionCommand::ReplaceOrder(command) => command.quantity_lots,
+            RuntimeExecutionCommand::PostStopOrder(command)
+            | RuntimeExecutionCommand::ProtectionLeg(command) => command.quantity_lots,
+            RuntimeExecutionCommand::CancelOrder(_) | RuntimeExecutionCommand::CancelStopOrder(_) => 1,
+        };
+        Ok(RiskAdmission {
+            decision_id: format!("test-risk:{logical_request_id}"),
+            reservation_id: format!("test-reservation:{logical_request_id}"),
+            policy_revision: 1,
+            approved_delta_lots,
+        })
     }
 }
 
@@ -582,6 +611,7 @@ async fn cancel_absence_never_fabricates_rejection_or_success()
         execution.clone(),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
@@ -653,6 +683,7 @@ async fn partial_fill_operation_does_not_resolve_ambiguous_cancel_until_terminal
         Arc::new(FakeExecution::new([])),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
@@ -746,6 +777,7 @@ async fn old_order_fill_does_not_resolve_replace_until_exact_replacement_identit
         Arc::new(FakeExecution::new([])),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
@@ -1268,6 +1300,7 @@ async fn restart_with_vox_owned_open_order_and_stop_converges_without_mutation()
         execution.clone(),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
@@ -1332,6 +1365,7 @@ async fn protection_legs_resolve_independently_and_partial_plan_stays_halted()
         Arc::new(FakeExecution::new([])),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
@@ -1373,6 +1407,7 @@ async fn corrupt_checkpoint_rebuilds_but_corrupt_unknown_evidence_fails_closed()
         Arc::new(FakeExecution::new([])),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
@@ -1412,6 +1447,7 @@ async fn corrupt_checkpoint_rebuilds_but_corrupt_unknown_evidence_fails_closed()
         Arc::new(FakeExecution::new([])),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
@@ -1601,6 +1637,7 @@ async fn ambiguous_post_stop_restart_never_fuzzy_matches_or_replays()
         execution.clone(),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
