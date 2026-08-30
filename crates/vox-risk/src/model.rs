@@ -81,17 +81,22 @@ impl RiskReason {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct LotLimit {
+pub struct BuyLotLimit {
     pub max_lots: i64,
     pub max_market_lots: i64,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SellLotLimit {
+    pub max_lots: i64,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BrokerLotLimits {
-    pub buy_own: Option<LotLimit>,
-    pub buy_margin: Option<LotLimit>,
-    pub sell_own: Option<LotLimit>,
-    pub sell_margin: Option<LotLimit>,
+    pub buy_own: Option<BuyLotLimit>,
+    pub buy_margin: Option<BuyLotLimit>,
+    pub sell_own: Option<SellLotLimit>,
+    pub sell_margin: Option<SellLotLimit>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
