@@ -50,7 +50,10 @@ impl<S: RiskStore> RiskReservationReconciler<S> {
         self.store
             .update_reservation(
                 &reservation.reservation_id,
-                &[ReservationState::Active, ReservationState::PartiallyConsumed],
+                &[
+                    ReservationState::Active,
+                    ReservationState::PartiallyConsumed,
+                ],
                 reservation.remaining_delta_lots,
                 ReservationState::UnknownHeld,
                 now_unix_ms,
@@ -156,7 +159,10 @@ impl<S: RiskStore> RiskReservationReconciler<S> {
         self.store
             .update_reservation(
                 &reservation.reservation_id,
-                &[ReservationState::Active, ReservationState::PartiallyConsumed],
+                &[
+                    ReservationState::Active,
+                    ReservationState::PartiallyConsumed,
+                ],
                 reservation.remaining_delta_lots,
                 ReservationState::Orphaned,
                 now_unix_ms,
