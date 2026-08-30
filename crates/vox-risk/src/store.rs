@@ -599,7 +599,34 @@ pub enum RiskStoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{RiskReservation, RiskSource};
+    use crate::model::{
+        RiskDecision, RiskOutcome, RiskReservation, RiskSource, RiskValidityContext,
+    };
+
+    fn decision(request: &str, reservation_id: &str, delta: i64) -> RiskDecision {
+        RiskDecision {
+            decision_id: RiskDecision::new_id(),
+            request_id: request.to_owned(),
+            policy_revision: 1,
+            account_id: "account-1".to_owned(),
+            requested_delta_lots: delta,
+            approved_delta_lots: delta,
+            outcome: RiskOutcome::Approve,
+            reasons: Vec::new(),
+            reservation_id: Some(reservation_id.to_owned()),
+            expires_at_unix_ms: None,
+            validity: RiskValidityContext {
+                runtime_epoch: 1,
+                reconciliation_revision: 1,
+                position_revision: 1,
+                order_revision: 1,
+                market_data_as_of_unix_ms: Some(1),
+                instrument_constraints_revision: 1,
+                policy_revision: 1,
+                execution_authorization_revision: 1,
+            },
+        }
+    }
 
     fn reservation(request: &str, delta: i64) -> RiskReservation {
         RiskReservation {
@@ -658,4 +685,86 @@ mod tests {
         let _ = std::fs::remove_file(path);
         Ok(())
     }
+
+    #[test]
+    fn approval_and_reservation_are_persisted_in_one_transaction() -> Result<(), RiskStoreError> {
+        let path = std::env::temp_dir().join(format!("vox-risk-{}.sqlite3", uuid::Uuid::new_v4()));
+        let store = SqliteRiskStore::open(&path)?;
+        let reservation = reservation("req-atomic", 4);
+        let decision = decision("req-atomic", &reservation.reservation_id, 4);
+
+        let persisted = store.persist_approval_atomic(
+            &decision,
+            &reservation,
+            ReservationCapacity {
+                max_account_reserved_notional_nanos: Some(10_000_000_000),
+                max_instrument_reserved_abs_lots: Some(10),
+            },
+        )?;
+
+        assert_eq!(persisted.decision.decision_id, decision.decision_id);
+        assert_eq!(persisted.reservation.reservation_id, reservation.reservation_id);
+        assert_eq!(
+            store.decision(&decision.decision_id)?.expect("decision").reservation_id,
+            Some(reservation.reservation_id.clone())
+        );
+        assert_eq!(
+            store
+                .reservation_for_request("account-1", "req-atomic")?
+                .expect("reservation")
+                .reservation_id,
+            reservation.reservation_id
+        );
+        let _ = std::fs::remove_file(path);
+        Ok(())
+    }
+
+    #[test]
+    fn failed_capacity_check_persists_neither_decision_nor_reservation(
+    ) -> Result<(), RiskStoreError> {
+        let path = std::env::temp_dir().join(format!("vox-risk-{}.sqlite3", uuid::Uuid::new_v4()));
+        let store = SqliteRiskStore::open(&path)?;
+        let reservation = reservation("req-too-large", 6);
+        let decision = decision("req-too-large", &reservation.reservation_id, 6);
+
+        let result = store.persist_approval_atomic(
+            &decision,
+            &reservation,
+            ReservationCapacity {
+                max_account_reserved_notional_nanos: Some(5_000_000_000),
+                max_instrument_reserved_abs_lots: Some(5),
+            },
+        );
+        assert!(matches!(result, Err(RiskStoreError::CapacityExceeded)));
+        assert!(store.decision(&decision.decision_id)?.is_none());
+        assert!(
+            store
+                .reservation_for_request("account-1", "req-too-large")?
+                .is_none()
+        );
+        let _ = std::fs::remove_file(path);
+        Ok(())
+    }
+
+    #[test]
+    fn replay_returns_the_original_persisted_approval() -> Result<(), RiskStoreError> {
+        let path = std::env::temp_dir().join(format!("vox-risk-{}.sqlite3", uuid::Uuid::new_v4()));
+        let store = SqliteRiskStore::open(&path)?;
+        let reservation = reservation("req-replay", 3);
+        let decision = decision("req-replay", &reservation.reservation_id, 3);
+        let capacity = ReservationCapacity {
+            max_account_reserved_notional_nanos: Some(10_000_000_000),
+            max_instrument_reserved_abs_lots: Some(10),
+        };
+        let first = store.persist_approval_atomic(&decision, &reservation, capacity)?;
+
+        let replay_reservation = reservation("req-replay", 3);
+        let replay_decision = decision("req-replay", &replay_reservation.reservation_id, 3);
+        let replay = store.persist_approval_atomic(&replay_decision, &replay_reservation, capacity)?;
+
+        assert_eq!(first, replay);
+        let _ = std::fs::remove_file(path);
+        Ok(())
+    }
+
 }
