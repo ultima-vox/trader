@@ -12,7 +12,9 @@ pub mod store;
 
 pub use engine::{RiskEngine, RiskEngineError};
 pub use model::*;
-pub use plan::{RiskApprovedExecutionPlan, RiskApprovedExecutionPlanError};
+pub use plan::{
+    RiskApprovedExecutionPlan, RiskApprovedExecutionPlanError, RiskDispatchContext,
+};
 pub use reconcile::{RiskReservationReconcileError, RiskReservationReconciler};
 pub use store::{
     PersistedRiskApproval, ReservationCapacity, RiskStore, RiskStoreError, SqliteRiskStore,
