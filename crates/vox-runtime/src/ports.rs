@@ -57,7 +57,9 @@ pub enum RuntimeExecutionPurpose {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RiskAdmission {
     pub decision_id: String,
-    pub reservation_id: String,
+    /// Present for exposure-bearing actions. Pure cancel/protection-maintenance actions
+    /// may be admitted without creating a new capacity reservation.
+    pub reservation_id: Option<String>,
     pub policy_revision: u64,
     pub approved_delta_lots: i64,
 }
