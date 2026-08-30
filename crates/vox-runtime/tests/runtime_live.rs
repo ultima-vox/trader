@@ -819,7 +819,7 @@ impl RiskAdmissionPort for SandboxRiskAdmission {
         };
         Ok(RiskAdmission {
             decision_id: format!("runtime-qualification:{logical_request_id}"),
-            reservation_id: format!("runtime-qualification-reservation:{logical_request_id}"),
+            reservation_id: Some(format!("runtime-qualification-reservation:{logical_request_id}")),
             policy_revision: 1,
             approved_delta_lots,
         })
