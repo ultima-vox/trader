@@ -25,6 +25,17 @@ pub struct RiskApprovedExecutionPlan {
     pub validity: RiskValidityContext,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct RiskDispatchContext<'a> {
+    pub logical_request_id: &'a str,
+    pub account_id: &'a str,
+    pub broker_connection_id: &'a str,
+    pub instrument_id: &'a str,
+    pub action: RiskActionKind,
+    pub delta_lots: i64,
+    pub validity: &'a RiskValidityContext,
+}
+
 impl RiskApprovedExecutionPlan {
     pub fn from_persisted(
         decision: &RiskDecision,
@@ -101,23 +112,14 @@ impl RiskApprovedExecutionPlan {
 
     /// Re-validates correctness-critical state immediately before dispatch.
     #[must_use]
-    pub fn matches_dispatch_context(
-        &self,
-        logical_request_id: &str,
-        account_id: &str,
-        broker_connection_id: &str,
-        instrument_id: &str,
-        action: RiskActionKind,
-        delta_lots: i64,
-        current_validity: &RiskValidityContext,
-    ) -> bool {
-        self.logical_request_id == logical_request_id
-            && self.account_id == account_id
-            && self.broker_connection_id == broker_connection_id
-            && self.instrument_id == instrument_id
-            && self.action == action
-            && self.approved_delta_lots == delta_lots
-            && &self.validity == current_validity
+    pub fn matches_dispatch_context(&self, context: RiskDispatchContext<'_>) -> bool {
+        self.logical_request_id == context.logical_request_id
+            && self.account_id == context.account_id
+            && self.broker_connection_id == context.broker_connection_id
+            && self.instrument_id == context.instrument_id
+            && self.action == context.action
+            && self.approved_delta_lots == context.delta_lots
+            && self.validity == *context.validity
     }
 }
 
@@ -238,21 +240,26 @@ mod tests {
         }
     }
 
+    fn dispatch_context<'a>(validity: &'a RiskValidityContext) -> RiskDispatchContext<'a> {
+        RiskDispatchContext {
+            logical_request_id: "req-1",
+            account_id: "account-1",
+            broker_connection_id: "connection-1",
+            instrument_id: "instrument-1",
+            action: RiskActionKind::DirectionalOrder,
+            delta_lots: 10,
+            validity,
+        }
+    }
+
     #[test]
     fn persisted_decision_and_reservation_create_dispatch_plan() {
         let request = request();
         let plan =
             RiskApprovedExecutionPlan::from_persisted(&decision(), Some(&reservation()), &request)
                 .expect("plan");
-        assert!(plan.matches_dispatch_context(
-            "req-1",
-            "account-1",
-            "connection-1",
-            "instrument-1",
-            RiskActionKind::DirectionalOrder,
-            10,
-            &validity(),
-        ));
+        let validity = validity();
+        assert!(plan.matches_dispatch_context(dispatch_context(&validity)));
     }
 
     #[test]
@@ -263,15 +270,7 @@ mod tests {
                 .expect("plan");
         let mut changed = validity();
         changed.execution_authorization_revision += 1;
-        assert!(!plan.matches_dispatch_context(
-            "req-1",
-            "account-1",
-            "connection-1",
-            "instrument-1",
-            RiskActionKind::DirectionalOrder,
-            10,
-            &changed,
-        ));
+        assert!(!plan.matches_dispatch_context(dispatch_context(&changed)));
     }
 
     #[test]
@@ -288,15 +287,16 @@ mod tests {
         let plan = RiskApprovedExecutionPlan::from_persisted(&decision, None, &request)
             .expect("maintenance plan");
         assert!(plan.reservation_id.is_none());
-        assert!(plan.matches_dispatch_context(
-            "req-1",
-            "account-1",
-            "connection-1",
-            "instrument-1",
-            RiskActionKind::CancelOrder,
-            0,
-            &validity(),
-        ));
+        let validity = validity();
+        assert!(plan.matches_dispatch_context(RiskDispatchContext {
+            logical_request_id: "req-1",
+            account_id: "account-1",
+            broker_connection_id: "connection-1",
+            instrument_id: "instrument-1",
+            action: RiskActionKind::CancelOrder,
+            delta_lots: 0,
+            validity: &validity,
+        }));
     }
 
     #[test]
