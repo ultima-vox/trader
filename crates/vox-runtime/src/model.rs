@@ -879,6 +879,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn order_fact_preserves_signed_remaining_exposure() -> Result<(), ModelError> {
+        let buy = OrderFact {
+            account_id: "account".into(),
+            broker_order_id: "order".into(),
+            logical_request_id: None,
+            instrument_uid: "instrument".into(),
+            side: Some(OrderSide::Buy),
+            lots_requested: 10,
+            lots_executed: 4,
+            status: OrderExecutionStatus::PartiallyFilled,
+            status_cause: None,
+        };
+        assert_eq!(buy.signed_remaining_lots()?, 6);
+
+        let mut sell = buy.clone();
+        sell.side = Some(OrderSide::Sell);
+        assert_eq!(sell.signed_remaining_lots()?, -6);
+
+        let mut invalid = buy;
+        invalid.lots_executed = 11;
+        assert!(invalid.signed_remaining_lots().is_err());
+        Ok(())
+    }
+
+    #[test]
     fn opaque_refs_and_evidence_reject_secret_material() -> Result<(), ModelError> {
         assert!(OpaqueRef::new("Bearer abc").is_err());
         assert!(OpaqueRef::new("token=abc").is_err());
