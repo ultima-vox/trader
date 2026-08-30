@@ -82,12 +82,12 @@ impl TInvestRiskReadAdapter {
         &self,
         account_id: &str,
         instrument_id: &str,
-        price: FixedPoint,
+        price: Option<FixedPoint>,
     ) -> Result<CanonicalMaxLots, RiskReadError> {
         let request = v1::GetMaxLotsRequest {
             account_id: account_id.to_owned(),
             instrument_id: instrument_id.to_owned(),
-            price: Some(quotation(price)?),
+            price: price.map(quotation).transpose()?,
         };
         let response = match self.environment {
             BrokerEnvironment::Sandbox => self.client.get_sandbox_max_lots(request).await?.body,
