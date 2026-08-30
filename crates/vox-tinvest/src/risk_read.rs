@@ -4,7 +4,8 @@
 //! policy and does not derive provider truth.
 
 use thiserror::Error;
-use vox_domain::{Environment, FixedPoint, OrderSide, UnitsNano};
+use vox_connections::BrokerEnvironment;
+use vox_domain::{FixedPoint, OrderSide, UnitsNano};
 
 use crate::canonical::CanonicalMoney;
 use crate::execution::{CanonicalMaxLots, CanonicalOrderPrice, ExecutionDecodeError};
@@ -51,12 +52,12 @@ impl TryFrom<v1::GetMarginAttributesResponse> for CanonicalMarginAttributes {
 #[derive(Clone)]
 pub struct TInvestRiskReadAdapter {
     client: TInvestGrpcClient,
-    environment: Environment,
+    environment: BrokerEnvironment,
 }
 
 impl TInvestRiskReadAdapter {
     #[must_use]
-    pub const fn new(client: TInvestGrpcClient, environment: Environment) -> Self {
+    pub const fn new(client: TInvestGrpcClient, environment: BrokerEnvironment) -> Self {
         Self { client, environment }
     }
 
@@ -86,9 +87,8 @@ impl TInvestRiskReadAdapter {
             price: Some(quotation(price)?),
         };
         let response = match self.environment {
-            Environment::Sandbox => self.client.get_sandbox_max_lots(request).await?.body,
-            Environment::Live => self.client.get_max_lots(request).await?.body,
-            Environment::Paper => return Err(RiskReadError::UnsupportedEnvironment),
+            BrokerEnvironment::Sandbox => self.client.get_sandbox_max_lots(request).await?.body,
+            BrokerEnvironment::Production => self.client.get_max_lots(request).await?.body,
         };
         response.try_into().map_err(Into::into)
     }
@@ -118,9 +118,8 @@ impl TInvestRiskReadAdapter {
             quantity: quantity_lots,
         };
         let response = match self.environment {
-            Environment::Sandbox => self.client.get_sandbox_order_price(request).await?.body,
-            Environment::Live => self.client.get_order_price(request).await?.body,
-            Environment::Paper => return Err(RiskReadError::UnsupportedEnvironment),
+            BrokerEnvironment::Sandbox => self.client.get_sandbox_order_price(request).await?.body,
+            BrokerEnvironment::Production => self.client.get_order_price(request).await?.body,
         };
         response.try_into().map_err(Into::into)
     }
@@ -146,8 +145,6 @@ pub enum RiskReadError {
     InvalidEconomics,
     #[error("risk read quantity must be positive")]
     InvalidQuantity,
-    #[error("paper mode has no T-Invest broker risk-read route")]
-    UnsupportedEnvironment,
 }
 
 #[cfg(test)]
