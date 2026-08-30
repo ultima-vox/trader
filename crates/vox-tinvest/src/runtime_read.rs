@@ -12,9 +12,9 @@ use vox_runtime::{
 
 use crate::account::{AccountReadClient, PortfolioQuery};
 use crate::execution::{canonical_orders, canonical_stop_orders};
-use vox_domain::OrderSide;
 use crate::generated::v1;
 use crate::{GrpcError, GrpcErrorKind, TInvestGrpcClient};
+use vox_domain::OrderSide;
 
 #[derive(Clone)]
 pub struct TInvestRuntimeReadAdapter {
