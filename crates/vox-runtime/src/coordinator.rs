@@ -16,8 +16,8 @@ use crate::model::{
 use crate::policy::RuntimeStateMachine;
 use crate::ports::{
     BrokerPortError, CredentialResolverPort, ExecutionPort, ExecutionResult, ExecutionStreamPort,
-    HealthReadPort, MetricLabel, MetricName, MetricsPort, RuntimeExecutionPurpose, RuntimeStore,
-    StoreError, StreamSignal,
+    HealthReadPort, MetricLabel, MetricName, MetricsPort, RiskAdmissionError, RiskAdmissionPort,
+    RuntimeExecutionPurpose, RuntimeStore, StoreError, StreamSignal,
 };
 use crate::reconcile::{Reconciler, ReconciliationError, ReconciliationReport};
 
@@ -48,6 +48,7 @@ pub struct RuntimeCoordinator<R, E, X, C, S, M> {
     execution: Arc<E>,
     streams: Arc<X>,
     credentials: Arc<C>,
+    risk_admission: Arc<dyn RiskAdmissionPort>,
     metrics: Arc<M>,
     config: RuntimeConfig,
     owner_id: String,
@@ -99,6 +100,7 @@ where
         execution: Arc<E>,
         streams: Arc<X>,
         credentials: Arc<C>,
+        risk_admission: Arc<dyn RiskAdmissionPort>,
         metrics: Arc<M>,
         reconciliation_config: crate::reconcile::ReconciliationConfig,
         config: RuntimeConfig,
@@ -129,6 +131,7 @@ where
             execution,
             streams,
             credentials,
+            risk_admission,
             metrics,
             config,
             owner_id: uuid::Uuid::new_v4().to_string(),
@@ -323,6 +326,30 @@ where
                 "execution command request identity does not match runtime logical identity".into(),
             ));
         }
+        let admission = self
+            .risk_admission
+            .admit(&self.scope, purpose, &command, &logical_request_id)
+            .await?;
+        if admission.decision_id.trim().is_empty()
+            || admission.reservation_id.trim().is_empty()
+            || admission.approved_delta_lots == 0
+        {
+            return Err(RuntimeError::RiskAdmission(RiskAdmissionError::Unavailable(
+                "risk admission returned an incomplete approval".into(),
+            )));
+        }
+        tracing::info!(
+            event = "risk_admission_granted",
+            runtime_epoch = self.current_epoch()?,
+            provider = ?self.scope.provider,
+            environment = ?self.scope.environment,
+            account_scope = %self.scope.redacted_account_id(),
+            logical_request_id = %logical_request_id,
+            risk_decision_id = %admission.decision_id,
+            risk_reservation_id = %admission.reservation_id,
+            risk_policy_revision = admission.policy_revision,
+            approved_delta_lots = admission.approved_delta_lots,
+        );
         let permit = self
             .command_slots
             .clone()
@@ -1294,6 +1321,8 @@ pub enum RuntimeError {
     Store(#[from] StoreError),
     #[error(transparent)]
     Broker(#[from] BrokerPortError),
+    #[error(transparent)]
+    RiskAdmission(#[from] RiskAdmissionError),
     #[error(transparent)]
     Reconciliation(#[from] ReconciliationError),
     #[error(transparent)]
