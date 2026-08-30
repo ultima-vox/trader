@@ -17,6 +17,7 @@ use vox_runtime::{
     BrokerAccount, BrokerEvent, BrokerEventClass, BrokerExecutionState, BrokerIdentityLinks,
     BrokerPortError, BrokerReadPort, BrokerResultClass, CredentialResolution,
     CredentialResolverPort, ExecutionPort, ExecutionResult, ExecutionStreamPort, HealthReadPort,
+    RiskAdmission, RiskAdmissionError, RiskAdmissionPort,
     InMemoryMetrics, JournalState, MoneyFact, MutationRecord, OpaqueRef, OperationFact,
     OperationsPage, OrderExecutionStatus, OrderFact, PortfolioFact, Provider, ProviderStatusCause,
     ReconciliationConfig, RuntimeConfig, RuntimeCoordinator, RuntimeEnvironment,
@@ -797,6 +798,33 @@ where
 }
 
 struct SandboxCredential;
+struct SandboxRiskAdmission;
+
+#[async_trait]
+impl RiskAdmissionPort for SandboxRiskAdmission {
+    async fn admit(
+        &self,
+        _: &RuntimeScope,
+        _: vox_runtime::RuntimeExecutionPurpose,
+        command: &RuntimeExecutionCommand,
+        logical_request_id: &str,
+    ) -> Result<RiskAdmission, RiskAdmissionError> {
+        let approved_delta_lots = match command {
+            RuntimeExecutionCommand::RegularOrder(command)
+            | RuntimeExecutionCommand::PostOrderAsync(command) => command.quantity_lots,
+            RuntimeExecutionCommand::ReplaceOrder(command) => command.quantity_lots,
+            RuntimeExecutionCommand::PostStopOrder(command)
+            | RuntimeExecutionCommand::ProtectionLeg(command) => command.quantity_lots,
+            RuntimeExecutionCommand::CancelOrder(_) | RuntimeExecutionCommand::CancelStopOrder(_) => 1,
+        };
+        Ok(RiskAdmission {
+            decision_id: format!("runtime-qualification:{logical_request_id}"),
+            reservation_id: format!("runtime-qualification-reservation:{logical_request_id}"),
+            policy_revision: 1,
+            approved_delta_lots,
+        })
+    }
+}
 
 #[async_trait]
 impl CredentialResolverPort for SandboxCredential {
@@ -1294,6 +1322,7 @@ fn build_coordinator(
         execution,
         streams,
         Arc::new(SandboxCredential),
+        Arc::new(SandboxRiskAdmission),
         metrics,
         ReconciliationConfig::default(),
         RuntimeConfig {
