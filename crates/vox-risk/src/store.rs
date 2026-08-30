@@ -162,8 +162,7 @@ impl RiskStore for SqliteRiskStore {
         now_unix_ms: i64,
     ) -> Result<RiskReservation, RiskStoreError> {
         let mut connection = self.connection()?;
-        let transaction =
-            connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = reservation_by_id(&transaction, reservation_id)?
             .ok_or(RiskStoreError::ReservationNotFound)?;
         if !expected.contains(&current.state) {
