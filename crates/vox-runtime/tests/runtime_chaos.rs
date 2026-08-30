@@ -521,6 +521,9 @@ async fn unknown_survives_restart_resolves_from_direct_readback_without_replay()
             broker_order_id: "broker-recovered".into(),
             logical_request_id: Some("request-unknown".into()),
             instrument_uid: "instrument-1".into(),
+            side: None,
+            lots_requested: 0,
+            lots_executed: 0,
             status: OrderExecutionStatus::New,
             status_cause: None,
         };
@@ -624,6 +627,9 @@ async fn partial_fill_operation_does_not_resolve_ambiguous_cancel_until_terminal
         broker_order_id: "old-order".into(),
         logical_request_id: Some("original-post".into()),
         instrument_uid: "instrument-1".into(),
+        side: None,
+        lots_requested: 0,
+        lots_executed: 0,
         status: OrderExecutionStatus::PartiallyFilled,
         status_cause: None,
     };
@@ -662,6 +668,9 @@ async fn partial_fill_operation_does_not_resolve_ambiguous_cancel_until_terminal
             broker_order_id: "old-order".into(),
             logical_request_id: Some("original-post".into()),
             instrument_uid: "instrument-1".into(),
+            side: None,
+            lots_requested: 0,
+            lots_executed: 0,
             status: OrderExecutionStatus::Cancelled,
             status_cause: None,
         }];
@@ -712,6 +721,9 @@ async fn old_order_fill_does_not_resolve_replace_until_exact_replacement_identit
         broker_order_id: "old-order".into(),
         logical_request_id: Some("original-post".into()),
         instrument_uid: "instrument-1".into(),
+        side: None,
+        lots_requested: 0,
+        lots_executed: 0,
         status: OrderExecutionStatus::Filled,
         status_cause: None,
     };
@@ -748,6 +760,9 @@ async fn old_order_fill_does_not_resolve_replace_until_exact_replacement_identit
             broker_order_id: "replacement-order".into(),
             logical_request_id: Some("replace-1".into()),
             instrument_uid: "instrument-1".into(),
+            side: None,
+            lots_requested: 0,
+            lots_executed: 0,
             status: OrderExecutionStatus::New,
             status_cause: None,
         };
@@ -790,6 +805,9 @@ async fn manual_order_and_orphan_stop_are_preserved_and_halt_runtime()
         broker_order_id: "manual-order".into(),
         logical_request_id: None,
         instrument_uid: "instrument-1".into(),
+        side: None,
+        lots_requested: 0,
+        lots_executed: 0,
         status: OrderExecutionStatus::New,
         status_cause: None,
     });
@@ -1228,6 +1246,9 @@ async fn restart_with_vox_owned_open_order_and_stop_converges_without_mutation()
         broker_order_id: "broker-owned-order".into(),
         logical_request_id: Some("owned-order".into()),
         instrument_uid: "instrument-1".into(),
+        side: None,
+        lots_requested: 0,
+        lots_executed: 0,
         status: OrderExecutionStatus::New,
         status_cause: None,
     });
