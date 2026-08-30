@@ -14,4 +14,6 @@ pub use engine::{RiskEngine, RiskEngineError};
 pub use model::*;
 pub use plan::{RiskApprovedExecutionPlan, RiskApprovedExecutionPlanError};
 pub use reconcile::{RiskReservationReconcileError, RiskReservationReconciler};
-pub use store::{PersistedRiskApproval, ReservationCapacity, RiskStore, RiskStoreError, SqliteRiskStore};
+pub use store::{
+    PersistedRiskApproval, ReservationCapacity, RiskStore, RiskStoreError, SqliteRiskStore,
+};
