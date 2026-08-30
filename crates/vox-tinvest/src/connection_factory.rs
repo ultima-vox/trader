@@ -30,6 +30,7 @@ pub struct TInvestReadSession {
     pub target: AccountTarget,
     pub client: AccountReadClient,
     pub runtime_reads: crate::runtime_read::TInvestRuntimeReadAdapter,
+    pub risk_reads: crate::risk_read::TInvestRiskReadAdapter,
     pub runtime_streams: crate::runtime_stream::TInvestRuntimeStreamAdapter,
 }
 
@@ -451,6 +452,7 @@ fn build_session(
             client.clone(),
             environment,
         ),
+        risk_reads: crate::risk_read::TInvestRiskReadAdapter::new(client.clone(), environment),
         runtime_streams: crate::runtime_stream::TInvestRuntimeStreamAdapter::new(client),
     })
 }
