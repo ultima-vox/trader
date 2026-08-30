@@ -1506,6 +1506,13 @@ fn order_fact(
         })?,
         logical_request_id: order.client_request_id,
         instrument_uid: order.instrument_uid.unwrap_or_default(),
+        side: match vox_tinvest::generated::v1::OrderDirection::try_from(order.direction) {
+            Ok(vox_tinvest::generated::v1::OrderDirection::Buy) => Some(OrderSide::Buy),
+            Ok(vox_tinvest::generated::v1::OrderDirection::Sell) => Some(OrderSide::Sell),
+            _ => None,
+        },
+        lots_requested: order.lots_requested,
+        lots_executed: order.lots_executed,
         status: order_status(order.execution_status),
         status_cause: None,
     })
