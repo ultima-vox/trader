@@ -35,7 +35,8 @@ impl RiskApprovedExecutionPlan {
         {
             return Err(RiskApprovedExecutionPlanError::RequestIdentityMismatch);
         }
-        if decision.account_id != request.account_id || reservation.account_id != request.account_id {
+        if decision.account_id != request.account_id || reservation.account_id != request.account_id
+        {
             return Err(RiskApprovedExecutionPlanError::AccountMismatch);
         }
         if reservation.instrument_id != request.instrument_id {
@@ -202,12 +203,8 @@ mod tests {
     #[test]
     fn persisted_decision_and_reservation_create_dispatch_plan() {
         let request = request();
-        let plan = RiskApprovedExecutionPlan::from_persisted(
-            &decision(),
-            &reservation(),
-            &request,
-        )
-        .expect("plan");
+        let plan = RiskApprovedExecutionPlan::from_persisted(&decision(), &reservation(), &request)
+            .expect("plan");
         assert!(plan.matches_dispatch_context(
             "req-1",
             "account-1",
@@ -221,12 +218,8 @@ mod tests {
     #[test]
     fn changed_authorization_revision_invalidates_dispatch_context() {
         let request = request();
-        let plan = RiskApprovedExecutionPlan::from_persisted(
-            &decision(),
-            &reservation(),
-            &request,
-        )
-        .expect("plan");
+        let plan = RiskApprovedExecutionPlan::from_persisted(&decision(), &reservation(), &request)
+            .expect("plan");
         let mut changed = validity();
         changed.execution_authorization_revision += 1;
         assert!(!plan.matches_dispatch_context(
