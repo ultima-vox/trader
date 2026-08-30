@@ -78,7 +78,10 @@ fn simultaneous_approvals_cannot_oversubscribe_remaining_capacity() {
     let second = spawn("req-concurrent-2");
     barrier.wait();
 
-    let results = [first.join().expect("first thread"), second.join().expect("second thread")];
+    let results = [
+        first.join().expect("first thread"),
+        second.join().expect("second thread"),
+    ];
     assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
     assert_eq!(
         results
