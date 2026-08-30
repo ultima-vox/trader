@@ -17,12 +17,11 @@ use vox_runtime::{
     BrokerAccount, BrokerEvent, BrokerEventClass, BrokerExecutionState, BrokerIdentityLinks,
     BrokerPortError, BrokerReadPort, BrokerResultClass, CredentialResolution,
     CredentialResolverPort, ExecutionPort, ExecutionResult, ExecutionStreamPort, HealthReadPort,
-    RiskAdmission, RiskAdmissionError, RiskAdmissionPort,
     InMemoryMetrics, JournalState, MoneyFact, MutationRecord, OpaqueRef, OperationFact,
     OperationsPage, OrderExecutionStatus, OrderFact, PortfolioFact, Provider, ProviderStatusCause,
-    ReconciliationConfig, RuntimeConfig, RuntimeCoordinator, RuntimeEnvironment,
-    RuntimeExecutionCommand, RuntimeScope, RuntimeState, RuntimeStore, SqliteRuntimeStore,
-    StopExecutionStatus, StopFact, StreamKind, StreamSignal,
+    ReconciliationConfig, RiskAdmission, RiskAdmissionError, RiskAdmissionPort, RuntimeConfig,
+    RuntimeCoordinator, RuntimeEnvironment, RuntimeExecutionCommand, RuntimeScope, RuntimeState,
+    RuntimeStore, SqliteRuntimeStore, StopExecutionStatus, StopFact, StreamKind, StreamSignal,
 };
 use vox_tinvest::account::AccountReadClient;
 use vox_tinvest::execution::{
@@ -815,11 +814,14 @@ impl RiskAdmissionPort for SandboxRiskAdmission {
             RuntimeExecutionCommand::ReplaceOrder(command) => command.quantity_lots,
             RuntimeExecutionCommand::PostStopOrder(command)
             | RuntimeExecutionCommand::ProtectionLeg(command) => command.quantity_lots,
-            RuntimeExecutionCommand::CancelOrder(_) | RuntimeExecutionCommand::CancelStopOrder(_) => 1,
+            RuntimeExecutionCommand::CancelOrder(_)
+            | RuntimeExecutionCommand::CancelStopOrder(_) => 1,
         };
         Ok(RiskAdmission {
             decision_id: format!("runtime-qualification:{logical_request_id}"),
-            reservation_id: Some(format!("runtime-qualification-reservation:{logical_request_id}")),
+            reservation_id: Some(format!(
+                "runtime-qualification-reservation:{logical_request_id}"
+            )),
             policy_revision: 1,
             approved_delta_lots,
         })
