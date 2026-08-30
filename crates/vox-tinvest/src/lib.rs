@@ -6,6 +6,10 @@ pub mod reference;
 pub mod account;
 pub mod account_qualification;
 pub mod canonical;
+#[allow(
+    dead_code,
+    reason = "execution-session target and authorization revision accessors are reserved for the #21 risk admission adapter"
+)]
 pub mod connection_factory;
 pub mod connection_provider;
 pub mod execution;
