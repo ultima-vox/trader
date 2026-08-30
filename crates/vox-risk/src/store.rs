@@ -269,8 +269,8 @@ fn reservation_by_id(
 }
 
 fn read_reservation(row: &rusqlite::Row<'_>) -> rusqlite::Result<RiskReservation> {
-    let source = parse_source(row.get::<_, String>(4)?).map_err(conversion_error)?;
-    let state = parse_state(row.get::<_, String>(9)?).map_err(conversion_error)?;
+    let source = parse_source(row.get::<_, String>(4)?).map_err(text_conversion_error)?;
+    let state = parse_state(row.get::<_, String>(9)?).map_err(text_conversion_error)?;
     let notional = row
         .get::<_, String>(8)?
         .parse::<i128>()
@@ -334,6 +334,10 @@ fn parse_source(value: String) -> Result<RiskSource, &'static str> {
         "EMERGENCY_OPERATOR" => Ok(RiskSource::EmergencyOperator),
         _ => Err("unknown risk source"),
     }
+}
+
+fn text_conversion_error(message: &'static str) -> rusqlite::Error {
+    conversion_error(std::io::Error::new(std::io::ErrorKind::InvalidData, message))
 }
 
 fn conversion_error(error: impl std::error::Error + Send + Sync + 'static) -> rusqlite::Error {
