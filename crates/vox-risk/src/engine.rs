@@ -1,8 +1,8 @@
 use thiserror::Error;
 
 use crate::model::{
-    BuyLotLimit, RiskDecision, RiskOutcome, RiskPolicySet, RiskReason, RiskReasonCode, RiskRequest,
-    RiskState, SellLotLimit,
+    BuyLotLimit, RiskActionKind, RiskDecision, RiskOutcome, RiskPolicySet, RiskReason,
+    RiskReasonCode, RiskRequest, RiskState, SellLotLimit,
 };
 
 pub struct RiskEngine;
@@ -12,13 +12,26 @@ impl RiskEngine {
         policy: &RiskPolicySet,
         request: &RiskRequest,
     ) -> Result<RiskDecision, RiskEngineError> {
-        if request.requested_delta_lots == 0 {
+        let directional = matches!(
+            request.action,
+            RiskActionKind::DirectionalOrder | RiskActionKind::ReplaceDirectionalOrder
+        );
+        if directional && request.requested_delta_lots == 0 {
             return Ok(reject(
                 policy,
                 request,
                 RiskOutcome::Reject,
                 RiskReasonCode::InvalidQuantity,
-                "requested quantity must be non-zero",
+                "directional risk request quantity must be non-zero",
+            ));
+        }
+        if !directional && request.requested_delta_lots != 0 {
+            return Ok(reject(
+                policy,
+                request,
+                RiskOutcome::Reject,
+                RiskReasonCode::InvalidQuantity,
+                "non-directional risk action must not carry directional exposure",
             ));
         }
 
@@ -72,8 +85,16 @@ impl RiskEngine {
             .ok_or(RiskEngineError::ArithmeticOverflow)?;
         let increasing_lots = increasing_portion(base_position, request.requested_delta_lots)?;
 
+        let cleanup_action = matches!(
+            request.action,
+            RiskActionKind::CancelOrder
+                | RiskActionKind::ProtectionMaintenance
+                | RiskActionKind::CancelProtection
+        );
         match policy.state {
-            RiskState::Halted if !(request.emergency_reduction && increasing_lots == 0) => {
+            RiskState::Halted
+                if !(request.emergency_reduction && increasing_lots == 0) && !cleanup_action =>
+            {
                 return Ok(reject(
                     policy,
                     request,
@@ -92,6 +113,26 @@ impl RiskEngine {
                 ));
             }
             RiskState::Normal | RiskState::Warning | RiskState::ReduceOnly | RiskState::Halted => {}
+        }
+
+        if !directional {
+            return Ok(RiskDecision {
+                decision_id: RiskDecision::new_id(),
+                request_id: request.request_id.clone(),
+                policy_revision: policy.revision,
+                account_id: request.account_id.clone(),
+                action: request.action,
+                requested_delta_lots: 0,
+                approved_delta_lots: 0,
+                outcome: RiskOutcome::Approve,
+                reasons: vec![RiskReason::new(
+                    RiskReasonCode::Approved,
+                    "non-directional capital maintenance action passed the risk boundary",
+                )],
+                reservation_id: None,
+                expires_at_unix_ms: None,
+                validity: request.snapshot.validity.clone(),
+            });
         }
 
         if increasing_lots > 0 {
@@ -278,6 +319,7 @@ impl RiskEngine {
             request_id: request.request_id.clone(),
             policy_revision: policy.revision,
             account_id: request.account_id.clone(),
+            action: request.action,
             requested_delta_lots: request.requested_delta_lots,
             approved_delta_lots,
             outcome,
@@ -428,6 +470,7 @@ fn reject(
         request_id: request.request_id.clone(),
         policy_revision: policy.revision,
         account_id: request.account_id.clone(),
+        action: request.action,
         requested_delta_lots: request.requested_delta_lots,
         approved_delta_lots: 0,
         outcome,
@@ -463,6 +506,7 @@ mod tests {
             instrument_id: "instrument-1".to_owned(),
             strategy_id: None,
             source: RiskSource::Manual,
+            action: RiskActionKind::DirectionalOrder,
             requested_delta_lots: delta,
             requested_notional_nanos: i128::from(delta) * 1_000_000_000,
             is_market_order: false,
