@@ -31,13 +31,18 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  BASH_ENV: /dev/null
+
+defaults:
+  run:
+    shell: 'bash --noprofile --norc -e -o pipefail "{0}"'
 
 jobs:
   contract:
     runs-on: [self-hosted, Linux, X64, "1"]
     steps:
       - name: Checkout the commit under review
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 

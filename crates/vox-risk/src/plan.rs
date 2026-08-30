@@ -8,8 +8,10 @@ use crate::model::{
 /// Immutable #21 -> #10 hand-off.
 ///
 /// A caller must not treat a bare `RiskDecision` as permission to mutate broker state.
-/// Dispatch permission exists only after the decision and its reservation were durably
-/// persisted and bound to the exact logical request/account/connection/instrument context.
+/// Dispatch permission exists only after the decision and any required reservation were
+/// durably persisted and bound to the exact logical request/account/connection/instrument
+/// context. Exposure-bearing actions require a reservation; cleanup/protection maintenance
+/// actions are explicitly reservation-free.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RiskApprovedExecutionPlan {
     pub decision_id: String,
@@ -239,8 +241,9 @@ mod tests {
     #[test]
     fn persisted_decision_and_reservation_create_dispatch_plan() {
         let request = request();
-        let plan = RiskApprovedExecutionPlan::from_persisted(&decision(), Some(&reservation()), &request)
-            .expect("plan");
+        let plan =
+            RiskApprovedExecutionPlan::from_persisted(&decision(), Some(&reservation()), &request)
+                .expect("plan");
         assert!(plan.matches_dispatch_context(
             "req-1",
             "account-1",
@@ -255,8 +258,9 @@ mod tests {
     #[test]
     fn changed_authorization_revision_invalidates_dispatch_context() {
         let request = request();
-        let plan = RiskApprovedExecutionPlan::from_persisted(&decision(), Some(&reservation()), &request)
-            .expect("plan");
+        let plan =
+            RiskApprovedExecutionPlan::from_persisted(&decision(), Some(&reservation()), &request)
+                .expect("plan");
         let mut changed = validity();
         changed.execution_authorization_revision += 1;
         assert!(!plan.matches_dispatch_context(
