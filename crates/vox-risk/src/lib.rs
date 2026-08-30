@@ -7,9 +7,11 @@
 pub mod engine;
 pub mod model;
 pub mod plan;
+pub mod reconcile;
 pub mod store;
 
 pub use engine::{RiskEngine, RiskEngineError};
 pub use model::*;
 pub use plan::{RiskApprovedExecutionPlan, RiskApprovedExecutionPlanError};
+pub use reconcile::{RiskReservationReconcileError, RiskReservationReconciler};
 pub use store::{PersistedRiskApproval, ReservationCapacity, RiskStore, RiskStoreError, SqliteRiskStore};
