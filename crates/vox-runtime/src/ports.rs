@@ -47,9 +47,34 @@ pub struct CredentialResolution {
     pub execution_authorized: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeExecutionPurpose {
+    SandboxMutation,
+    ProductionManual,
+    ProductionAutomated,
+}
+
 #[async_trait]
 pub trait CredentialResolverPort: Send + Sync {
     async fn resolve(&self, scope: &RuntimeScope) -> Result<CredentialResolution, BrokerPortError>;
+
+    async fn authorize_execution(
+        &self,
+        scope: &RuntimeScope,
+        _purpose: RuntimeExecutionPurpose,
+    ) -> Result<(), BrokerPortError> {
+        if self.resolve(scope).await?.execution_authorized {
+            Ok(())
+        } else {
+            Err(BrokerPortError {
+                service: "CredentialResolver",
+                method: "AuthorizeExecution",
+                class: BrokerResultClass::Permission,
+                message: "execution authorization disabled".to_owned(),
+                retry_after: None,
+            })
+        }
+    }
 }
 
 #[async_trait]

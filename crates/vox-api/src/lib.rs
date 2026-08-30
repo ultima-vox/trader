@@ -19,6 +19,7 @@
 
 pub mod application;
 pub mod binding;
+pub mod connection_attach;
 pub mod contract;
 pub mod error;
 pub mod events;
@@ -32,6 +33,7 @@ pub use binding::{
     AccountBinding, AccountBindingResolver, StaticAccountBindingResolver,
     broker_connection_id_from_connection_ref, connection_ref_from_broker_connection_id,
 };
+pub use connection_attach::ConnectionAdministrationAdapter;
 pub use events::{ApplicationEvent, ApplicationEventBus};
 pub use market_project::SnapshotMarketProjection;
 pub use runtime_attach::{

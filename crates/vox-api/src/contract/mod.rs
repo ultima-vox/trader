@@ -6,6 +6,7 @@
 
 pub mod account;
 pub mod capability;
+pub mod connections;
 pub mod execution;
 pub mod instrument;
 pub mod market;

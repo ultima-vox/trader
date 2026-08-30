@@ -118,6 +118,7 @@ pub enum CredentialStatus {
     Valid,
     Invalid,
     ExpiredOrInactive,
+    PendingDisable,
     Disabled,
     PendingDelete,
 }
@@ -300,6 +301,7 @@ pub struct ExecutionAuthorization {
     pub connection_id: ConnectionId,
     pub provider_account_id: String,
     pub mode: ExecutionAuthorizationMode,
+    pub authorization_revision: u64,
     pub changed_by: UserId,
     pub changed_at_unix_ms: i64,
 }

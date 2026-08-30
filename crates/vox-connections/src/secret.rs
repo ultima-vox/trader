@@ -221,6 +221,7 @@ pub trait SecretStore: Send + Sync {
 pub struct SqliteSecretStore<K> {
     path: PathBuf,
     key_provider: K,
+    fail_next_disable: Arc<AtomicBool>,
     fail_next_delete: Arc<AtomicBool>,
 }
 
@@ -229,6 +230,7 @@ impl<K: KeyProvider> SqliteSecretStore<K> {
         let store = Self {
             path: path.as_ref().to_path_buf(),
             key_provider,
+            fail_next_disable: Arc::new(AtomicBool::new(false)),
             fail_next_delete: Arc::new(AtomicBool::new(false)),
         };
         let connection = store.connection()?;
@@ -254,6 +256,10 @@ impl<K: KeyProvider> SqliteSecretStore<K> {
 
     pub fn fail_next_delete(&self) {
         self.fail_next_delete.store(true, Ordering::SeqCst);
+    }
+
+    pub fn fail_next_disable(&self) {
+        self.fail_next_disable.store(true, Ordering::SeqCst);
     }
 
     fn connection(&self) -> Result<Connection, SecretStoreError> {
@@ -508,6 +514,9 @@ impl<K: KeyProvider> SecretStore for SqliteSecretStore<K> {
     }
 
     fn disable(&self, credential_ref: &CredentialRef) -> Result<(), SecretStoreError> {
+        if self.fail_next_disable.swap(false, Ordering::SeqCst) {
+            return Err(SecretStoreError::CryptographicFailure);
+        }
         let connection = self.connection()?;
         let changed = connection.execute(
             "UPDATE encrypted_credentials SET disabled_at_unix_ms =

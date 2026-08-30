@@ -25,6 +25,11 @@ pub trait ConnectionRepository: Send + Sync {
     ) -> Result<(), RepositoryError>;
     fn permissions(&self, user_id: &UserId) -> Result<BTreeSet<Permission>, RepositoryError>;
     fn insert_connection(&self, connection: &BrokerConnection) -> Result<(), RepositoryError>;
+    fn insert_connection_with_audit(
+        &self,
+        connection: &BrokerConnection,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError>;
     fn insert_onboarding(
         &self,
         connection: &BrokerConnection,
@@ -93,6 +98,7 @@ pub trait ConnectionRepository: Send + Sync {
     fn put_authorization_with_audit(
         &self,
         authorization: &ExecutionAuthorization,
+        expected_revision: u64,
         audit: &AuditRecord,
     ) -> Result<(), RepositoryError>;
     fn append_audit(&self, record: &AuditRecord) -> Result<(), RepositoryError>;
@@ -119,6 +125,7 @@ pub trait ConnectionRepository: Send + Sync {
 pub struct SqliteConnectionRepository {
     path: PathBuf,
     fail_next_audit: Arc<AtomicBool>,
+    fail_next_onboarding_finalize: Arc<AtomicBool>,
 }
 
 impl SqliteConnectionRepository {
@@ -126,6 +133,7 @@ impl SqliteConnectionRepository {
         let repository = Self {
             path: path.as_ref().to_path_buf(),
             fail_next_audit: Arc::new(AtomicBool::new(false)),
+            fail_next_onboarding_finalize: Arc::new(AtomicBool::new(false)),
         };
         repository.connection()?.execute_batch(SCHEMA)?;
         Ok(repository)
@@ -133,6 +141,11 @@ impl SqliteConnectionRepository {
 
     pub fn fail_next_audit(&self) {
         self.fail_next_audit.store(true, Ordering::SeqCst);
+    }
+
+    pub fn fail_next_onboarding_finalize(&self) {
+        self.fail_next_onboarding_finalize
+            .store(true, Ordering::SeqCst);
     }
 
     fn connection(&self) -> Result<Connection, RepositoryError> {
@@ -229,6 +242,16 @@ impl ConnectionRepository for SqliteConnectionRepository {
         write_connection(&self.connection()?, connection, false)
     }
 
+    fn insert_connection_with_audit(
+        &self,
+        connection: &BrokerConnection,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError> {
+        self.mutate_with_audits(std::slice::from_ref(audit), |tx| {
+            write_connection(tx, connection, false)
+        })
+    }
+
     fn insert_onboarding(
         &self,
         connection: &BrokerConnection,
@@ -236,9 +259,17 @@ impl ConnectionRepository for SqliteConnectionRepository {
         authorizations: &[ExecutionAuthorization],
         audits: &[AuditRecord],
     ) -> Result<(), RepositoryError> {
+        if self
+            .fail_next_onboarding_finalize
+            .swap(false, Ordering::SeqCst)
+        {
+            return Err(RepositoryError::Persistence(
+                "injected onboarding finalization failure".to_owned(),
+            ));
+        }
         let mut database = self.connection()?;
         let transaction = database.transaction()?;
-        write_connection(&transaction, connection, false)?;
+        write_connection(&transaction, connection, true)?;
         for account in accounts {
             if account.connection_id != connection.id {
                 return Err(RepositoryError::IdentityMismatch);
@@ -273,12 +304,13 @@ impl ConnectionRepository for SqliteConnectionRepository {
             transaction.execute(
                 "INSERT INTO execution_authorizations (
                     connection_id, provider_account_id, authorization_mode,
-                    changed_by, changed_at_unix_ms
-                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    authorization_revision, changed_by, changed_at_unix_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     authorization.connection_id.as_str(),
                     authorization.provider_account_id,
                     encode(&authorization.mode)?,
+                    authorization.authorization_revision,
                     authorization.changed_by.as_str(),
                     authorization.changed_at_unix_ms,
                 ],
@@ -524,7 +556,7 @@ impl ConnectionRepository for SqliteConnectionRepository {
         self.connection()?
             .query_row(
                 "SELECT connection_id, provider_account_id, authorization_mode,
-                 changed_by, changed_at_unix_ms FROM execution_authorizations
+                 authorization_revision, changed_by, changed_at_unix_ms FROM execution_authorizations
                  WHERE connection_id = ?1 AND provider_account_id = ?2",
                 params![connection_id.as_str(), provider_account_id],
                 |row| {
@@ -533,9 +565,10 @@ impl ConnectionRepository for SqliteConnectionRepository {
                             .map_err(conversion_error)?,
                         provider_account_id: row.get(1)?,
                         mode: decode_row(row, 2)?,
-                        changed_by: UserId::parse(row.get::<_, String>(3)?)
+                        authorization_revision: row.get(3)?,
+                        changed_by: UserId::parse(row.get::<_, String>(4)?)
                             .map_err(conversion_error)?,
-                        changed_at_unix_ms: row.get(4)?,
+                        changed_at_unix_ms: row.get(5)?,
                     })
                 },
             )
@@ -553,10 +586,11 @@ impl ConnectionRepository for SqliteConnectionRepository {
     fn put_authorization_with_audit(
         &self,
         authorization: &ExecutionAuthorization,
+        expected_revision: u64,
         audit: &AuditRecord,
     ) -> Result<(), RepositoryError> {
         self.mutate_with_audits(std::slice::from_ref(audit), |tx| {
-            write_authorization(tx, authorization)
+            write_authorization_cas(tx, authorization, expected_revision)
         })
     }
 
@@ -737,10 +771,13 @@ fn write_delete_binding(
     connection: &Connection,
     binding_id: &BindingId,
 ) -> Result<(), RepositoryError> {
-    connection.execute(
+    let changed = connection.execute(
         "DELETE FROM broker_account_bindings WHERE binding_id = ?1",
         [binding_id.as_str()],
     )?;
+    if changed != 1 {
+        return Err(RepositoryError::NotFound);
+    }
     Ok(())
 }
 
@@ -767,21 +804,49 @@ fn write_authorization(
 ) -> Result<(), RepositoryError> {
     connection.execute(
         "INSERT INTO execution_authorizations (
-            connection_id, provider_account_id, authorization_mode,
+            connection_id, provider_account_id, authorization_mode, authorization_revision,
             changed_by, changed_at_unix_ms
-         ) VALUES (?1, ?2, ?3, ?4, ?5)
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(connection_id, provider_account_id) DO UPDATE SET
             authorization_mode = excluded.authorization_mode,
+            authorization_revision = excluded.authorization_revision,
             changed_by = excluded.changed_by,
             changed_at_unix_ms = excluded.changed_at_unix_ms",
         params![
             authorization.connection_id.as_str(),
             authorization.provider_account_id,
             encode(&authorization.mode)?,
+            authorization.authorization_revision,
             authorization.changed_by.as_str(),
             authorization.changed_at_unix_ms,
         ],
     )?;
+    Ok(())
+}
+
+fn write_authorization_cas(
+    connection: &Connection,
+    authorization: &ExecutionAuthorization,
+    expected_revision: u64,
+) -> Result<(), RepositoryError> {
+    let changed = connection.execute(
+        "UPDATE execution_authorizations SET authorization_mode = ?3,
+         authorization_revision = ?4, changed_by = ?5, changed_at_unix_ms = ?6
+         WHERE connection_id = ?1 AND provider_account_id = ?2
+           AND authorization_revision = ?7",
+        params![
+            authorization.connection_id.as_str(),
+            authorization.provider_account_id,
+            encode(&authorization.mode)?,
+            authorization.authorization_revision,
+            authorization.changed_by.as_str(),
+            authorization.changed_at_unix_ms,
+            expected_revision,
+        ],
+    )?;
+    if changed != 1 || authorization.authorization_revision != expected_revision.saturating_add(1) {
+        return Err(RepositoryError::StaleAuthorizationRevision);
+    }
     Ok(())
 }
 
@@ -914,6 +979,8 @@ pub enum RepositoryError {
     NotFound,
     #[error("connection/account identity mismatch")]
     IdentityMismatch,
+    #[error("execution authorization revision is stale")]
+    StaleAuthorizationRevision,
     #[error("connection persistence is corrupt: {0}")]
     Corrupt(String),
 }
@@ -994,6 +1061,7 @@ CREATE TABLE IF NOT EXISTS execution_authorizations (
     connection_id TEXT NOT NULL,
     provider_account_id TEXT NOT NULL,
     authorization_mode TEXT NOT NULL,
+    authorization_revision INTEGER NOT NULL,
     changed_by TEXT NOT NULL REFERENCES connection_users(user_id),
     changed_at_unix_ms INTEGER NOT NULL,
     PRIMARY KEY (connection_id, provider_account_id),

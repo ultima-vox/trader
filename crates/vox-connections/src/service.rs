@@ -112,21 +112,38 @@ pub enum ExecutionPurpose {
     ProductionAutomated,
 }
 
-#[derive(Debug)]
-pub struct ResolvedReadAccess {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadAccessGrant {
     pub target: AccountTarget,
     pub credential_ref: CredentialRef,
-    pub credential: SecretBytes,
     pub capabilities: BTreeSet<ConnectionCapability>,
 }
 
-#[derive(Debug)]
-pub struct ResolvedExecutionAccess {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExecutionAccessGrant {
     pub target: AccountTarget,
     pub credential_ref: CredentialRef,
-    pub credential: SecretBytes,
     pub capabilities: BTreeSet<ConnectionCapability>,
     pub mode: ExecutionAuthorizationMode,
+    pub authorization_revision: u64,
+}
+
+pub trait BrokerCredentialClientFactory {
+    type ReadClient;
+    type ExecutionClient;
+
+    fn build_read_client(
+        &self,
+        target: AccountTarget,
+        credential: SecretBytes,
+    ) -> Result<Self::ReadClient, ProviderError>;
+
+    fn build_execution_client(
+        &self,
+        target: AccountTarget,
+        credential: SecretBytes,
+        authorization_revision: u64,
+    ) -> Result<Self::ExecutionClient, ProviderError>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -176,6 +193,39 @@ where
 
         let connection_id = ConnectionId::new();
         let credential_ref = CredentialRef::new();
+        let pending = BrokerConnection {
+            id: connection_id.clone(),
+            provider: request.provider.clone(),
+            environment: request.environment,
+            credential_ref: credential_ref.clone(),
+            label: label.clone(),
+            credential_fingerprint: "PENDING".to_owned(),
+            credential_status: CredentialStatus::PendingValidation,
+            credential_class: CredentialClass::Unknown,
+            credential_scope: CredentialScope::NotConfirmed,
+            enabled: false,
+            health: ConnectionHealth {
+                state: ConnectionHealthState::Validating,
+                checked_at_unix_ms: Some(security.now_unix_ms),
+                provider: request.provider.clone(),
+                environment: request.environment,
+                reason_code: ConnectionHealthReason::None,
+                safe_detail: None,
+                retryable: false,
+            },
+            capabilities: BTreeSet::new(),
+            created_at_unix_ms: security.now_unix_ms,
+            updated_at_unix_ms: security.now_unix_ms,
+        };
+        let pending_audit = self.audit_record(
+            security,
+            "CONNECTION_ONBOARDING_STARTED",
+            connection_id.as_str(),
+            None,
+            Some("PENDING_VALIDATION"),
+        )?;
+        self.repository
+            .insert_connection_with_audit(&pending, &pending_audit)?;
         let fingerprint =
             self.secret_store
                 .put(&credential_ref, &context, credential, security.now_unix_ms)?;
@@ -210,6 +260,7 @@ where
                 connection_id: connection_id.clone(),
                 provider_account_id: account.provider_account_id.clone(),
                 mode: ExecutionAuthorizationMode::Disabled,
+                authorization_revision: 1,
                 changed_by: security.actor.clone(),
                 changed_at_unix_ms: security.now_unix_ms,
             })
@@ -246,6 +297,39 @@ where
     ) -> Result<Vec<BrokerConnection>, ServiceError> {
         self.require(security, Permission::ViewConnectionMetadata)?;
         self.repository.list_connections().map_err(Into::into)
+    }
+
+    pub fn discovered_accounts(
+        &self,
+        security: &SecurityContext,
+        connection_id: &ConnectionId,
+    ) -> Result<Vec<BrokerAccount>, ServiceError> {
+        self.require(security, Permission::ViewConnectionMetadata)?;
+        self.connection(connection_id)?;
+        self.repository.accounts(connection_id).map_err(Into::into)
+    }
+
+    pub fn account_bindings(
+        &self,
+        security: &SecurityContext,
+        connection_id: &ConnectionId,
+    ) -> Result<Vec<BrokerAccountBinding>, ServiceError> {
+        self.require(security, Permission::ViewConnectionMetadata)?;
+        self.connection(connection_id)?;
+        self.repository.bindings(connection_id).map_err(Into::into)
+    }
+
+    pub fn execution_authorization(
+        &self,
+        security: &SecurityContext,
+        connection_id: &ConnectionId,
+        provider_account_id: &str,
+    ) -> Result<ExecutionAuthorization, ServiceError> {
+        self.require(security, Permission::ViewConnectionMetadata)?;
+        self.connection(connection_id)?;
+        self.repository
+            .authorization(connection_id, provider_account_id)?
+            .ok_or(ServiceError::AccountNotFound)
     }
 
     pub async fn revalidate(
@@ -473,7 +557,31 @@ where
     ) -> Result<BrokerConnection, ServiceError> {
         self.require(security, Permission::DisableDeleteConnection)?;
         let mut connection = self.connection(connection_id)?;
-        connection.enabled = false;
+        if connection.credential_status != CredentialStatus::PendingDisable {
+            connection.enabled = false;
+            connection.credential_status = CredentialStatus::PendingDisable;
+            connection.health = ConnectionHealth {
+                state: ConnectionHealthState::Disabled,
+                checked_at_unix_ms: Some(security.now_unix_ms),
+                provider: connection.provider.clone(),
+                environment: connection.environment,
+                reason_code: ConnectionHealthReason::DisabledByOperator,
+                safe_detail: Some("credential disable in progress".to_owned()),
+                retryable: false,
+            };
+            connection.updated_at_unix_ms = security.now_unix_ms;
+            let started = self.audit_record(
+                security,
+                "CONNECTION_DISABLE_STARTED",
+                connection_id.as_str(),
+                Some("ENABLED"),
+                Some("PENDING_DISABLE"),
+            )?;
+            self.repository
+                .update_connection_with_audit(&connection, &started)?;
+        }
+        self.secret_store.disable(&connection.credential_ref)?;
+        connection.credential_status = CredentialStatus::Disabled;
         connection.health = ConnectionHealth {
             state: ConnectionHealthState::Disabled,
             checked_at_unix_ms: Some(security.now_unix_ms),
@@ -483,7 +591,6 @@ where
             safe_detail: Some("disabled by authorized operator".to_owned()),
             retryable: false,
         };
-        connection.credential_status = CredentialStatus::Disabled;
         connection.updated_at_unix_ms = security.now_unix_ms;
         let audits = [
             self.audit_record(
@@ -503,7 +610,6 @@ where
         ];
         self.repository
             .update_connection_with_audits(&connection, &audits)?;
-        self.secret_store.disable(&connection.credential_ref)?;
         Ok(connection)
     }
 
@@ -684,9 +790,13 @@ where
         let previous = self
             .repository
             .authorization(connection_id, provider_account_id)?
-            .map(|value| value.mode)
-            .unwrap_or(ExecutionAuthorizationMode::Disabled);
-        self.require_authorization_transition(security, connection.environment, previous, mode)?;
+            .ok_or(ServiceError::AccountNotFound)?;
+        self.require_authorization_transition(
+            security,
+            connection.environment,
+            previous.mode,
+            mode,
+        )?;
         let account = self
             .repository
             .accounts(connection_id)?
@@ -722,6 +832,10 @@ where
             connection_id: connection_id.clone(),
             provider_account_id: provider_account_id.to_owned(),
             mode,
+            authorization_revision: previous
+                .authorization_revision
+                .checked_add(1)
+                .ok_or(ServiceError::AuthorizationRevisionOverflow)?,
             changed_by: security.actor.clone(),
             changed_at_unix_ms: security.now_unix_ms,
         };
@@ -729,49 +843,57 @@ where
             security,
             "EXECUTION_AUTHORIZATION_CHANGED",
             binding.id.as_str(),
-            Some(authorization_name(previous)),
+            Some(authorization_name(previous.mode)),
             Some(authorization_name(mode)),
         )?;
-        self.repository
-            .put_authorization_with_audit(&authorization, &audit)?;
+        self.repository.put_authorization_with_audit(
+            &authorization,
+            previous.authorization_revision,
+            &audit,
+        )?;
         Ok(authorization)
     }
 
-    pub fn resolve_read_credential(
+    pub fn validate_read_access(
         &self,
         connection_id: &ConnectionId,
         provider_account_id: &str,
         vox_account_id: &VoxAccountId,
-    ) -> Result<ResolvedReadAccess, ServiceError> {
+    ) -> Result<ReadAccessGrant, ServiceError> {
         let bound =
             self.bound_healthy_target(connection_id, provider_account_id, vox_account_id)?;
         let credential = self.secret_store.get(
             &bound.connection.credential_ref,
             &credential_context(&bound.connection),
         )?;
-        Ok(ResolvedReadAccess {
+        drop(credential);
+        Ok(ReadAccessGrant {
             target: bound.target,
             credential_ref: bound.connection.credential_ref,
-            credential,
             capabilities: bound.capabilities,
         })
     }
 
-    pub fn resolve_execution_credential(
+    pub fn validate_execution_access(
         &self,
         connection_id: &ConnectionId,
         provider_account_id: &str,
         vox_account_id: &VoxAccountId,
         purpose: ExecutionPurpose,
-    ) -> Result<ResolvedExecutionAccess, ServiceError> {
+        expected_revision: Option<u64>,
+    ) -> Result<ExecutionAccessGrant, ServiceError> {
         let bound =
             self.bound_healthy_target(connection_id, provider_account_id, vox_account_id)?;
-        let mode = self
+        let authorization = self
             .repository
             .authorization(connection_id, provider_account_id)?
-            .map(|value| value.mode)
-            .unwrap_or(ExecutionAuthorizationMode::Disabled);
-        if !execution_purpose_allowed(bound.connection.environment, mode, purpose) {
+            .ok_or(ServiceError::ExecutionUnauthorized)?;
+        if expected_revision
+            .is_some_and(|revision| revision != authorization.authorization_revision)
+        {
+            return Err(ServiceError::StaleExecutionAuthorization);
+        }
+        if !execution_purpose_allowed(bound.connection.environment, authorization.mode, purpose) {
             return Err(ServiceError::ExecutionUnauthorized);
         }
         if !bound
@@ -784,13 +906,81 @@ where
             &bound.connection.credential_ref,
             &credential_context(&bound.connection),
         )?;
-        Ok(ResolvedExecutionAccess {
+        drop(credential);
+        Ok(ExecutionAccessGrant {
             target: bound.target,
             credential_ref: bound.connection.credential_ref,
-            credential,
             capabilities: bound.capabilities,
-            mode,
+            mode: authorization.mode,
+            authorization_revision: authorization.authorization_revision,
         })
+    }
+
+    pub fn validate_runtime_read_access(
+        &self,
+        connection_id: &ConnectionId,
+        provider_account_id: &str,
+    ) -> Result<ReadAccessGrant, ServiceError> {
+        let vox_account_id = self.bound_vox_account(connection_id, provider_account_id)?;
+        self.validate_read_access(connection_id, provider_account_id, &vox_account_id)
+    }
+
+    pub fn validate_runtime_execution_access(
+        &self,
+        connection_id: &ConnectionId,
+        provider_account_id: &str,
+        purpose: ExecutionPurpose,
+        expected_revision: Option<u64>,
+    ) -> Result<ExecutionAccessGrant, ServiceError> {
+        let vox_account_id = self.bound_vox_account(connection_id, provider_account_id)?;
+        self.validate_execution_access(
+            connection_id,
+            provider_account_id,
+            &vox_account_id,
+            purpose,
+            expected_revision,
+        )
+    }
+
+    pub fn open_runtime_read_client<F: BrokerCredentialClientFactory>(
+        &self,
+        factory: &F,
+        connection_id: &ConnectionId,
+        provider_account_id: &str,
+    ) -> Result<F::ReadClient, ServiceError> {
+        let vox_account_id = self.bound_vox_account(connection_id, provider_account_id)?;
+        let bound =
+            self.bound_healthy_target(connection_id, provider_account_id, &vox_account_id)?;
+        let credential = self.secret_store.get(
+            &bound.connection.credential_ref,
+            &credential_context(&bound.connection),
+        )?;
+        factory
+            .build_read_client(bound.target, credential)
+            .map_err(Into::into)
+    }
+
+    pub fn open_runtime_execution_client<F: BrokerCredentialClientFactory>(
+        &self,
+        factory: &F,
+        connection_id: &ConnectionId,
+        provider_account_id: &str,
+        purpose: ExecutionPurpose,
+        expected_revision: u64,
+    ) -> Result<F::ExecutionClient, ServiceError> {
+        let grant = self.validate_runtime_execution_access(
+            connection_id,
+            provider_account_id,
+            purpose,
+            Some(expected_revision),
+        )?;
+        let connection = self.connection(connection_id)?;
+        let credential = self
+            .secret_store
+            .get(&connection.credential_ref, &credential_context(&connection))?;
+        factory
+            .build_execution_client(grant.target, credential, grant.authorization_revision)
+            .map_err(Into::into)
     }
 
     fn authorization_conflict(
@@ -858,9 +1048,14 @@ where
                     connection_id: connection.id.clone(),
                     provider_account_id: account.provider_account_id.clone(),
                     mode: ExecutionAuthorizationMode::Disabled,
+                    authorization_revision: previous
+                        .authorization_revision
+                        .checked_add(1)
+                        .ok_or(ServiceError::AuthorizationRevisionOverflow)?,
                     changed_by: security.actor.clone(),
                     changed_at_unix_ms: security.now_unix_ms,
                 },
+                previous.authorization_revision,
                 &audit,
             )?;
         }
@@ -918,6 +1113,19 @@ where
             },
             capabilities: account.capabilities,
         })
+    }
+
+    fn bound_vox_account(
+        &self,
+        connection_id: &ConnectionId,
+        provider_account_id: &str,
+    ) -> Result<VoxAccountId, ServiceError> {
+        self.repository
+            .bindings(connection_id)?
+            .into_iter()
+            .find(|binding| binding.provider_account_id == provider_account_id && binding.enabled)
+            .map(|binding| binding.vox_account_id)
+            .ok_or(ServiceError::AccountBindingMismatch)
     }
 
     fn require_authorization_transition(
@@ -1236,6 +1444,10 @@ pub enum ServiceError {
     ProviderDoesNotAllowProductionOrders,
     #[error("vox execution is not authorized for the requested mutation")]
     ExecutionUnauthorized,
+    #[error("captured execution authorization revision is stale")]
+    StaleExecutionAuthorization,
+    #[error("execution authorization revision exhausted")]
+    AuthorizationRevisionOverflow,
     #[error("credential rotation compensation failed; credential disabled")]
     CredentialRotationCompensationFailed,
     #[error("provider returned duplicate account identity")]

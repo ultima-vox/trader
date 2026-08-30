@@ -16,7 +16,8 @@ use crate::model::{
 use crate::policy::RuntimeStateMachine;
 use crate::ports::{
     BrokerPortError, CredentialResolverPort, ExecutionPort, ExecutionResult, ExecutionStreamPort,
-    HealthReadPort, MetricLabel, MetricName, MetricsPort, RuntimeStore, StoreError, StreamSignal,
+    HealthReadPort, MetricLabel, MetricName, MetricsPort, RuntimeExecutionPurpose, RuntimeStore,
+    StoreError, StreamSignal,
 };
 use crate::reconcile::{Reconciler, ReconciliationError, ReconciliationReport};
 
@@ -259,7 +260,40 @@ where
         logical_request_id: impl Into<String>,
         correlation_id: impl Into<String>,
     ) -> Result<DispatchReceipt, RuntimeError> {
-        self.ensure_execution_allowed().await?;
+        let purpose = match self.scope.environment {
+            crate::model::RuntimeEnvironment::Sandbox => RuntimeExecutionPurpose::SandboxMutation,
+            crate::model::RuntimeEnvironment::Production => {
+                RuntimeExecutionPurpose::ProductionAutomated
+            }
+        };
+        self.dispatch_for_purpose(command, logical_request_id, correlation_id, purpose)
+            .await
+    }
+
+    pub async fn dispatch_manual(
+        &self,
+        command: RuntimeExecutionCommand,
+        logical_request_id: impl Into<String>,
+        correlation_id: impl Into<String>,
+    ) -> Result<DispatchReceipt, RuntimeError> {
+        let purpose = match self.scope.environment {
+            crate::model::RuntimeEnvironment::Sandbox => RuntimeExecutionPurpose::SandboxMutation,
+            crate::model::RuntimeEnvironment::Production => {
+                RuntimeExecutionPurpose::ProductionManual
+            }
+        };
+        self.dispatch_for_purpose(command, logical_request_id, correlation_id, purpose)
+            .await
+    }
+
+    async fn dispatch_for_purpose(
+        &self,
+        command: RuntimeExecutionCommand,
+        logical_request_id: impl Into<String>,
+        correlation_id: impl Into<String>,
+        purpose: RuntimeExecutionPurpose,
+    ) -> Result<DispatchReceipt, RuntimeError> {
+        self.ensure_execution_allowed(purpose).await?;
         let logical_request_id = logical_request_id.into();
         if command.account_id() != self.scope.broker_account_id {
             return Err(RuntimeError::Safety(
@@ -524,15 +558,36 @@ where
         Ok(())
     }
 
-    async fn ensure_execution_allowed(&self) -> Result<(), RuntimeError> {
+    async fn ensure_execution_allowed(
+        &self,
+        purpose: RuntimeExecutionPurpose,
+    ) -> Result<(), RuntimeError> {
         let state = self.state.lock().await.state();
         if state != RuntimeState::Ready
-            || !self.execution_authorized.load(Ordering::SeqCst)
             || !self.connected.load(Ordering::SeqCst)
             || self.reconciliation_dirty.load(Ordering::SeqCst)
             || self.reconciliation_running.load(Ordering::SeqCst)
         {
             return Err(RuntimeError::ExecutionGateClosed);
+        }
+        if self
+            .credentials
+            .authorize_execution(&self.scope, purpose)
+            .await
+            .is_err()
+        {
+            self.execution_authorized.store(false, Ordering::SeqCst);
+            self.update_health(|health| {
+                health.execution_authorized = false;
+                health.new_exposure_allowed = false;
+            })
+            .await;
+            return Err(RuntimeError::ExecutionGateClosed);
+        }
+        if purpose != RuntimeExecutionPurpose::ProductionManual {
+            self.execution_authorized.store(true, Ordering::SeqCst);
+            self.update_health(|health| health.execution_authorized = true)
+                .await;
         }
         let verified = store_call(self.store.clone(), {
             let scope_key = self.scope.key();

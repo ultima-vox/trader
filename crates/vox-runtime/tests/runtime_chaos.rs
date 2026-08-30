@@ -416,6 +416,36 @@ async fn clean_startup_existing_position_and_read_only_authorization_are_safe()
 }
 
 #[tokio::test]
+async fn authorization_revocation_after_ready_blocks_dispatch_before_broker_call()
+-> Result<(), Box<dyn std::error::Error>> {
+    let harness = Harness::new(FakeSnapshot::flat("account-1"), [], true)?;
+    harness.coordinator.start().await?;
+    assert!(harness.coordinator.health().await.new_exposure_allowed);
+
+    harness
+        .credentials
+        .execution_authorized
+        .store(false, Ordering::SeqCst);
+    assert!(matches!(
+        harness
+            .coordinator
+            .dispatch(
+                regular_command("request-revoked"),
+                "request-revoked",
+                "correlation-revoked"
+            )
+            .await,
+        Err(RuntimeError::ExecutionGateClosed)
+    ));
+    assert_eq!(harness.execution.calls.load(Ordering::SeqCst), 0);
+    assert!(!harness.coordinator.health().await.new_exposure_allowed);
+
+    harness.coordinator.shutdown().await?;
+    harness.cleanup();
+    Ok(())
+}
+
+#[tokio::test]
 async fn acknowledged_mutation_is_durable_and_duplicate_identity_is_rejected()
 -> Result<(), Box<dyn std::error::Error>> {
     let links = BrokerIdentityLinks {

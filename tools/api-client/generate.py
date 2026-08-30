@@ -136,10 +136,16 @@ def render_client(spec: dict) -> str:
         "  }",
         "",
         "  private async request<R>(method: string, path: string, query?: Record<string, unknown>, body?: unknown): Promise<R> {",
-        "    const url = new URL(this.baseUrl + path, this.baseUrl || \"http://localhost\");",
+        "    let resolvedPath = path;",
+        "    const remainingQuery: Record<string, unknown> = {};",
         "    for (const [key, value] of Object.entries(query ?? {})) {",
-        "      if (value !== undefined && value !== null) url.searchParams.set(key, String(value));",
+        "      if (value === undefined || value === null) continue;",
+        "      const marker = `{${key}}`;",
+        "      if (resolvedPath.includes(marker)) resolvedPath = resolvedPath.replaceAll(marker, encodeURIComponent(String(value)));",
+        "      else remainingQuery[key] = value;",
         "    }",
+        "    const url = new URL(this.baseUrl + resolvedPath, this.baseUrl || \"http://localhost\");",
+        "    for (const [key, value] of Object.entries(remainingQuery)) url.searchParams.set(key, String(value));",
         "    const init: RequestInit = { method };",
         "    if (body !== undefined) {",
         "      init.headers = { \"content-type\": \"application/json\" };",
@@ -167,7 +173,11 @@ def render_client(spec: dict) -> str:
                 content = request_body.get("content", {}).get("application/json", {})
                 if "$ref" in content.get("schema", {}):
                     body_ref = ts_name(content["schema"]["$ref"])
-            ok = operation.get("responses", {}).get("200", {})
+            responses = operation.get("responses", {})
+            success_codes = sorted(
+                code for code in responses if code.isdigit() and 200 <= int(code) < 300
+            )
+            ok = responses.get(success_codes[0], {}) if success_codes else {}
             ret = "void"
             schema = ok.get("content", {}).get("application/json", {}).get("schema")
             if schema:

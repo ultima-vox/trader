@@ -77,6 +77,15 @@ pub struct CapabilitySet {
     pub unavailable: Vec<UnavailableCapability>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AttachedBackends {
+    pub runtime: bool,
+    pub accounts: bool,
+    pub execution: bool,
+    pub market_data: bool,
+    pub connections: bool,
+}
+
 impl CapabilitySet {
     /// The capability set of a deployment where only the runtime read side exists.
     ///
@@ -87,14 +96,11 @@ impl CapabilitySet {
         provider: ProviderDto,
         environment: BrokerEnvironment,
         account_id: Option<String>,
-        runtime_attached: bool,
-        accounts_attached: bool,
-        execution_attached: bool,
-        market_data_attached: bool,
+        attached: AttachedBackends,
     ) -> Self {
         let mut supported = Vec::new();
         let mut unavailable = Vec::new();
-        if runtime_attached {
+        if attached.runtime {
             supported.push(Capability::RuntimeHealth);
         } else {
             unavailable.push(UnavailableCapability {
@@ -103,7 +109,7 @@ impl CapabilitySet {
                 owner: "#11".to_owned(),
             });
         }
-        if accounts_attached {
+        if attached.accounts {
             supported.push(Capability::AccountReadSide);
         } else {
             unavailable.push(UnavailableCapability {
@@ -112,7 +118,7 @@ impl CapabilitySet {
                 owner: "#17".to_owned(),
             });
         }
-        if execution_attached {
+        if attached.execution {
             supported.push(Capability::OrderExecution);
             supported.push(Capability::ProtectionExecution);
         } else {
@@ -124,13 +130,22 @@ impl CapabilitySet {
                 });
             }
         }
-        if market_data_attached {
+        if attached.market_data {
             supported.push(Capability::MarketData);
         } else {
             unavailable.push(UnavailableCapability {
                 capability: Capability::MarketData,
                 reason: "no market-data projection is attached to this process".to_owned(),
                 owner: "#38 projection over the accepted #8 layer".to_owned(),
+            });
+        }
+        if attached.connections {
+            supported.push(Capability::ConnectionManagement);
+        } else {
+            unavailable.push(UnavailableCapability {
+                capability: Capability::ConnectionManagement,
+                reason: "no connection administration port is attached to this process".to_owned(),
+                owner: "#17".to_owned(),
             });
         }
         for (capability, reason, owner) in [
@@ -143,11 +158,6 @@ impl CapabilitySet {
                 Capability::BulkProtectionMigration,
                 "no bulk mutation contract exists; single mutations only",
                 "#10",
-            ),
-            (
-                Capability::ConnectionManagement,
-                "connection and credential lifecycle has no contract",
-                "#17",
             ),
             (
                 Capability::Rbac,
@@ -226,10 +236,7 @@ mod tests {
             ProviderDto::TInvest,
             BrokerEnvironment::Sandbox,
             None,
-            false,
-            false,
-            false,
-            false,
+            AttachedBackends::default(),
         );
         for capability in [
             Capability::RiskVerdict,
@@ -263,14 +270,35 @@ mod tests {
             ProviderDto::TInvest,
             BrokerEnvironment::Production,
             Some("account:primary".to_owned()),
-            true,
-            true,
-            true,
-            false,
+            AttachedBackends {
+                runtime: true,
+                accounts: true,
+                execution: true,
+                ..AttachedBackends::default()
+            },
         );
         assert!(set.supported.contains(&Capability::RuntimeHealth));
         assert!(set.supported.contains(&Capability::AccountReadSide));
         assert!(set.supported.contains(&Capability::OrderExecution));
         assert!(!set.supported.contains(&Capability::RiskVerdict));
+    }
+
+    #[test]
+    fn attached_connection_port_advertises_connection_management() {
+        let set = CapabilitySet::without_backend_owners(
+            ProviderDto::TInvest,
+            BrokerEnvironment::Sandbox,
+            None,
+            AttachedBackends {
+                connections: true,
+                ..AttachedBackends::default()
+            },
+        );
+        assert!(set.supported.contains(&Capability::ConnectionManagement));
+        assert!(
+            !set.unavailable
+                .iter()
+                .any(|item| item.capability == Capability::ConnectionManagement)
+        );
     }
 }

@@ -6,13 +6,14 @@ pub mod secret;
 pub mod service;
 
 pub use model::*;
-pub use repository::{ConnectionRepository, SqliteConnectionRepository};
+pub use repository::{ConnectionRepository, RepositoryError, SqliteConnectionRepository};
 pub use secret::{
     CredentialContext, KeyMaterial, KeyProvider, KeyProviderError, SecretBytes, SecretStore,
     SecretStoreError, SqliteSecretStore, StaticKeyProvider,
 };
 pub use service::{
-    BrokerProviderPort, ConnectionService, CreateConnectionRequest, CredentialRotationOutcome,
-    ExecutionPurpose, ProviderAccountFact, ProviderDiscovery, ProviderError, ProviderErrorKind,
-    ResolvedExecutionAccess, ResolvedReadAccess, SecurityContext, ServiceError,
+    BrokerCredentialClientFactory, BrokerProviderPort, ConnectionService, CreateConnectionRequest,
+    CredentialRotationOutcome, ExecutionAccessGrant, ExecutionPurpose, ProviderAccountFact,
+    ProviderDiscovery, ProviderError, ProviderErrorKind, ReadAccessGrant, SecurityContext,
+    ServiceError,
 };

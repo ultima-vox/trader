@@ -2958,10 +2958,12 @@ dependencies = [
  "time",
  "tokio",
  "tokio-tungstenite 0.28.0",
+ "tower",
  "tower-http",
  "tracing",
  "utoipa",
  "uuid",
+ "vox-connections",
  "vox-domain",
  "vox-runtime",
 ]
@@ -3032,6 +3034,7 @@ dependencies = [
  "tonic",
  "tracing",
  "uuid",
+ "vox-connections",
  "vox-domain",
  "vox-tinvest",
 ]

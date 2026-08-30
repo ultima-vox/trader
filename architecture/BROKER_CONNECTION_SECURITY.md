@@ -1,8 +1,9 @@
 # Broker connection and credential security
 
 Issue #17 owns provider-neutral connection metadata, encrypted credential storage, account
-discovery/binding, RBAC and Vox execution authorization. External HTTP/WebSocket transport remains
-#38. Provider execution state machines remain #10. Runtime reconciliation remains #11.
+discovery/binding, RBAC and Vox execution authorization. Post-#45 HTTP mapping exposes these
+services without changing WebSocket contracts. Provider execution state machines remain #10.
+Runtime reconciliation remains #11.
 
 ## Canonical ownership
 
@@ -18,12 +19,14 @@ CredentialRef -> SecretStore -> encrypted_credentials(payload ciphertext + wrapp
 
 `vox-connections` owns generic types and lifecycle. `vox-tinvest::connection_provider` owns
 T-Invest endpoint routing, credential validation and provider-account capability mapping.
-Read-side resolution (`resolve_read_credential`) returns internal credential material only when
-connection, provider environment, broker account and explicit Vox account binding all match.
-Execution-side resolution (`resolve_execution_credential`) additionally fails closed unless Vox
-authorization permits the requested mutation purpose. A full-access provider token never decrypts
-for mutation while `ExecutionAuthorization` is `Disabled`. Transport/runtime client replacement
-remains deferred; no cached authorization bridge is exposed.
+Read-side validation returns only non-secret `ReadAccessGrant` after connection, provider
+environment, broker account and explicit Vox account binding all match. Provider client creation
+passes credential material only inside `ConnectionService` to `BrokerCredentialClientFactory`;
+callers never receive bearer bytes. Execution-side validation additionally checks exact mutation
+purpose and monotonic `authorization_revision`. Captured revisions fail after any authorization
+change, including same-millisecond changes and emergency downgrade. Runtime rechecks durable
+authorization before every dispatch. `StoredTInvestClientFactory` constructs existing
+`TInvestGrpcClient`; no second provider client exists.
 
 ## Secret envelope
 
@@ -50,16 +53,20 @@ DB backup without external KEK reveals metadata and ciphertext, not broker crede
 
 1. Authenticated actor with `MANAGE_CREDENTIALS` submits credential once over Vox TLS transport.
 2. Provider adapter routes by typed environment and validates against matching provider endpoint.
-3. Adapter discovers every accessible account and provider facts. Only then service writes
-   encrypted secret and non-secret metadata.
+3. Adapter discovers every accessible account and provider facts. Service durably writes disabled
+   `PENDING_VALIDATION` metadata before encrypted secret commit, then atomically finalizes accounts,
+   default authorizations and audits. Crash/finalization failure cannot leave unowned ciphertext.
 4. One `CredentialRef` belongs to connection; discovered accounts never duplicate secret.
 5. Every account receives explicit `ExecutionAuthorization::Disabled`, including provider
    full-access credentials. `ManualAllowed` and `AutomatedAllowed` require separate Vox RBAC.
+   Every transition increments `authorization_revision` through compare-and-swap persistence.
 6. Credential rotation validates new material, closes connection health to `VALIDATING`, replaces
    envelope, persists broker facts, and returns `reconnect_required=true`. Failure compensates old
-   secret/metadata or disables credential. Future transport integration must reconnect and
+   secret/metadata or disables credential. Runtime must reconnect and broker-authoritatively
    reconcile before using changed credential.
-7. Disable closes connection use. Delete requires disabled state, writes a `PENDING_DELETE`
+7. Disable first writes a fail-closed `PENDING_DISABLE` tombstone, disables secret material, then
+   atomically commits final disabled metadata and audit. Failure remains retryable but unusable.
+   Delete requires disabled state, writes a `PENDING_DELETE`
    tombstone with audit, then deletes the secret, then removes metadata with audit. If secret
    deletion fails, the tombstone remains and resolution stays closed. Missing secret always
    prevents connection resolution. RBAC, binding and authorization mutations persist state and
@@ -104,12 +111,15 @@ Strategy/AI identities receive only assigned roles. Without
 ## Internal API contract
 
 `ConnectionService` exposes transport-neutral operations for create/list, validate/rediscover,
-rotate, disable/delete, bind/unbind, authorization and exact bound credential resolution. Read models
-serialize credential references and fingerprints, never credential material.
+rotate, disable/delete, bind/unbind, authorization and exact bound credential resolution. Public
+read models expose neither credential references nor fingerprints. Credential material appears only
+in write-only create/rotation request fields and is never serializable as a response.
 
 Typed failures distinguish permission denial, invalid/inactive credential, insufficient provider
 permission, wrong environment, provider outage, account-access change, missing binding and disabled
-authorization. #38 maps these domain failures to external API errors without provider wire DTOs.
+authorization. `vox-api::ConnectionAdministrationAdapter` maps them to stable API errors without
+provider wire DTOs. All connection routes require an authenticated actor supplied by trusted server
+middleware; client bodies cannot choose audit actor or correlation identity.
 
 `All accounts` aggregation remains read-only. No method accepts an aggregate target for execution.
 
@@ -150,16 +160,24 @@ scope as unknown/not confirmed; never infer restriction from returned account co
 token rejection is not distinguishable from invalid credential through `GetAccounts`; Vox keeps
 typed requested environment, reports credential rejection, and never tries another endpoint.
 
-## Phase boundary
+## Application/runtime integration
 
-Phase A contains Rust domain/application ports, secure persistence, T-Invest validation adapter,
-bound credential resolution and tests. PR #45 owns REST/WebSocket/OpenAPI/public DTO/generated
-TypeScript/frontend integration. No Phase B transport wiring exists here.
+Post-PR #45 integration adds versioned provider-neutral routes for connection metadata, onboarding,
+validation/rediscovery, credential rotation, disable/delete, discovered accounts, explicit bindings
+and execution authorization. Rust DTOs generate `docs/api/openapi.json` and TypeScript client types;
+credential request fields are marked `writeOnly` and absent from every response schema.
+
+`StoredCredentialResolver` validates runtime connection, credential reference, provider,
+environment and broker-account binding. Startup read resolution never authorizes execution by
+itself. Every dispatch calls purpose-specific authorization again, so revocation after `READY`
+closes exposure before any broker call. `StoredTInvestClientFactory` is the only connection-to-gRPC
+composition path and reuses `TInvestGrpcClient`.
 
 ## Qualification
 
 Committed cases live in `qualification/broker_connection_security_contracts.json`. Deterministic
 tests cover plaintext absence, DB-only compromise, wrong/corrupt KEK/ciphertext, key rewrap,
 redaction, multi-account selective binding, multiple same-provider connections, default-off
-production authorization, RBAC denial, access revocation and frozen exact target. Ignored live test
+production authorization, RBAC denial, atomic state+audit rollback, recoverable delete tombstones,
+post-READY authorization revocation, authenticated API mapping and frozen exact target. Ignored live test
 `connection_provider_live` performs read-only T-Invest sandbox validation and account discovery.
