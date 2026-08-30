@@ -31,7 +31,7 @@ mod websocket;
 
 pub use connection_factory::{
     ConnectionFactoryError, StoredTInvestClientFactory, StoredTInvestExecutionPort,
-    StoredTInvestReadPort, StoredTInvestStreamPort, TInvestExecutionSession, TInvestReadSession,
+    StoredTInvestReadPort, StoredTInvestStreamPort, TInvestReadSession,
 };
 pub use grpc::{
     DEFAULT_GRPC_ENDPOINT, DEFAULT_SANDBOX_GRPC_ENDPOINT, GrpcCertificatePolicy, GrpcConfig,
