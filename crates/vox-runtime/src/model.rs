@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
-use vox_domain::{OrderSide, ProtectionLeg};
 pub use vox_domain::RuntimeExecutionCommand;
+use vox_domain::{OrderSide, ProtectionLeg};
 
 pub const EXECUTION_QUEUE_CAPACITY: usize = 256;
 pub const STREAM_QUEUE_CAPACITY: usize = 1_024;
