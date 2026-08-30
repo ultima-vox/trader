@@ -213,6 +213,7 @@ pub struct RiskDecision {
     pub request_id: String,
     pub policy_revision: u64,
     pub account_id: String,
+    pub action: RiskActionKind,
     pub requested_delta_lots: i64,
     pub approved_delta_lots: i64,
     pub outcome: RiskOutcome,
@@ -230,8 +231,17 @@ impl RiskDecision {
 
     #[must_use]
     pub const fn permits_dispatch(&self) -> bool {
-        matches!(self.outcome, RiskOutcome::Approve | RiskOutcome::Resize)
-            && self.approved_delta_lots != 0
+        if !matches!(self.outcome, RiskOutcome::Approve | RiskOutcome::Resize) {
+            return false;
+        }
+        match self.action {
+            RiskActionKind::DirectionalOrder | RiskActionKind::ReplaceDirectionalOrder => {
+                self.approved_delta_lots != 0
+            }
+            RiskActionKind::CancelOrder
+            | RiskActionKind::ProtectionMaintenance
+            | RiskActionKind::CancelProtection => self.approved_delta_lots == 0,
+        }
     }
 }
 
