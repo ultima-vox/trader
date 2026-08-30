@@ -602,8 +602,7 @@ pub enum RiskStoreError {
 mod tests {
     use super::*;
     use crate::model::{
-        RiskActionKind, RiskDecision, RiskOutcome, RiskReservation, RiskSource,
-        RiskValidityContext,
+        RiskActionKind, RiskDecision, RiskOutcome, RiskReservation, RiskSource, RiskValidityContext,
     };
 
     fn decision(request: &str, reservation_id: &str, delta: i64) -> RiskDecision {
