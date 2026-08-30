@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
 
-use crate::model::{ReservationState, RiskActionKind, RiskDecision, RiskReservation, RiskSource};
+use crate::model::{ReservationState, RiskDecision, RiskReservation, RiskSource};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ReservationCapacity {
@@ -602,7 +602,8 @@ pub enum RiskStoreError {
 mod tests {
     use super::*;
     use crate::model::{
-        RiskDecision, RiskOutcome, RiskReservation, RiskSource, RiskValidityContext,
+        RiskActionKind, RiskDecision, RiskOutcome, RiskReservation, RiskSource,
+        RiskValidityContext,
     };
 
     fn decision(request: &str, reservation_id: &str, delta: i64) -> RiskDecision {
@@ -759,13 +760,14 @@ mod tests {
     fn replay_returns_the_original_persisted_approval() -> Result<(), RiskStoreError> {
         let path = std::env::temp_dir().join(format!("vox-risk-{}.sqlite3", uuid::Uuid::new_v4()));
         let store = SqliteRiskStore::open(&path)?;
-        let reservation = reservation("req-replay", 3);
-        let decision = decision("req-replay", &reservation.reservation_id, 3);
+        let original_reservation = reservation("req-replay", 3);
+        let original_decision = decision("req-replay", &original_reservation.reservation_id, 3);
         let capacity = ReservationCapacity {
             max_account_reserved_notional_nanos: Some(10_000_000_000),
             max_instrument_reserved_abs_lots: Some(10),
         };
-        let first = store.persist_approval_atomic(&decision, &reservation, capacity)?;
+        let first =
+            store.persist_approval_atomic(&original_decision, &original_reservation, capacity)?;
 
         let replay_reservation = reservation("req-replay", 3);
         let replay_decision = decision("req-replay", &replay_reservation.reservation_id, 3);
