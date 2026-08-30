@@ -330,9 +330,19 @@ where
             .risk_admission
             .admit(&self.scope, purpose, &command, &logical_request_id)
             .await?;
+        let exposure_bearing = matches!(
+            command,
+            RuntimeExecutionCommand::RegularOrder(_)
+                | RuntimeExecutionCommand::PostOrderAsync(_)
+                | RuntimeExecutionCommand::ReplaceOrder(_)
+        );
         if admission.decision_id.trim().is_empty()
-            || admission.reservation_id.trim().is_empty()
-            || admission.approved_delta_lots == 0
+            || (exposure_bearing
+                && (admission.approved_delta_lots == 0
+                    || admission
+                        .reservation_id
+                        .as_deref()
+                        .is_none_or(str::is_empty)))
         {
             return Err(RuntimeError::RiskAdmission(RiskAdmissionError::Unavailable(
                 "risk admission returned an incomplete approval".into(),
@@ -346,7 +356,7 @@ where
             account_scope = %self.scope.redacted_account_id(),
             logical_request_id = %logical_request_id,
             risk_decision_id = %admission.decision_id,
-            risk_reservation_id = %admission.reservation_id,
+            risk_reservation_id = ?admission.reservation_id,
             risk_policy_revision = admission.policy_revision,
             approved_delta_lots = admission.approved_delta_lots,
         );
