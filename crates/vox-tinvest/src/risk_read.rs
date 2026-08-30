@@ -58,7 +58,10 @@ pub struct TInvestRiskReadAdapter {
 impl TInvestRiskReadAdapter {
     #[must_use]
     pub const fn new(client: TInvestGrpcClient, environment: BrokerEnvironment) -> Self {
-        Self { client, environment }
+        Self {
+            client,
+            environment,
+        }
     }
 
     pub async fn margin_attributes(
@@ -159,10 +162,7 @@ mod tests {
                 units: 12,
                 nano: 340_000_000,
             }),
-            funds_sufficiency_level: Some(v1::Quotation {
-                units: 2,
-                nano: 0,
-            }),
+            funds_sufficiency_level: Some(v1::Quotation { units: 2, nano: 0 }),
             ..Default::default()
         };
         let canonical = CanonicalMarginAttributes::try_from(response).expect("canonical margin");
