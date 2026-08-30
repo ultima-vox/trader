@@ -32,8 +32,8 @@ use vox_domain::{
 };
 use vox_runtime::{
     HealthReadPort, InMemoryMetrics, MutationRecord, OpaqueRef, ReconciliationConfig,
-    RuntimeConfig, RuntimeCoordinator, RuntimeError, RuntimeStore, SqliteRuntimeStore,
-    StoredCredentialResolver,
+    RiskAdmission, RiskAdmissionError, RiskAdmissionPort, RuntimeConfig, RuntimeCoordinator,
+    RuntimeError, RuntimeExecutionPurpose, RuntimeStore, SqliteRuntimeStore, StoredCredentialResolver,
 };
 use vox_tinvest::connection_provider::TInvestConnectionProvider;
 use vox_tinvest::{StoredTInvestExecutionPort, StoredTInvestReadPort, StoredTInvestStreamPort};
@@ -66,6 +66,23 @@ type ProductionCoordinator = RuntimeCoordinator<
     SqliteRuntimeStore,
     InMemoryMetrics,
 >;
+
+struct FailClosedRiskAdmission;
+
+#[async_trait]
+impl RiskAdmissionPort for FailClosedRiskAdmission {
+    async fn admit(
+        &self,
+        _: &vox_runtime::RuntimeScope,
+        _: RuntimeExecutionPurpose,
+        _: &RuntimeExecutionCommand,
+        _: &str,
+    ) -> Result<RiskAdmission, RiskAdmissionError> {
+        Err(RiskAdmissionError::Unavailable(
+            "#21 production risk application adapter is not wired yet".into(),
+        ))
+    }
+}
 
 struct RuntimeEntry {
     coordinator: Arc<ProductionCoordinator>,
@@ -135,6 +152,7 @@ impl ProductionRuntimeRegistry {
             execution,
             streams,
             credentials,
+            Arc::new(FailClosedRiskAdmission),
             metrics,
             ReconciliationConfig::default(),
             RuntimeConfig {
