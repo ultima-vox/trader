@@ -288,8 +288,8 @@ fn enforce_capacity(
         let mut active = 0_i64;
         for value in values {
             let value = value?;
-            let absolute =
-                i64::try_from(value.unsigned_abs()).map_err(|_| RiskStoreError::ArithmeticOverflow)?;
+            let absolute = i64::try_from(value.unsigned_abs())
+                .map_err(|_| RiskStoreError::ArithmeticOverflow)?;
             active = active
                 .checked_add(absolute)
                 .ok_or(RiskStoreError::ArithmeticOverflow)?;
@@ -312,14 +312,19 @@ fn enforce_capacity(
              WHERE account_id = ?1
                AND state IN ('ACTIVE','PARTIALLY_CONSUMED','UNKNOWN_HELD','ORPHANED')",
         )?;
-        let values = statement.query_map([&reservation.account_id], |row| row.get::<_, String>(0))?;
+        let values =
+            statement.query_map([&reservation.account_id], |row| row.get::<_, String>(0))?;
         let mut active = 0_i128;
         for value in values {
             let value = value?
                 .parse::<i128>()
                 .map_err(|error| RiskStoreError::StoredNumeric(error.to_string()))?;
             active = active
-                .checked_add(value.checked_abs().ok_or(RiskStoreError::ArithmeticOverflow)?)
+                .checked_add(
+                    value
+                        .checked_abs()
+                        .ok_or(RiskStoreError::ArithmeticOverflow)?,
+                )
                 .ok_or(RiskStoreError::ArithmeticOverflow)?;
         }
         let requested = reservation
@@ -338,10 +343,7 @@ fn enforce_capacity(
     Ok(())
 }
 
-fn insert_decision(
-    connection: &Connection,
-    decision: &RiskDecision,
-) -> Result<(), RiskStoreError> {
+fn insert_decision(connection: &Connection, decision: &RiskDecision) -> Result<(), RiskStoreError> {
     let payload = serde_json::to_string(decision)?;
     connection.execute(
         "INSERT INTO risk_decisions(decision_id, request_id, account_id, policy_revision, payload)
@@ -704,9 +706,15 @@ mod tests {
         )?;
 
         assert_eq!(persisted.decision.decision_id, decision.decision_id);
-        assert_eq!(persisted.reservation.reservation_id, reservation.reservation_id);
         assert_eq!(
-            store.decision(&decision.decision_id)?.expect("decision").reservation_id,
+            persisted.reservation.reservation_id,
+            reservation.reservation_id
+        );
+        assert_eq!(
+            store
+                .decision(&decision.decision_id)?
+                .expect("decision")
+                .reservation_id,
             Some(reservation.reservation_id.clone())
         );
         assert_eq!(
@@ -721,8 +729,8 @@ mod tests {
     }
 
     #[test]
-    fn failed_capacity_check_persists_neither_decision_nor_reservation(
-    ) -> Result<(), RiskStoreError> {
+    fn failed_capacity_check_persists_neither_decision_nor_reservation()
+    -> Result<(), RiskStoreError> {
         let path = std::env::temp_dir().join(format!("vox-risk-{}.sqlite3", uuid::Uuid::new_v4()));
         let store = SqliteRiskStore::open(&path)?;
         let reservation = reservation("req-too-large", 6);
@@ -761,11 +769,11 @@ mod tests {
 
         let replay_reservation = reservation("req-replay", 3);
         let replay_decision = decision("req-replay", &replay_reservation.reservation_id, 3);
-        let replay = store.persist_approval_atomic(&replay_decision, &replay_reservation, capacity)?;
+        let replay =
+            store.persist_approval_atomic(&replay_decision, &replay_reservation, capacity)?;
 
         assert_eq!(first, replay);
         let _ = std::fs::remove_file(path);
         Ok(())
     }
-
 }
