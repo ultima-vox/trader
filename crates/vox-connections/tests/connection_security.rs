@@ -780,9 +780,30 @@ async fn secret_delete_failure_leaves_pending_delete_tombstone()
         .ok_or("tombstone missing")?;
     assert!(!tombstone.enabled);
     assert_eq!(tombstone.credential_status, CredentialStatus::PendingDelete);
-    service.delete_connection(&security, &connection.id)?;
-    assert!(repository.connection(&connection.id)?.is_none());
     drop(service);
+    let recovered =
+        ConnectionService::new(repository.clone(), store.clone(), MockProvider::default());
+    let report = recovered
+        .recover_connection_lifecycle(&SecurityContext::new(
+            security.actor.clone(),
+            "delete-restart",
+            2,
+        )?)
+        .await?;
+    assert_eq!(report.deletes_finalized, 1);
+    assert!(repository.connection(&connection.id)?.is_none());
+    assert_eq!(
+        recovered
+            .recover_connection_lifecycle(&SecurityContext::new(
+                security.actor.clone(),
+                "delete-restart-again",
+                3,
+            )?)
+            .await?
+            .deletes_finalized,
+        0
+    );
+    drop(recovered);
     drop(repository);
     fs::remove_file(path)?;
     Ok(())
@@ -797,7 +818,7 @@ async fn secret_disable_failure_leaves_retryable_fail_closed_tombstone()
     let provider = MockProvider::default();
     provider.accept("token", discovery(&["account"], true));
     let actor = bootstrap(&repository, all_permissions())?;
-    let service = ConnectionService::new(repository.clone(), store.clone(), provider);
+    let service = ConnectionService::new(repository.clone(), store.clone(), provider.clone());
     let security = SecurityContext::new(actor, "disable-tombstone", 1)?;
     let connection = service
         .create_connection(
@@ -848,7 +869,7 @@ async fn onboarding_finalize_failure_keeps_durable_secret_owner()
     let provider = MockProvider::default();
     provider.accept("token", discovery(&["account"], true));
     let actor = bootstrap(&repository, all_permissions())?;
-    let service = ConnectionService::new(repository.clone(), store.clone(), provider);
+    let service = ConnectionService::new(repository.clone(), store.clone(), provider.clone());
     let security = SecurityContext::new(actor, "onboarding-tombstone", 1)?;
 
     repository.fail_next_onboarding_finalize();
@@ -887,9 +908,93 @@ async fn onboarding_finalize_failure_keeps_durable_secret_owner()
             .expose_secret(),
         b"token"
     );
-    service.delete_connection(&security, &pending.id)?;
-    assert!(repository.connection(&pending.id)?.is_none());
     drop(service);
+    let recovered = ConnectionService::new(repository.clone(), store.clone(), provider);
+    let report = recovered
+        .recover_connection_lifecycle(&SecurityContext::new(
+            security.actor.clone(),
+            "onboarding-restart",
+            2,
+        )?)
+        .await?;
+    assert_eq!(report.onboarding_finalized, 1);
+    let restored = repository
+        .connection(&pending.id)?
+        .ok_or("recovered onboarding missing")?;
+    assert!(restored.enabled);
+    assert_eq!(restored.credential_status, CredentialStatus::Valid);
+    assert_eq!(repository.accounts(&pending.id)?.len(), 1);
+    assert_eq!(
+        recovered
+            .recover_connection_lifecycle(&SecurityContext::new(
+                security.actor.clone(),
+                "onboarding-restart-again",
+                3,
+            )?)
+            .await?
+            .onboarding_finalized,
+        0
+    );
+    drop(recovered);
+    drop(repository);
+    fs::remove_file(path)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn startup_recovery_disables_pending_onboarding_without_secret()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = temp_db("onboarding-missing-secret");
+    let repository = SqliteConnectionRepository::open(&path)?;
+    let store = SqliteSecretStore::open(&path, keys(1, &[(1, 21)])?)?;
+    let provider = MockProvider::default();
+    provider.accept("token", discovery(&["account"], true));
+    let actor = bootstrap(&repository, all_permissions())?;
+    let security = SecurityContext::new(actor, "onboarding-missing-secret", 1)?;
+    repository.fail_next_onboarding_finalize();
+    let service = ConnectionService::new(repository.clone(), store.clone(), provider.clone());
+    assert!(
+        service
+            .create_connection(
+                &security,
+                CreateConnectionRequest {
+                    provider: ProviderId::tinvest(),
+                    environment: BrokerEnvironment::Production,
+                    label: "Missing secret".to_owned(),
+                },
+                secret("token")?,
+            )
+            .await
+            .is_err()
+    );
+    drop(service);
+    let pending = repository
+        .list_connections()?
+        .into_iter()
+        .next()
+        .ok_or("pending metadata missing")?;
+    assert!(matches!(
+        store.get(
+            &pending.credential_ref,
+            &context(BrokerEnvironment::Production)
+        ),
+        Err(SecretStoreError::NotFound)
+    ));
+    let recovered = ConnectionService::new(repository.clone(), store, provider);
+    let report = recovered
+        .recover_connection_lifecycle(&SecurityContext::new(
+            security.actor,
+            "onboarding-missing-secret-restart",
+            2,
+        )?)
+        .await?;
+    assert_eq!(report.onboarding_disabled, 1);
+    let disabled = repository
+        .connection(&pending.id)?
+        .ok_or("disabled metadata missing")?;
+    assert!(!disabled.enabled);
+    assert_eq!(disabled.credential_status, CredentialStatus::Invalid);
+    drop(recovered);
     drop(repository);
     fs::remove_file(path)?;
     Ok(())
@@ -954,6 +1059,71 @@ async fn authorization_revision_is_monotonic_and_invalidates_captured_grant()
         ),
         Err(ServiceError::StaleExecutionAuthorization)
     ));
+    drop(service);
+    drop(repository);
+    fs::remove_file(path)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn credential_rotation_invalidates_pre_rotation_execution_grant()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = temp_db("rotation-revision");
+    let repository = SqliteConnectionRepository::open(&path)?;
+    let store = SqliteSecretStore::open(&path, keys(1, &[(1, 22)])?)?;
+    let provider = MockProvider::default();
+    provider.accept("old-token", discovery(&["account"], true));
+    provider.accept("new-token", discovery(&["account"], true));
+    let actor = bootstrap(&repository, all_permissions())?;
+    let service = ConnectionService::new(repository.clone(), store, provider);
+    let security = SecurityContext::new(actor, "rotation-revision", 1)?;
+    let connection = service
+        .create_connection(
+            &security,
+            CreateConnectionRequest {
+                provider: ProviderId::tinvest(),
+                environment: BrokerEnvironment::Production,
+                label: "Rotation revision".to_owned(),
+            },
+            secret("old-token")?,
+        )
+        .await?;
+    service.bind_account(&security, &connection.id, "account", VoxAccountId::new())?;
+    service.set_execution_authorization(
+        &security,
+        &connection.id,
+        "account",
+        ExecutionAuthorizationMode::AutomatedAllowed,
+    )?;
+    let captured = service.validate_runtime_execution_access(
+        &connection.id,
+        "account",
+        ExecutionPurpose::ProductionAutomated,
+        None,
+    )?;
+
+    service
+        .rotate_credential(&security, &connection.id, secret("new-token")?)
+        .await?;
+
+    assert!(matches!(
+        service.validate_runtime_execution_access(
+            &connection.id,
+            "account",
+            ExecutionPurpose::ProductionAutomated,
+            Some(captured.authorization_revision),
+        ),
+        Err(ServiceError::StaleExecutionAuthorization)
+    ));
+    let current = repository
+        .authorization(&connection.id, "account")?
+        .ok_or("authorization missing after rotation")?;
+    assert_eq!(
+        current.authorization_revision,
+        captured.authorization_revision + 1
+    );
+    assert_eq!(current.mode, ExecutionAuthorizationMode::AutomatedAllowed);
+
     drop(service);
     drop(repository);
     fs::remove_file(path)?;

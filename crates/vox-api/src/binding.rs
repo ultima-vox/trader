@@ -23,6 +23,7 @@ pub struct AccountBinding {
     account_id: String,
     broker_connection_id: String,
     broker_account_id: String,
+    credential_ref: Option<OpaqueRef>,
 }
 
 impl AccountBinding {
@@ -40,7 +41,19 @@ impl AccountBinding {
             account_id,
             broker_connection_id,
             broker_account_id,
+            credential_ref: None,
         })
+    }
+
+    pub fn new_with_credential_ref(
+        account_id: impl Into<String>,
+        broker_connection_id: impl Into<String>,
+        broker_account_id: impl Into<String>,
+        credential_ref: OpaqueRef,
+    ) -> Result<Self, BindingError> {
+        let mut binding = Self::new(account_id, broker_connection_id, broker_account_id)?;
+        binding.credential_ref = Some(credential_ref);
+        Ok(binding)
     }
 
     #[must_use]
@@ -57,6 +70,11 @@ impl AccountBinding {
     pub fn broker_account_id(&self) -> &str {
         &self.broker_account_id
     }
+
+    #[must_use]
+    pub const fn credential_ref(&self) -> Option<&OpaqueRef> {
+        self.credential_ref.as_ref()
+    }
 }
 
 /// Why a canonical account cannot be resolved to a broker account.
@@ -72,6 +90,7 @@ pub enum BindingError {
         requested_connection_id: String,
     },
     DuplicateAccount(String),
+    Unavailable,
 }
 
 impl core::fmt::Display for BindingError {
@@ -92,6 +111,7 @@ impl core::fmt::Display for BindingError {
             Self::DuplicateAccount(account_id) => {
                 write!(formatter, "account {account_id} is already bound")
             }
+            Self::Unavailable => formatter.write_str("account binding repository unavailable"),
         }
     }
 }

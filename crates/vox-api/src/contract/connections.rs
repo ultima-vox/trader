@@ -193,6 +193,8 @@ pub enum ExecutionAuthorizationModeDto {
 pub struct ChangeExecutionAuthorizationRequest {
     pub provider_account_id: String,
     pub mode: ExecutionAuthorizationModeDto,
+    /// Compare-and-swap token returned by the latest authorization read.
+    pub expected_authorization_revision: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]

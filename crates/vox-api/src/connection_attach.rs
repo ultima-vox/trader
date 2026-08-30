@@ -13,7 +13,9 @@ use vox_connections::{
     SecurityContext, ServiceError, UserId, VoxAccountId,
 };
 
-use crate::application::{ConnectionAdministration, ConnectionRequestContext};
+use crate::application::{
+    ConnectionAdministration, ConnectionLifecycleObserver, ConnectionRequestContext,
+};
 use crate::contract::connections::{
     BindBrokerAccountRequest, BrokerAccountBindingDto, BrokerConnectionMetadataDto,
     ChangeExecutionAuthorizationRequest, ConnectionCapabilityDto, ConnectionDetailsDto,
@@ -27,12 +29,31 @@ use crate::error::{ApiError, ErrorCategory, FieldError};
 
 pub struct ConnectionAdministrationAdapter<R, S, P> {
     service: Arc<ConnectionService<R, S, P>>,
+    lifecycle: Option<Arc<dyn ConnectionLifecycleObserver>>,
 }
 
 impl<R, S, P> ConnectionAdministrationAdapter<R, S, P> {
     #[must_use]
     pub const fn new(service: Arc<ConnectionService<R, S, P>>) -> Self {
-        Self { service }
+        Self {
+            service,
+            lifecycle: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_lifecycle_observer(
+        mut self,
+        lifecycle: Arc<dyn ConnectionLifecycleObserver>,
+    ) -> Self {
+        self.lifecycle = Some(lifecycle);
+        self
+    }
+
+    async fn notify_connection_changed(&self, connection_id: &ConnectionId) {
+        if let Some(lifecycle) = &self.lifecycle {
+            lifecycle.connection_changed(connection_id.as_str()).await;
+        }
     }
 }
 
@@ -141,14 +162,16 @@ where
         let security = security_context(context)?;
         let id = parse_connection_id(connection_id)?;
         let credential = SecretBytes::new(request.credential.into_bytes()).map_err(api_error)?;
-        self.service
+        let result = self
+            .service
             .rotate_credential(&security, &id, credential)
             .await
-            .map(|result| CredentialRotationResultDto {
-                connection: connection_dto(result.connection),
-                reconnect_required: result.reconnect_required,
-            })
-            .map_err(api_error)
+            .map_err(api_error)?;
+        self.notify_connection_changed(&id).await;
+        Ok(CredentialRotationResultDto {
+            connection: connection_dto(result.connection),
+            reconnect_required: result.reconnect_required,
+        })
     }
 
     async fn disable_connection(
@@ -158,10 +181,12 @@ where
     ) -> Result<BrokerConnectionMetadataDto, ApiError> {
         let security = security_context(context)?;
         let id = parse_connection_id(connection_id)?;
-        self.service
+        let connection = self
+            .service
             .disable_connection(&security, &id)
-            .map(connection_dto)
-            .map_err(api_error)
+            .map_err(api_error)?;
+        self.notify_connection_changed(&id).await;
+        Ok(connection_dto(connection))
     }
 
     async fn delete_connection(
@@ -173,7 +198,9 @@ where
         let id = parse_connection_id(connection_id)?;
         self.service
             .delete_connection(&security, &id)
-            .map_err(api_error)
+            .map_err(api_error)?;
+        self.notify_connection_changed(&id).await;
+        Ok(())
     }
 
     async fn accounts(
@@ -238,11 +265,12 @@ where
         let security = security_context(context)?;
         let id = parse_connection_id(connection_id)?;
         self.service
-            .set_execution_authorization(
+            .set_execution_authorization_cas(
                 &security,
                 &id,
                 &request.provider_account_id,
                 authorization_mode(request.mode),
+                request.expected_authorization_revision,
             )
             .map(authorization_dto)
             .map_err(api_error)
@@ -541,13 +569,17 @@ fn api_error(error: impl Into<ServiceError>) -> ApiError {
             "EXECUTION_NOT_AUTHORIZED",
             "execution is not authorized for this exact connection and account",
         ),
+        ServiceError::StaleExecutionAuthorization
+        | ServiceError::Repository(RepositoryError::StaleAuthorizationRevision) => (
+            ErrorCategory::Conflict,
+            "STALE_EXECUTION_AUTHORIZATION",
+            "execution authorization changed; read current state and retry with its revision",
+        ),
         ServiceError::AccountUnavailable
         | ServiceError::ConnectionDisabled
         | ServiceError::ConnectionUnavailable
         | ServiceError::DisableBeforeDelete
-        | ServiceError::AccountBindingMismatch
-        | ServiceError::StaleExecutionAuthorization
-        | ServiceError::Repository(RepositoryError::StaleAuthorizationRevision) => (
+        | ServiceError::AccountBindingMismatch => (
             ErrorCategory::Conflict,
             "CONNECTION_STATE_CONFLICT",
             "connection state does not permit this operation",

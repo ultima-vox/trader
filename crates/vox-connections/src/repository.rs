@@ -13,6 +13,7 @@ use crate::model::{
 
 pub trait ConnectionRepository: Send + Sync {
     fn put_user(&self, user: &User) -> Result<(), RepositoryError>;
+    fn user(&self, user_id: &UserId) -> Result<Option<User>, RepositoryError>;
     fn put_user_with_audit(&self, user: &User, audit: &AuditRecord) -> Result<(), RepositoryError>;
     fn put_role(&self, role: &Role) -> Result<(), RepositoryError>;
     fn put_role_with_audit(&self, role: &Role, audit: &AuditRecord) -> Result<(), RepositoryError>;
@@ -101,6 +102,13 @@ pub trait ConnectionRepository: Send + Sync {
         expected_revision: u64,
         audit: &AuditRecord,
     ) -> Result<(), RepositoryError>;
+    fn invalidate_connection_authorizations_with_audit(
+        &self,
+        connection_id: &ConnectionId,
+        actor: &UserId,
+        changed_at_unix_ms: i64,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError>;
     fn append_audit(&self, record: &AuditRecord) -> Result<(), RepositoryError>;
     fn audit_records(&self) -> Result<Vec<AuditRecord>, RepositoryError>;
     fn delete_connection(&self, id: &ConnectionId) -> Result<(), RepositoryError>;
@@ -180,6 +188,23 @@ impl SqliteConnectionRepository {
 impl ConnectionRepository for SqliteConnectionRepository {
     fn put_user(&self, user: &User) -> Result<(), RepositoryError> {
         write_user(&self.connection()?, user)
+    }
+
+    fn user(&self, user_id: &UserId) -> Result<Option<User>, RepositoryError> {
+        self.connection()?
+            .query_row(
+                "SELECT user_id, display_name, enabled FROM connection_users WHERE user_id = ?1",
+                [user_id.as_str()],
+                |row| {
+                    Ok(User {
+                        id: UserId::parse(row.get::<_, String>(0)?).map_err(conversion_error)?,
+                        display_name: row.get(1)?,
+                        enabled: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     fn put_user_with_audit(&self, user: &User, audit: &AuditRecord) -> Result<(), RepositoryError> {
@@ -591,6 +616,26 @@ impl ConnectionRepository for SqliteConnectionRepository {
     ) -> Result<(), RepositoryError> {
         self.mutate_with_audits(std::slice::from_ref(audit), |tx| {
             write_authorization_cas(tx, authorization, expected_revision)
+        })
+    }
+
+    fn invalidate_connection_authorizations_with_audit(
+        &self,
+        connection_id: &ConnectionId,
+        actor: &UserId,
+        changed_at_unix_ms: i64,
+        audit: &AuditRecord,
+    ) -> Result<(), RepositoryError> {
+        self.mutate_with_audits(std::slice::from_ref(audit), |tx| {
+            tx.execute(
+                "UPDATE execution_authorizations
+                 SET authorization_revision = authorization_revision + 1,
+                     changed_by = ?2,
+                     changed_at_unix_ms = ?3
+                 WHERE connection_id = ?1",
+                params![connection_id.as_str(), actor.as_str(), changed_at_unix_ms],
+            )?;
+            Ok(())
         })
     }
 

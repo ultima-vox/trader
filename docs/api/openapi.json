@@ -2591,7 +2591,8 @@
         "type": "object",
         "required": [
           "provider_account_id",
-          "mode"
+          "mode",
+          "expected_authorization_revision"
         ],
         "properties": {
           "provider_account_id": {
@@ -2599,6 +2600,12 @@
           },
           "mode": {
             "$ref": "#/components/schemas/ExecutionAuthorizationModeDto"
+          },
+          "expected_authorization_revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Compare-and-swap token returned by the latest authorization read.",
+            "minimum": 0
           }
         }
       },
@@ -3868,6 +3875,13 @@
           }
         }
       },
+      "PositionSideDto": {
+        "type": "string",
+        "enum": [
+          "LONG",
+          "SHORT"
+        ]
+      },
       "PriceConventionDto": {
         "type": "string",
         "enum": [
@@ -4229,7 +4243,9 @@
           "scope",
           "instrument_id",
           "client_request_id",
-          "quantity_lots"
+          "quantity_lots",
+          "price_convention",
+          "confirm_margin_trade"
         ],
         "properties": {
           "scope": {
@@ -4266,6 +4282,13 @@
                 "$ref": "#/components/schemas/Decimal"
               }
             ]
+          },
+          "price_convention": {
+            "$ref": "#/components/schemas/PriceConventionDto"
+          },
+          "confirm_margin_trade": {
+            "type": "boolean",
+            "description": "Explicit broker margin acknowledgement. Never inferred by server."
           }
         }
       },
@@ -4842,7 +4865,8 @@
           "order_type",
           "quantity_lots",
           "price_convention",
-          "time_in_force"
+          "time_in_force",
+          "confirm_margin_trade"
         ],
         "properties": {
           "scope": {
@@ -4885,6 +4909,10 @@
           "time_in_force": {
             "$ref": "#/components/schemas/TimeInForceDto"
           },
+          "confirm_margin_trade": {
+            "type": "boolean",
+            "description": "Explicit broker margin acknowledgement. Never inferred by server."
+          },
           "protection": {
             "oneOf": [
               {
@@ -4904,6 +4932,11 @@
           "scope",
           "instrument_id",
           "client_request_id",
+          "quantity_lots",
+          "position_side",
+          "reference_price",
+          "price_convention",
+          "confirm_margin_trade",
           "plan"
         ],
         "properties": {
@@ -4915,6 +4948,22 @@
           },
           "client_request_id": {
             "type": "string"
+          },
+          "quantity_lots": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "position_side": {
+            "$ref": "#/components/schemas/PositionSideDto"
+          },
+          "reference_price": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "price_convention": {
+            "$ref": "#/components/schemas/PriceConventionDto"
+          },
+          "confirm_margin_trade": {
+            "type": "boolean"
           },
           "plan": {
             "$ref": "#/components/schemas/ProtectionPlanDto"
@@ -4929,8 +4978,12 @@
           "instrument_id",
           "client_request_id",
           "side",
+          "position_side",
           "quantity_lots",
-          "trigger_price"
+          "reference_price",
+          "trigger_price",
+          "price_convention",
+          "confirm_margin_trade"
         ],
         "properties": {
           "scope": {
@@ -4945,9 +4998,17 @@
           "side": {
             "$ref": "#/components/schemas/OrderSideDto"
           },
+          "position_side": {
+            "$ref": "#/components/schemas/PositionSideDto",
+            "description": "Position protected by this stop. Order side alone is not authoritative proof."
+          },
           "quantity_lots": {
             "type": "integer",
             "format": "int64"
+          },
+          "reference_price": {
+            "$ref": "#/components/schemas/Decimal",
+            "description": "Exact current/reference price used by broker validation."
           },
           "trigger_price": {
             "$ref": "#/components/schemas/Decimal"
@@ -4961,6 +5022,12 @@
                 "$ref": "#/components/schemas/Decimal"
               }
             ]
+          },
+          "price_convention": {
+            "$ref": "#/components/schemas/PriceConventionDto"
+          },
+          "confirm_margin_trade": {
+            "type": "boolean"
           }
         }
       },

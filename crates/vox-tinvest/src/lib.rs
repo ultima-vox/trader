@@ -19,6 +19,8 @@ pub mod operations;
 pub mod operations_stream;
 pub mod reports;
 pub mod runtime_execution;
+pub mod runtime_read;
+pub mod runtime_stream;
 
 mod grpc;
 mod rest;
@@ -27,7 +29,8 @@ mod secret;
 mod websocket;
 
 pub use connection_factory::{
-    ConnectionFactoryError, StoredTInvestClientFactory, TInvestExecutionSession, TInvestReadSession,
+    ConnectionFactoryError, StoredTInvestClientFactory, StoredTInvestExecutionPort,
+    StoredTInvestReadPort, StoredTInvestStreamPort, TInvestExecutionSession, TInvestReadSession,
 };
 pub use grpc::{
     DEFAULT_GRPC_ENDPOINT, DEFAULT_SANDBOX_GRPC_ENDPOINT, GrpcCertificatePolicy, GrpcConfig,

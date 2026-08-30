@@ -2988,15 +2988,24 @@ name = "vox-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
+ "ring",
+ "rusqlite",
+ "serde_json",
+ "subtle",
  "thiserror",
  "time",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "vox-api",
+ "vox-connections",
  "vox-domain",
  "vox-nautilus",
+ "vox-runtime",
  "vox-tinvest",
 ]
 
@@ -3065,6 +3074,7 @@ dependencies = [
  "uuid",
  "vox-connections",
  "vox-domain",
+ "vox-runtime",
  "zeroize",
 ]
 

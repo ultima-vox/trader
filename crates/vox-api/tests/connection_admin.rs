@@ -157,13 +157,32 @@ async fn connection_routes_onboard_bind_authorize_and_never_return_credential()
             &format!("/api/v1/broker-connections/{connection_id}/execution-authorization"),
             serde_json::json!({
                 "provider_account_id": "broker-account",
-                "mode": "MANUAL_ALLOWED"
+                "mode": "MANUAL_ALLOWED",
+                "expected_authorization_revision": 1
             }),
         ))
         .await?;
     assert_eq!(authorization.status(), StatusCode::OK);
     let authorization = response_json(authorization).await?;
     assert_eq!(authorization["mode"], "MANUAL_ALLOWED");
+
+    let stale = app
+        .clone()
+        .oneshot(json_request(
+            "PUT",
+            &format!("/api/v1/broker-connections/{connection_id}/execution-authorization"),
+            serde_json::json!({
+                "provider_account_id": "broker-account",
+                "mode": "DISABLED",
+                "expected_authorization_revision": 1
+            }),
+        ))
+        .await?;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_json(stale).await?["code"],
+        "STALE_EXECUTION_AUTHORIZATION"
+    );
 
     let details = app
         .oneshot(

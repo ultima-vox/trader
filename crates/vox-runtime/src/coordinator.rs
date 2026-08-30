@@ -75,6 +75,21 @@ where
     S: RuntimeStore,
     M: MetricsPort + 'static,
 {
+    #[must_use]
+    pub fn scope(&self) -> &RuntimeScope {
+        &self.scope
+    }
+
+    #[must_use]
+    pub fn broker_account_id(&self) -> &str {
+        &self.scope.broker_account_id
+    }
+
+    #[must_use]
+    pub fn scope_key(&self) -> String {
+        self.scope.key()
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
@@ -319,7 +334,13 @@ where
             (EXECUTION_QUEUE_CAPACITY - self.command_slots.available_permits()) as f64,
         );
         let result = self
-            .dispatch_with_permit(permit, command, logical_request_id, correlation_id.into())
+            .dispatch_with_permit(
+                permit,
+                purpose,
+                command,
+                logical_request_id,
+                correlation_id.into(),
+            )
             .await;
         self.metrics.set_gauge(
             MetricName::RuntimeCommandQueueDepth,
@@ -332,6 +353,7 @@ where
     async fn dispatch_with_permit(
         &self,
         _permit: OwnedSemaphorePermit,
+        purpose: RuntimeExecutionPurpose,
         command: RuntimeExecutionCommand,
         logical_request_id: String,
         correlation_id: String,
@@ -375,7 +397,7 @@ where
 
         let result = self
             .execution
-            .dispatch_once(&self.scope, &command, &fenced)
+            .dispatch_once(&self.scope, purpose, &command, &fenced)
             .await;
         match result {
             Ok(ExecutionResult::Acknowledged {

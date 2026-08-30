@@ -35,6 +35,13 @@ pub trait RuntimeQueries: Send + Sync {
     async fn health(&self) -> Result<RuntimeHealthDto, ApiError>;
     /// Scopes the operator may select. Empty until #17 bindings exist.
     async fn scopes(&self) -> Result<Vec<ExecutionScope>, ApiError>;
+
+    async fn capabilities(
+        &self,
+        _account_id: Option<&str>,
+    ) -> Result<Option<CapabilitySet>, ApiError> {
+        Ok(None)
+    }
 }
 
 /// The per-account read side, owned by #9 and #11.
@@ -212,6 +219,12 @@ pub trait ConnectionAdministration: Send + Sync {
     ) -> Result<ExecutionAuthorizationDto, ApiError>;
 }
 
+/// Production process hook for invalidating runtime clients after credential lifecycle changes.
+#[async_trait]
+pub trait ConnectionLifecycleObserver: Send + Sync {
+    async fn connection_changed(&self, connection_id: &str);
+}
+
 /// What the process serves. A `None` port is a capability this deployment does not have.
 #[derive(Clone)]
 pub struct AppState {
@@ -227,6 +240,28 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Production composition with mandatory #17/#11/#10 ports attached atomically.
+    #[must_use]
+    pub fn production(
+        provider: ProviderDto,
+        environment: BrokerEnvironment,
+        runtime: Arc<dyn RuntimeQueries>,
+        accounts: Arc<dyn AccountQueries>,
+        execution: Arc<dyn ExecutionCommands>,
+        connections: Arc<dyn ConnectionAdministration>,
+    ) -> Self {
+        Self {
+            provider,
+            environment,
+            runtime: Some(runtime),
+            accounts: Some(accounts),
+            execution: Some(execution),
+            market_data: None,
+            connections: Some(connections),
+            events: ApplicationEventBus::new(),
+        }
+    }
+
     /// A process with no broker runtime attached: it can describe itself and nothing else.
     #[must_use]
     pub fn detached(provider: ProviderDto, environment: BrokerEnvironment) -> Self {

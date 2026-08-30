@@ -150,8 +150,13 @@ pub async fn runtime_scopes(
 pub async fn capabilities(
     State(state): State<AppState>,
     Query(params): Query<CapabilityQuery>,
-) -> Json<CapabilitySet> {
-    Json(state.capabilities(params.account_id))
+) -> Result<Json<CapabilitySet>, ApiError> {
+    if let Some(runtime) = state.runtime.as_ref()
+        && let Some(capabilities) = runtime.capabilities(params.account_id.as_deref()).await?
+    {
+        return Ok(Json(capabilities));
+    }
+    Ok(Json(state.capabilities(params.account_id)))
 }
 
 fn connection_context(

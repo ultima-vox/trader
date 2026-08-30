@@ -18,8 +18,9 @@ use vox_runtime::{
     InMemoryMetrics, JournalState, MetricLabel, MetricName, MutationEvidence, MutationKind,
     MutationRecord, OpaqueRef, OperationFact, OperationsPage, OrderExecutionStatus, OrderFact,
     PortfolioFact, Provider, ReasonCode, ReconciliationConfig, RuntimeConfig, RuntimeCoordinator,
-    RuntimeEnvironment, RuntimeError, RuntimeExecutionCommand, RuntimeScope, RuntimeState,
-    RuntimeStore, SqliteRuntimeStore, StopExecutionStatus, StopFact, StreamKind, StreamSignal,
+    RuntimeEnvironment, RuntimeError, RuntimeExecutionCommand, RuntimeExecutionPurpose,
+    RuntimeScope, RuntimeState, RuntimeStore, SqliteRuntimeStore, StopExecutionStatus, StopFact,
+    StreamKind, StreamSignal,
 };
 
 #[derive(Clone)]
@@ -208,6 +209,7 @@ impl ExecutionPort for FakeExecution {
     async fn dispatch_once(
         &self,
         _: &RuntimeScope,
+        _: RuntimeExecutionPurpose,
         command: &RuntimeExecutionCommand,
         _: &MutationRecord,
     ) -> Result<ExecutionResult, BrokerPortError> {

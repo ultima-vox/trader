@@ -126,6 +126,8 @@ export type CapabilitySet = {
 export type ChangeExecutionAuthorizationRequest = {
   provider_account_id: string;
   mode: ExecutionAuthorizationModeDto;
+  /** Compare-and-swap token returned by the latest authorization read. */
+  expected_authorization_revision: number;
 };
 
 /** What a client may send. */
@@ -439,6 +441,8 @@ export type PositionDto = {
   broker_observed_at_unix_ms?: number | null;
 };
 
+export type PositionSideDto = "LONG" | "SHORT";
+
 export type PriceConventionDto = "SETTLEMENT_CURRENCY" | "POINTS";
 
 /** Stop loss and take profit are independent and both optional. */
@@ -511,6 +515,9 @@ export type ReplaceOrderRequest = {
   logical_request_id?: string | null;
   quantity_lots: number;
   price?: null | Decimal;
+  price_convention: PriceConventionDto;
+  /** Explicit broker margin acknowledgement. Never inferred by server. */
+  confirm_margin_trade: boolean;
 };
 
 export type RotateCredentialRequest = {
@@ -652,6 +659,8 @@ export type SubmitOrderRequest = {
   price?: null | Decimal;
   price_convention: PriceConventionDto;
   time_in_force: TimeInForceDto;
+  /** Explicit broker margin acknowledgement. Never inferred by server. */
+  confirm_margin_trade: boolean;
   protection?: null | ProtectionPlanDto;
 };
 
@@ -660,6 +669,11 @@ export type SubmitProtectionRequest = {
   scope: ExecutionScope;
   instrument_id: string;
   client_request_id: string;
+  quantity_lots: number;
+  position_side: PositionSideDto;
+  reference_price: Decimal;
+  price_convention: PriceConventionDto;
+  confirm_margin_trade: boolean;
   plan: ProtectionPlanDto;
 };
 
@@ -669,9 +683,15 @@ export type SubmitStopOrderRequest = {
   instrument_id: string;
   client_request_id: string;
   side: OrderSideDto;
+  /** Position protected by this stop. Order side alone is not authoritative proof. */
+  position_side: PositionSideDto;
   quantity_lots: number;
+  /** Exact current/reference price used by broker validation. */
+  reference_price: Decimal;
   trigger_price: Decimal;
   limit_price?: null | Decimal;
+  price_convention: PriceConventionDto;
+  confirm_margin_trade: boolean;
 };
 
 /** Why a subscription is in its current status. */

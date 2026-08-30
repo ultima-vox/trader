@@ -8,8 +8,8 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use vox_domain::{
-    ExecutionPriceConvention, OrderSide, ProtectionEstablishmentState, RegularOrderType,
-    TimeInForce, TrailingDistanceMode,
+    ExecutionPriceConvention, OrderSide, PositionSide, ProtectionEstablishmentState,
+    RegularOrderType, TimeInForce, TrailingDistanceMode,
 };
 
 use super::money::Decimal;
@@ -22,6 +22,22 @@ use crate::error::{ApiError, FieldError};
 pub enum OrderSideDto {
     Buy,
     Sell,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PositionSideDto {
+    Long,
+    Short,
+}
+
+impl From<PositionSideDto> for PositionSide {
+    fn from(value: PositionSideDto) -> Self {
+        match value {
+            PositionSideDto::Long => Self::Long,
+            PositionSideDto::Short => Self::Short,
+        }
+    }
 }
 
 impl From<OrderSideDto> for OrderSide {
@@ -262,6 +278,8 @@ pub struct SubmitOrderRequest {
     pub price: Option<Decimal>,
     pub price_convention: PriceConventionDto,
     pub time_in_force: TimeInForceDto,
+    /// Explicit broker margin acknowledgement. Never inferred by server.
+    pub confirm_margin_trade: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protection: Option<ProtectionPlanDto>,
 }
@@ -339,6 +357,9 @@ pub struct ReplaceOrderRequest {
     pub quantity_lots: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub price: Option<Decimal>,
+    pub price_convention: PriceConventionDto,
+    /// Explicit broker margin acknowledgement. Never inferred by server.
+    pub confirm_margin_trade: bool,
 }
 
 impl ReplaceOrderRequest {
@@ -360,10 +381,16 @@ pub struct SubmitStopOrderRequest {
     pub instrument_id: String,
     pub client_request_id: String,
     pub side: OrderSideDto,
+    /// Position protected by this stop. Order side alone is not authoritative proof.
+    pub position_side: PositionSideDto,
     pub quantity_lots: i64,
+    /// Exact current/reference price used by broker validation.
+    pub reference_price: Decimal,
     pub trigger_price: Decimal,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit_price: Option<Decimal>,
+    pub price_convention: PriceConventionDto,
+    pub confirm_margin_trade: bool,
 }
 
 /// Establish or replace protection legs on an existing position. Not a bulk migration.
@@ -372,6 +399,11 @@ pub struct SubmitProtectionRequest {
     pub scope: ExecutionScope,
     pub instrument_id: String,
     pub client_request_id: String,
+    pub quantity_lots: i64,
+    pub position_side: PositionSideDto,
+    pub reference_price: Decimal,
+    pub price_convention: PriceConventionDto,
+    pub confirm_margin_trade: bool,
     pub plan: ProtectionPlanDto,
 }
 

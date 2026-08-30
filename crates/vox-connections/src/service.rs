@@ -152,6 +152,15 @@ pub struct CredentialRotationOutcome {
     pub reconnect_required: bool,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LifecycleRecoveryReport {
+    pub onboarding_finalized: usize,
+    pub onboarding_disabled: usize,
+    pub deletes_finalized: usize,
+    pub disables_finalized: usize,
+    pub orphan_secrets_quarantined: usize,
+}
+
 pub struct ConnectionService<R, S, P> {
     repository: R,
     secret_store: S,
@@ -171,6 +180,291 @@ where
             secret_store,
             provider,
         }
+    }
+
+    /// Repairs cross-store lifecycle states before any runtime scope is admitted.
+    /// Safe to rerun after every crash; no path silently enables an unproven connection.
+    pub async fn recover_connection_lifecycle(
+        &self,
+        security: &SecurityContext,
+    ) -> Result<LifecycleRecoveryReport, ServiceError> {
+        let mut report = LifecycleRecoveryReport::default();
+        let mut connections = self.repository.list_connections()?;
+        let secret_metadata = self.secret_store.metadata()?;
+
+        for connection in &mut connections {
+            match connection.credential_status {
+                CredentialStatus::PendingValidation => {
+                    let context = credential_context(connection);
+                    let credential =
+                        match self.secret_store.get(&connection.credential_ref, &context) {
+                            Ok(credential) => credential,
+                            Err(SecretStoreError::NotFound) => {
+                                self.fail_pending_onboarding(
+                                    security,
+                                    connection,
+                                    "encrypted credential missing during startup recovery",
+                                )?;
+                                report.onboarding_disabled += 1;
+                                continue;
+                            }
+                            Err(error) => return Err(error.into()),
+                        };
+                    match self
+                        .provider
+                        .validate_and_discover(
+                            &connection.provider,
+                            connection.environment,
+                            &credential,
+                        )
+                        .await
+                    {
+                        Ok(discovery) => {
+                            validate_discovery(&discovery)?;
+                            let fingerprint = secret_metadata
+                                .iter()
+                                .find(|metadata| {
+                                    metadata.credential_ref == connection.credential_ref
+                                })
+                                .map(|metadata| metadata.fingerprint.clone())
+                                .ok_or(SecretStoreError::NotFound)?;
+                            connection.credential_fingerprint = fingerprint;
+                            connection.credential_status = CredentialStatus::Valid;
+                            connection.credential_class = discovery.credential_class;
+                            connection.credential_scope = discovery.credential_scope;
+                            connection.enabled = true;
+                            connection.capabilities = discovery.connection_capabilities;
+                            connection.health = ConnectionHealth {
+                                state: ConnectionHealthState::Healthy,
+                                checked_at_unix_ms: Some(security.now_unix_ms),
+                                provider: connection.provider.clone(),
+                                environment: connection.environment,
+                                reason_code: ConnectionHealthReason::None,
+                                safe_detail: None,
+                                retryable: false,
+                            };
+                            connection.updated_at_unix_ms = security.now_unix_ms;
+                            let accounts = materialize_accounts(
+                                connection,
+                                discovery.accounts,
+                                security.now_unix_ms,
+                            );
+                            let authorizations = accounts
+                                .iter()
+                                .map(|account| ExecutionAuthorization {
+                                    connection_id: connection.id.clone(),
+                                    provider_account_id: account.provider_account_id.clone(),
+                                    mode: ExecutionAuthorizationMode::Disabled,
+                                    authorization_revision: 1,
+                                    changed_by: security.actor.clone(),
+                                    changed_at_unix_ms: security.now_unix_ms,
+                                })
+                                .collect::<Vec<_>>();
+                            let audit = self.audit_record(
+                                security,
+                                "CONNECTION_ONBOARDING_RECOVERED",
+                                connection.id.as_str(),
+                                Some("PENDING_VALIDATION"),
+                                Some("ENABLED"),
+                            )?;
+                            self.repository.insert_onboarding(
+                                connection,
+                                &accounts,
+                                &authorizations,
+                                &[audit],
+                            )?;
+                            report.onboarding_finalized += 1;
+                        }
+                        Err(error) => {
+                            connection.health = health_from_provider_error(
+                                &error,
+                                &connection.provider,
+                                connection.environment,
+                                security.now_unix_ms,
+                            );
+                            connection.enabled = false;
+                            connection.updated_at_unix_ms = security.now_unix_ms;
+                            let audit = self.audit_record(
+                                security,
+                                "CONNECTION_ONBOARDING_RECOVERY_DEFERRED",
+                                connection.id.as_str(),
+                                Some("PENDING_VALIDATION"),
+                                Some(health_name(connection.health.state)),
+                            )?;
+                            self.repository
+                                .update_connection_with_audit(connection, &audit)?;
+                        }
+                    }
+                }
+                CredentialStatus::PendingDelete => {
+                    match self.secret_store.delete(&connection.credential_ref) {
+                        Ok(()) | Err(SecretStoreError::NotFound) => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                    let audit = self.audit_record(
+                        security,
+                        "CONNECTION_DELETE_RECOVERED",
+                        connection.id.as_str(),
+                        Some("PENDING_DELETE"),
+                        Some("DELETED"),
+                    )?;
+                    self.repository
+                        .finalize_connection_delete(&connection.id, &audit)?;
+                    report.deletes_finalized += 1;
+                }
+                CredentialStatus::PendingDisable => {
+                    match self.secret_store.disable(&connection.credential_ref) {
+                        Ok(()) | Err(SecretStoreError::Disabled) => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                    connection.credential_status = CredentialStatus::Disabled;
+                    connection.enabled = false;
+                    connection.updated_at_unix_ms = security.now_unix_ms;
+                    let audit = self.audit_record(
+                        security,
+                        "CONNECTION_DISABLE_RECOVERED",
+                        connection.id.as_str(),
+                        Some("PENDING_DISABLE"),
+                        Some("DISABLED"),
+                    )?;
+                    self.repository
+                        .update_connection_with_audit(connection, &audit)?;
+                    report.disables_finalized += 1;
+                }
+                CredentialStatus::Valid
+                    if connection.enabled
+                        && connection.health.state == ConnectionHealthState::Validating =>
+                {
+                    // A crash can land after the envelope rotation but before metadata finalize.
+                    // Revalidate the now-current encrypted credential; never restore old metadata
+                    // or admit execution from the pre-rotation fingerprint.
+                    match self.revalidate(security, &connection.id).await {
+                        Ok(mut recovered) => {
+                            let fingerprint = secret_metadata
+                                .iter()
+                                .find(|metadata| {
+                                    metadata.credential_ref == recovered.credential_ref
+                                })
+                                .map(|metadata| metadata.fingerprint.clone())
+                                .ok_or(SecretStoreError::NotFound)?;
+                            recovered.credential_fingerprint = fingerprint;
+                            let audit = self.audit_record(
+                                security,
+                                "CREDENTIAL_ROTATION_RECOVERED",
+                                recovered.id.as_str(),
+                                Some("VALIDATING"),
+                                Some("VALID"),
+                            )?;
+                            self.repository
+                                .update_connection_with_audit(&recovered, &audit)?;
+                            *connection = recovered;
+                        }
+                        Err(ServiceError::Provider(_)) => {
+                            // Revalidation already persisted a non-healthy state. Runtime
+                            // admission remains closed; retry next startup/operator validation.
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                CredentialStatus::Valid if connection.enabled => {
+                    let context = credential_context(connection);
+                    match self.secret_store.get(&connection.credential_ref, &context) {
+                        Ok(secret) => drop(secret),
+                        Err(SecretStoreError::NotFound | SecretStoreError::Disabled) => {
+                            self.disable_inconsistent_connection(
+                                security,
+                                connection,
+                                "credential unavailable during startup verification",
+                            )?;
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for metadata in secret_metadata {
+            if connections
+                .iter()
+                .any(|connection| connection.credential_ref == metadata.credential_ref)
+            {
+                continue;
+            }
+            if !metadata.disabled {
+                self.secret_store.disable(&metadata.credential_ref)?;
+            }
+            let audit = self.audit_record(
+                security,
+                "ORPHAN_CREDENTIAL_QUARANTINED",
+                metadata.credential_ref.as_str(),
+                Some("UNOWNED"),
+                Some("DISABLED"),
+            )?;
+            self.repository.append_audit(&audit)?;
+            report.orphan_secrets_quarantined += 1;
+        }
+        Ok(report)
+    }
+
+    fn fail_pending_onboarding(
+        &self,
+        security: &SecurityContext,
+        connection: &mut BrokerConnection,
+        detail: &str,
+    ) -> Result<(), ServiceError> {
+        connection.enabled = false;
+        connection.credential_status = CredentialStatus::Invalid;
+        connection.health = ConnectionHealth {
+            state: ConnectionHealthState::InvalidCredential,
+            checked_at_unix_ms: Some(security.now_unix_ms),
+            provider: connection.provider.clone(),
+            environment: connection.environment,
+            reason_code: ConnectionHealthReason::InvalidCredential,
+            safe_detail: Some(detail.to_owned()),
+            retryable: false,
+        };
+        connection.updated_at_unix_ms = security.now_unix_ms;
+        let audit = self.audit_record(
+            security,
+            "CONNECTION_ONBOARDING_FAILED_RECOVERY",
+            connection.id.as_str(),
+            Some("PENDING_VALIDATION"),
+            Some("DISABLED"),
+        )?;
+        self.repository
+            .update_connection_with_audit(connection, &audit)?;
+        Ok(())
+    }
+
+    fn disable_inconsistent_connection(
+        &self,
+        security: &SecurityContext,
+        connection: &mut BrokerConnection,
+        detail: &str,
+    ) -> Result<(), ServiceError> {
+        connection.enabled = false;
+        connection.credential_status = CredentialStatus::Invalid;
+        connection.health = ConnectionHealth {
+            state: ConnectionHealthState::InvalidCredential,
+            checked_at_unix_ms: Some(security.now_unix_ms),
+            provider: connection.provider.clone(),
+            environment: connection.environment,
+            reason_code: ConnectionHealthReason::InvalidCredential,
+            safe_detail: Some(detail.to_owned()),
+            retryable: false,
+        };
+        connection.updated_at_unix_ms = security.now_unix_ms;
+        let audit = self.audit_record(
+            security,
+            "CONNECTION_DISABLED_INCONSISTENT_CREDENTIAL",
+            connection.id.as_str(),
+            Some("ENABLED"),
+            Some("DISABLED"),
+        )?;
+        self.repository
+            .update_connection_with_audit(connection, &audit)?;
+        Ok(())
     }
 
     pub async fn create_connection(
@@ -467,6 +761,24 @@ where
         };
         gate.updated_at_unix_ms = security.now_unix_ms;
         self.repository.update_connection(&gate)?;
+
+        // Invalidate every capability already built from the previous bearer before replacing
+        // it. Mode stays unchanged, but exact revision rechecks force runtime/provider sessions
+        // to be recreated from the new encrypted credential.
+        let invalidated = self.audit_record(
+            security,
+            "CREDENTIAL_ROTATION_SESSIONS_INVALIDATED",
+            connection_id.as_str(),
+            Some("PREVIOUS_CREDENTIAL"),
+            Some("RECONNECT_REQUIRED"),
+        )?;
+        self.repository
+            .invalidate_connection_authorizations_with_audit(
+                connection_id,
+                &security.actor,
+                security.now_unix_ms,
+                &invalidated,
+            )?;
 
         let new_fingerprint = match self.secret_store.rotate(
             &previous_connection.credential_ref,
@@ -786,11 +1098,36 @@ where
         provider_account_id: &str,
         mode: ExecutionAuthorizationMode,
     ) -> Result<ExecutionAuthorization, ServiceError> {
+        let expected_revision = self
+            .repository
+            .authorization(connection_id, provider_account_id)?
+            .ok_or(ServiceError::AccountNotFound)?
+            .authorization_revision;
+        self.set_execution_authorization_cas(
+            security,
+            connection_id,
+            provider_account_id,
+            mode,
+            expected_revision,
+        )
+    }
+
+    pub fn set_execution_authorization_cas(
+        &self,
+        security: &SecurityContext,
+        connection_id: &ConnectionId,
+        provider_account_id: &str,
+        mode: ExecutionAuthorizationMode,
+        expected_revision: u64,
+    ) -> Result<ExecutionAuthorization, ServiceError> {
         let connection = self.connection(connection_id)?;
         let previous = self
             .repository
             .authorization(connection_id, provider_account_id)?
             .ok_or(ServiceError::AccountNotFound)?;
+        if previous.authorization_revision != expected_revision {
+            return Err(ServiceError::StaleExecutionAuthorization);
+        }
         self.require_authorization_transition(
             security,
             connection.environment,

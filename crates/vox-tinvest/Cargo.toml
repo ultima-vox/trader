@@ -26,6 +26,7 @@ url.workspace = true
 uuid.workspace = true
 vox-domain = { path = "../vox-domain" }
 vox-connections = { path = "../vox-connections" }
+vox-runtime = { path = "../vox-runtime" }
 zeroize.workspace = true
 
 [build-dependencies]

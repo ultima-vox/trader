@@ -376,6 +376,34 @@ impl RuntimeStore for SqliteRuntimeStore {
         to_u64(epoch)
     }
 
+    fn mutation(
+        &self,
+        scope_key: &str,
+        logical_request_id: &str,
+    ) -> Result<Option<MutationRecord>, StoreError> {
+        let connection = self.connection()?;
+        Ok(load_mutation(&connection, logical_request_id)?
+            .filter(|record| record.scope_key == scope_key))
+    }
+
+    fn mutations(&self, scope_key: &str) -> Result<Vec<MutationRecord>, StoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT logical_request_id, scope_key, mutation_kind, state,
+                    redacted_request_evidence, broker_evidence_ref, created_at_unix_ms,
+                    updated_at_unix_ms, correlation_id, reconciliation_disposition,
+                    runtime_epoch
+                 FROM mutation_journal WHERE scope_key = ?1 ORDER BY created_at_unix_ms",
+            )
+            .map_err(persistence)?;
+        statement
+            .query_map([scope_key], mutation_from_row)
+            .map_err(persistence)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(persistence)
+    }
+
     fn verify_epoch(&self, scope_key: &str, runtime_epoch: u64) -> Result<(), StoreError> {
         let connection = self.connection()?;
         verify_epoch_connection(&connection, scope_key, runtime_epoch)

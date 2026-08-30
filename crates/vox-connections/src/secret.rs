@@ -215,6 +215,19 @@ pub trait SecretStore: Send + Sync {
     fn disable(&self, credential_ref: &CredentialRef) -> Result<(), SecretStoreError>;
 
     fn delete(&self, credential_ref: &CredentialRef) -> Result<(), SecretStoreError>;
+
+    /// Safe envelope inventory used only for lifecycle recovery. Never returns ciphertext,
+    /// wrapped keys, nonces, or plaintext.
+    fn metadata(&self) -> Result<Vec<SecretMetadata>, SecretStoreError>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SecretMetadata {
+    pub credential_ref: CredentialRef,
+    pub context: CredentialContext,
+    pub fingerprint: String,
+    pub key_version: u32,
+    pub disabled: bool,
 }
 
 #[derive(Clone)]
@@ -540,6 +553,49 @@ impl<K: KeyProvider> SecretStore for SqliteSecretStore<K> {
             [credential_ref.as_str()],
         )?;
         Ok(())
+    }
+
+    fn metadata(&self) -> Result<Vec<SecretMetadata>, SecretStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT credential_ref, provider, environment, fingerprint, key_version,
+                    disabled_at_unix_ms
+             FROM encrypted_credentials ORDER BY credential_ref",
+        )?;
+        statement
+            .query_map([], |row| {
+                let environment = match row.get::<_, String>(2)?.as_str() {
+                    "PRODUCTION" => BrokerEnvironment::Production,
+                    "SANDBOX" => BrokerEnvironment::Sandbox,
+                    _ => return Err(rusqlite::Error::InvalidQuery),
+                };
+                Ok(SecretMetadata {
+                    credential_ref: CredentialRef::parse(row.get::<_, String>(0)?).map_err(
+                        |error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                0,
+                                rusqlite::types::Type::Text,
+                                Box::new(error),
+                            )
+                        },
+                    )?,
+                    context: CredentialContext {
+                        provider: ProviderId::new(row.get::<_, String>(1)?).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                1,
+                                rusqlite::types::Type::Text,
+                                Box::new(error),
+                            )
+                        })?,
+                        environment,
+                    },
+                    fingerprint: row.get(3)?,
+                    key_version: row.get(4)?,
+                    disabled: row.get::<_, Option<i64>>(5)?.is_some(),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 }
 

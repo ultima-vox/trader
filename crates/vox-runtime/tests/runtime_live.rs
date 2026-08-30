@@ -308,6 +308,7 @@ impl ExecutionPort for SandboxExecution {
     async fn dispatch_once(
         &self,
         _scope: &RuntimeScope,
+        _purpose: vox_runtime::RuntimeExecutionPurpose,
         command: &RuntimeExecutionCommand,
         mutation: &MutationRecord,
     ) -> Result<ExecutionResult, BrokerPortError> {

@@ -1,24 +1,36 @@
 //! Builds existing T-Invest gRPC client only after #17 resolves exact stored connection scope.
 
+use async_trait::async_trait;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::{Mutex, mpsc};
 use vox_connections::{
     AccountTarget, BrokerCredentialClientFactory, BrokerEnvironment, BrokerProviderPort,
     ConnectionId, ConnectionRepository, ConnectionService, ExecutionPurpose, ProviderError,
     ProviderErrorKind, ProviderId, SecretBytes, SecretStore, ServiceError,
 };
 use vox_domain::RuntimeExecutionCommand;
+use vox_runtime::{
+    BrokerAccount, BrokerIdentityLinks, BrokerPortError, BrokerReadPort, BrokerResultClass,
+    ExecutionPort, ExecutionResult, ExecutionStreamPort, MutationRecord, OperationsPage, OrderFact,
+    PortfolioFact, PositionsFact, RuntimeExecutionPurpose, RuntimeScope, StopFact, StreamKind,
+    StreamSignal,
+};
 
 use crate::account::AccountReadClient;
 use crate::execution_dispatch::ExecutionRoute;
 use crate::runtime_execution::{
     RuntimeDispatchAcknowledgement, RuntimeExecutionAdapterError, TInvestRuntimeExecutionAdapter,
+    authoritative_rejection,
 };
 use crate::{GrpcConfigError, GrpcCredential, SecretToken, SecretTokenError, TInvestGrpcClient};
 
 pub struct TInvestReadSession {
     pub target: AccountTarget,
     pub client: AccountReadClient,
+    pub runtime_reads: crate::runtime_read::TInvestRuntimeReadAdapter,
+    pub runtime_streams: crate::runtime_stream::TInvestRuntimeStreamAdapter,
 }
 
 struct AuthorizedTInvestExecutionClient {
@@ -70,6 +82,43 @@ where
 
 pub struct StoredTInvestClientFactory<R, S, P> {
     connections: Arc<ConnectionService<R, S, P>>,
+}
+
+pub struct StoredTInvestReadPort<R, S, P> {
+    factory: Arc<StoredTInvestClientFactory<R, S, P>>,
+}
+
+impl<R, S, P> StoredTInvestReadPort<R, S, P> {
+    #[must_use]
+    pub const fn new(factory: Arc<StoredTInvestClientFactory<R, S, P>>) -> Self {
+        Self { factory }
+    }
+}
+
+pub struct StoredTInvestExecutionPort<R, S, P> {
+    factory: Arc<StoredTInvestClientFactory<R, S, P>>,
+}
+
+pub struct StoredTInvestStreamPort<R, S, P> {
+    factory: Arc<StoredTInvestClientFactory<R, S, P>>,
+    active: Mutex<Option<crate::runtime_stream::TInvestRuntimeStreamAdapter>>,
+}
+
+impl<R, S, P> StoredTInvestStreamPort<R, S, P> {
+    #[must_use]
+    pub const fn new(factory: Arc<StoredTInvestClientFactory<R, S, P>>) -> Self {
+        Self {
+            factory,
+            active: Mutex::const_new(None),
+        }
+    }
+}
+
+impl<R, S, P> StoredTInvestExecutionPort<R, S, P> {
+    #[must_use]
+    pub const fn new(factory: Arc<StoredTInvestClientFactory<R, S, P>>) -> Self {
+        Self { factory }
+    }
 }
 
 impl<R, S, P> StoredTInvestClientFactory<R, S, P>
@@ -130,6 +179,217 @@ where
     }
 }
 
+#[async_trait]
+impl<R, S, P> BrokerReadPort for StoredTInvestReadPort<R, S, P>
+where
+    R: ConnectionRepository + 'static,
+    S: SecretStore + 'static,
+    P: BrokerProviderPort + 'static,
+{
+    async fn accounts(&self, scope: &RuntimeScope) -> Result<Vec<BrokerAccount>, BrokerPortError> {
+        let session = self.session(scope)?;
+        session.runtime_reads.accounts(scope).await
+    }
+
+    async fn portfolio(&self, scope: &RuntimeScope) -> Result<PortfolioFact, BrokerPortError> {
+        let session = self.session(scope)?;
+        session.runtime_reads.portfolio(scope).await
+    }
+
+    async fn positions(&self, scope: &RuntimeScope) -> Result<PositionsFact, BrokerPortError> {
+        let session = self.session(scope)?;
+        session.runtime_reads.positions(scope).await
+    }
+
+    async fn active_orders(&self, scope: &RuntimeScope) -> Result<Vec<OrderFact>, BrokerPortError> {
+        let session = self.session(scope)?;
+        session.runtime_reads.active_orders(scope).await
+    }
+
+    async fn stop_orders(
+        &self,
+        scope: &RuntimeScope,
+        include_terminal_since_unix_ms: i64,
+    ) -> Result<Vec<StopFact>, BrokerPortError> {
+        let session = self.session(scope)?;
+        session
+            .runtime_reads
+            .stop_orders(scope, include_terminal_since_unix_ms)
+            .await
+    }
+
+    async fn order_state(
+        &self,
+        scope: &RuntimeScope,
+        broker_order_id: Option<&str>,
+        logical_request_id: Option<&str>,
+    ) -> Result<Option<OrderFact>, BrokerPortError> {
+        let session = self.session(scope)?;
+        session
+            .runtime_reads
+            .order_state(scope, broker_order_id, logical_request_id)
+            .await
+    }
+
+    async fn operations_page(
+        &self,
+        scope: &RuntimeScope,
+        cursor: Option<&str>,
+        from_unix_ms: i64,
+        limit: u16,
+    ) -> Result<OperationsPage, BrokerPortError> {
+        let session = self.session(scope)?;
+        session
+            .runtime_reads
+            .operations_page(scope, cursor, from_unix_ms, limit)
+            .await
+    }
+}
+
+impl<R, S, P> StoredTInvestReadPort<R, S, P>
+where
+    R: ConnectionRepository,
+    S: SecretStore,
+    P: BrokerProviderPort,
+{
+    fn session(&self, scope: &RuntimeScope) -> Result<TInvestReadSession, BrokerPortError> {
+        let connection_id = ConnectionId::parse(scope.connection_ref.as_str().to_owned())
+            .map_err(|_| factory_port_error("invalid runtime connection identity"))?;
+        self.factory
+            .read_session(&connection_id, &scope.broker_account_id)
+            .map_err(|_| factory_port_error("stored read session unavailable"))
+    }
+}
+
+#[async_trait]
+impl<R, S, P> ExecutionPort for StoredTInvestExecutionPort<R, S, P>
+where
+    R: ConnectionRepository + 'static,
+    S: SecretStore + 'static,
+    P: BrokerProviderPort + 'static,
+{
+    async fn dispatch_once(
+        &self,
+        scope: &RuntimeScope,
+        purpose: RuntimeExecutionPurpose,
+        command: &RuntimeExecutionCommand,
+        mutation: &MutationRecord,
+    ) -> Result<ExecutionResult, BrokerPortError> {
+        let connection_id = ConnectionId::parse(scope.connection_ref.as_str().to_owned())
+            .map_err(|_| factory_port_error("invalid runtime connection identity"))?;
+        let session = self
+            .factory
+            .execution_session(
+                &connection_id,
+                &scope.broker_account_id,
+                execution_purpose(purpose),
+            )
+            .map_err(|_| authorization_port_error())?;
+        match session.dispatch_once(command).await {
+            Ok(acknowledgement) => Ok(ExecutionResult::Acknowledged {
+                broker_evidence_ref: format!(
+                    "request_id={}; broker_identity_present={}",
+                    acknowledgement.transport_request_id,
+                    acknowledgement.broker_order_id.is_some()
+                        || acknowledgement.replacement_broker_order_id.is_some()
+                        || acknowledgement.broker_stop_order_id.is_some()
+                ),
+                links: BrokerIdentityLinks {
+                    logical_request_id: mutation.logical_request_id.clone(),
+                    broker_order_id: acknowledgement.broker_order_id,
+                    replacement_broker_order_id: acknowledgement.replacement_broker_order_id,
+                    broker_stop_order_id: acknowledgement.broker_stop_order_id,
+                    provider_operation_ids: acknowledgement
+                        .provider_operation_id
+                        .into_iter()
+                        .collect(),
+                    broker_fill_ids: BTreeSet::new(),
+                },
+            }),
+            Err(ConnectionFactoryError::RuntimeExecution(
+                RuntimeExecutionAdapterError::Validation(error),
+            )) => Ok(ExecutionResult::Rejected {
+                broker_evidence_ref: format!("pre-dispatch:{error}"),
+            }),
+            Err(ConnectionFactoryError::RuntimeExecution(
+                RuntimeExecutionAdapterError::Authorization(error),
+            )) => Ok(ExecutionResult::Rejected {
+                broker_evidence_ref: format!("pre-dispatch:{error}"),
+            }),
+            Err(ConnectionFactoryError::RuntimeExecution(
+                RuntimeExecutionAdapterError::Transport(error),
+            )) if authoritative_rejection(&error) => Ok(ExecutionResult::Rejected {
+                broker_evidence_ref: format!("provider-rejection:{}", error.metadata.request_id),
+            }),
+            Err(_) => Err(factory_port_error(
+                "capital-affecting dispatch outcome is not authoritative",
+            )),
+        }
+    }
+}
+
+#[async_trait]
+impl<R, S, P> ExecutionStreamPort for StoredTInvestStreamPort<R, S, P>
+where
+    R: ConnectionRepository + 'static,
+    S: SecretStore + 'static,
+    P: BrokerProviderPort + 'static,
+{
+    async fn connect(
+        &self,
+        scope: &RuntimeScope,
+        runtime_epoch: u64,
+        output: mpsc::Sender<StreamSignal>,
+    ) -> Result<BTreeSet<StreamKind>, BrokerPortError> {
+        self.disconnect().await?;
+        let connection_id = ConnectionId::parse(scope.connection_ref.as_str().to_owned())
+            .map_err(|_| factory_port_error("invalid runtime connection identity"))?;
+        let session = self
+            .factory
+            .read_session(&connection_id, &scope.broker_account_id)
+            .map_err(|_| factory_port_error("stored stream session unavailable"))?;
+        let streams = session.runtime_streams;
+        let acknowledged = streams.connect(scope, runtime_epoch, output).await?;
+        *self.active.lock().await = Some(streams);
+        Ok(acknowledged)
+    }
+
+    async fn disconnect(&self) -> Result<(), BrokerPortError> {
+        if let Some(streams) = self.active.lock().await.take() {
+            streams.disconnect().await?;
+        }
+        Ok(())
+    }
+}
+
+fn execution_purpose(value: RuntimeExecutionPurpose) -> ExecutionPurpose {
+    match value {
+        RuntimeExecutionPurpose::SandboxMutation => ExecutionPurpose::SandboxMutation,
+        RuntimeExecutionPurpose::ProductionManual => ExecutionPurpose::ProductionManual,
+        RuntimeExecutionPurpose::ProductionAutomated => ExecutionPurpose::ProductionAutomated,
+    }
+}
+
+fn factory_port_error(message: &str) -> BrokerPortError {
+    BrokerPortError {
+        service: "StoredTInvestClientFactory",
+        method: "Resolve",
+        class: BrokerResultClass::Credential,
+        message: message.to_owned(),
+        retry_after: None,
+    }
+}
+
+fn authorization_port_error() -> BrokerPortError {
+    BrokerPortError {
+        service: "StoredTInvestClientFactory",
+        method: "AuthorizeExecution",
+        class: BrokerResultClass::Permission,
+        message: "execution authorization denied for exact stored scope and purpose".to_owned(),
+        retry_after: None,
+    }
+}
+
 struct TInvestClientBuilder;
 
 impl BrokerCredentialClientFactory for TInvestClientBuilder {
@@ -183,9 +443,15 @@ fn build_session(
     credential: SecretBytes,
 ) -> Result<TInvestReadSession, ConnectionFactoryError> {
     let client = build_client(&target, credential)?;
+    let environment = target.environment;
     Ok(TInvestReadSession {
         target,
-        client: AccountReadClient::new(client),
+        client: AccountReadClient::new(client.clone()),
+        runtime_reads: crate::runtime_read::TInvestRuntimeReadAdapter::new(
+            client.clone(),
+            environment,
+        ),
+        runtime_streams: crate::runtime_stream::TInvestRuntimeStreamAdapter::new(client),
     })
 }
 
