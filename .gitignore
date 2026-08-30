@@ -15,7 +15,7 @@
 .qwen38-agent/
 /runners/
 frontend/app/dist/
-.gigacode-vsc/
+.gigacode_vsc/
 
 # Restored from docs/design/source/canonical.xz.b64.part* by restore-canonical-design.sh.
 # The parts are the committed provenance; the restored HTML is a local artefact.
