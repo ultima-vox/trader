@@ -36,7 +36,8 @@ env:
 
 jobs:
   contract:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: [self-hosted, Linux, X64, "1"]
+    timeout-minutes: 20
     env:
       BASH_ENV: /dev/null
     defaults:

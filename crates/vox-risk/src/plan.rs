@@ -1,7 +1,8 @@
 use thiserror::Error;
 
 use crate::model::{
-    ReservationState, RiskDecision, RiskRequest, RiskReservation, RiskValidityContext,
+    ReservationState, RiskActionKind, RiskDecision, RiskRequest, RiskReservation,
+    RiskValidityContext,
 };
 
 /// Immutable #21 -> #10 hand-off.
@@ -12,7 +13,8 @@ use crate::model::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RiskApprovedExecutionPlan {
     pub decision_id: String,
-    pub reservation_id: String,
+    pub reservation_id: Option<String>,
+    pub action: RiskActionKind,
     pub logical_request_id: String,
     pub account_id: String,
     pub broker_connection_id: String,
@@ -24,42 +26,68 @@ pub struct RiskApprovedExecutionPlan {
 impl RiskApprovedExecutionPlan {
     pub fn from_persisted(
         decision: &RiskDecision,
-        reservation: &RiskReservation,
+        reservation: Option<&RiskReservation>,
         request: &RiskRequest,
     ) -> Result<Self, RiskApprovedExecutionPlanError> {
         if !decision.permits_dispatch() {
             return Err(RiskApprovedExecutionPlanError::DecisionDoesNotPermitDispatch);
         }
-        if decision.request_id != request.request_id
-            || reservation.logical_request_id != request.request_id
-        {
+        if decision.request_id != request.request_id {
             return Err(RiskApprovedExecutionPlanError::RequestIdentityMismatch);
         }
-        if decision.account_id != request.account_id || reservation.account_id != request.account_id
-        {
+        if decision.account_id != request.account_id {
             return Err(RiskApprovedExecutionPlanError::AccountMismatch);
         }
-        if reservation.instrument_id != request.instrument_id {
-            return Err(RiskApprovedExecutionPlanError::InstrumentMismatch);
-        }
-        if decision.reservation_id.as_deref() != Some(reservation.reservation_id.as_str()) {
-            return Err(RiskApprovedExecutionPlanError::ReservationMismatch);
-        }
-        if decision.approved_delta_lots != reservation.reserved_delta_lots
-            || reservation.remaining_delta_lots != decision.approved_delta_lots
-        {
-            return Err(RiskApprovedExecutionPlanError::QuantityMismatch);
-        }
-        if !matches!(reservation.state, ReservationState::Active) {
-            return Err(RiskApprovedExecutionPlanError::ReservationNotActive);
+        if decision.action != request.action {
+            return Err(RiskApprovedExecutionPlanError::ActionMismatch);
         }
         if decision.validity != request.snapshot.validity {
             return Err(RiskApprovedExecutionPlanError::ValidityMismatch);
         }
 
+        let reservation_id = match request.action {
+            RiskActionKind::DirectionalOrder | RiskActionKind::ReplaceDirectionalOrder => {
+                let reservation =
+                    reservation.ok_or(RiskApprovedExecutionPlanError::ReservationRequired)?;
+                if reservation.logical_request_id != request.request_id {
+                    return Err(RiskApprovedExecutionPlanError::RequestIdentityMismatch);
+                }
+                if reservation.account_id != request.account_id {
+                    return Err(RiskApprovedExecutionPlanError::AccountMismatch);
+                }
+                if reservation.instrument_id != request.instrument_id {
+                    return Err(RiskApprovedExecutionPlanError::InstrumentMismatch);
+                }
+                if decision.reservation_id.as_deref() != Some(reservation.reservation_id.as_str()) {
+                    return Err(RiskApprovedExecutionPlanError::ReservationMismatch);
+                }
+                if decision.approved_delta_lots != reservation.reserved_delta_lots
+                    || reservation.remaining_delta_lots != decision.approved_delta_lots
+                {
+                    return Err(RiskApprovedExecutionPlanError::QuantityMismatch);
+                }
+                if !matches!(reservation.state, ReservationState::Active) {
+                    return Err(RiskApprovedExecutionPlanError::ReservationNotActive);
+                }
+                Some(reservation.reservation_id.clone())
+            }
+            RiskActionKind::CancelOrder
+            | RiskActionKind::ProtectionMaintenance
+            | RiskActionKind::CancelProtection => {
+                if reservation.is_some() || decision.reservation_id.is_some() {
+                    return Err(RiskApprovedExecutionPlanError::UnexpectedReservation);
+                }
+                if decision.approved_delta_lots != 0 {
+                    return Err(RiskApprovedExecutionPlanError::QuantityMismatch);
+                }
+                None
+            }
+        };
+
         Ok(Self {
             decision_id: decision.decision_id.clone(),
-            reservation_id: reservation.reservation_id.clone(),
+            reservation_id,
+            action: decision.action,
             logical_request_id: request.request_id.clone(),
             account_id: request.account_id.clone(),
             broker_connection_id: request.broker_connection_id.clone(),
@@ -77,6 +105,7 @@ impl RiskApprovedExecutionPlan {
         account_id: &str,
         broker_connection_id: &str,
         instrument_id: &str,
+        action: RiskActionKind,
         delta_lots: i64,
         current_validity: &RiskValidityContext,
     ) -> bool {
@@ -84,6 +113,7 @@ impl RiskApprovedExecutionPlan {
             && self.account_id == account_id
             && self.broker_connection_id == broker_connection_id
             && self.instrument_id == instrument_id
+            && self.action == action
             && self.approved_delta_lots == delta_lots
             && &self.validity == current_validity
     }
@@ -97,10 +127,16 @@ pub enum RiskApprovedExecutionPlanError {
     RequestIdentityMismatch,
     #[error("risk decision/reservation account mismatch")]
     AccountMismatch,
+    #[error("risk decision/request action mismatch")]
+    ActionMismatch,
     #[error("risk reservation instrument mismatch")]
     InstrumentMismatch,
     #[error("risk decision does not reference the persisted reservation")]
     ReservationMismatch,
+    #[error("directional risk approval requires a persisted reservation")]
+    ReservationRequired,
+    #[error("non-exposure risk approval must not carry a reservation")]
+    UnexpectedReservation,
     #[error("approved and reserved quantities differ")]
     QuantityMismatch,
     #[error("risk reservation is not ACTIVE")]
@@ -203,13 +239,14 @@ mod tests {
     #[test]
     fn persisted_decision_and_reservation_create_dispatch_plan() {
         let request = request();
-        let plan = RiskApprovedExecutionPlan::from_persisted(&decision(), &reservation(), &request)
+        let plan = RiskApprovedExecutionPlan::from_persisted(&decision(), Some(&reservation()), &request)
             .expect("plan");
         assert!(plan.matches_dispatch_context(
             "req-1",
             "account-1",
             "connection-1",
             "instrument-1",
+            RiskActionKind::DirectionalOrder,
             10,
             &validity(),
         ));
@@ -218,7 +255,7 @@ mod tests {
     #[test]
     fn changed_authorization_revision_invalidates_dispatch_context() {
         let request = request();
-        let plan = RiskApprovedExecutionPlan::from_persisted(&decision(), &reservation(), &request)
+        let plan = RiskApprovedExecutionPlan::from_persisted(&decision(), Some(&reservation()), &request)
             .expect("plan");
         let mut changed = validity();
         changed.execution_authorization_revision += 1;
@@ -227,8 +264,34 @@ mod tests {
             "account-1",
             "connection-1",
             "instrument-1",
+            RiskActionKind::DirectionalOrder,
             10,
             &changed,
+        ));
+    }
+
+    #[test]
+    fn maintenance_plan_requires_no_reservation() {
+        let mut request = request();
+        request.action = RiskActionKind::CancelOrder;
+        request.requested_delta_lots = 0;
+        let mut decision = decision();
+        decision.action = RiskActionKind::CancelOrder;
+        decision.requested_delta_lots = 0;
+        decision.approved_delta_lots = 0;
+        decision.reservation_id = None;
+
+        let plan = RiskApprovedExecutionPlan::from_persisted(&decision, None, &request)
+            .expect("maintenance plan");
+        assert!(plan.reservation_id.is_none());
+        assert!(plan.matches_dispatch_context(
+            "req-1",
+            "account-1",
+            "connection-1",
+            "instrument-1",
+            RiskActionKind::CancelOrder,
+            0,
+            &validity(),
         ));
     }
 
@@ -238,7 +301,7 @@ mod tests {
         let mut reservation = reservation();
         reservation.state = ReservationState::UnknownHeld;
         assert_eq!(
-            RiskApprovedExecutionPlan::from_persisted(&decision(), &reservation, &request),
+            RiskApprovedExecutionPlan::from_persisted(&decision(), Some(&reservation), &request),
             Err(RiskApprovedExecutionPlanError::ReservationNotActive)
         );
     }
