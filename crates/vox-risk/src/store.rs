@@ -5,9 +5,27 @@ use thiserror::Error;
 
 use crate::model::{ReservationState, RiskDecision, RiskReservation, RiskSource};
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ReservationCapacity {
+    pub max_account_reserved_notional_nanos: Option<i128>,
+    pub max_instrument_reserved_abs_lots: Option<i64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PersistedRiskApproval {
+    pub decision: RiskDecision,
+    pub reservation: RiskReservation,
+}
+
 pub trait RiskStore: Clone + Send + Sync + 'static {
     fn put_decision(&self, decision: &RiskDecision) -> Result<(), RiskStoreError>;
     fn decision(&self, decision_id: &str) -> Result<Option<RiskDecision>, RiskStoreError>;
+    fn persist_approval_atomic(
+        &self,
+        decision: &RiskDecision,
+        reservation: &RiskReservation,
+        capacity: ReservationCapacity,
+    ) -> Result<PersistedRiskApproval, RiskStoreError>;
     fn reserve_atomic(
         &self,
         reservation: &RiskReservation,
@@ -75,15 +93,50 @@ impl RiskStore for SqliteRiskStore {
     }
 
     fn decision(&self, decision_id: &str) -> Result<Option<RiskDecision>, RiskStoreError> {
-        self.connection()?
-            .query_row(
-                "SELECT payload FROM risk_decisions WHERE decision_id = ?1",
-                [decision_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
-            .map(|payload| serde_json::from_str(&payload).map_err(Into::into))
-            .transpose()
+        decision_by_id_connection(&self.connection()?, decision_id)
+    }
+
+    fn persist_approval_atomic(
+        &self,
+        decision: &RiskDecision,
+        reservation: &RiskReservation,
+        capacity: ReservationCapacity,
+    ) -> Result<PersistedRiskApproval, RiskStoreError> {
+        validate_approval_link(decision, reservation)?;
+        validate_capacity(capacity)?;
+
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        if let Some(existing_reservation) = reservation_for_request_tx(
+            &transaction,
+            &reservation.account_id,
+            &reservation.logical_request_id,
+        )? {
+            let existing_decision = decision_for_request_connection(
+                &transaction,
+                &decision.account_id,
+                &decision.request_id,
+            )?
+            .ok_or(RiskStoreError::ApprovalInvariantViolation(
+                "reservation exists without its risk decision",
+            ))?;
+            transaction.commit()?;
+            return Ok(PersistedRiskApproval {
+                decision: existing_decision,
+                reservation: existing_reservation,
+            });
+        }
+
+        enforce_capacity(&transaction, reservation, capacity)?;
+        insert_decision(&transaction, decision)?;
+        insert_reservation(&transaction, reservation)?;
+        transaction.commit()?;
+
+        Ok(PersistedRiskApproval {
+            decision: decision.clone(),
+            reservation: reservation.clone(),
+        })
     }
 
     fn reserve_atomic(
@@ -184,6 +237,155 @@ impl RiskStore for SqliteRiskStore {
         transaction.commit()?;
         Ok(updated)
     }
+}
+
+fn validate_approval_link(
+    decision: &RiskDecision,
+    reservation: &RiskReservation,
+) -> Result<(), RiskStoreError> {
+    if decision.account_id != reservation.account_id
+        || decision.request_id != reservation.logical_request_id
+        || decision.reservation_id.as_deref() != Some(reservation.reservation_id.as_str())
+        || !decision.permits_dispatch()
+        || decision.approved_delta_lots != reservation.reserved_delta_lots
+    {
+        return Err(RiskStoreError::ApprovalInvariantViolation(
+            "decision and reservation do not describe the same approved request",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_capacity(capacity: ReservationCapacity) -> Result<(), RiskStoreError> {
+    if capacity
+        .max_account_reserved_notional_nanos
+        .is_some_and(|value| value < 0)
+        || capacity
+            .max_instrument_reserved_abs_lots
+            .is_some_and(|value| value < 0)
+    {
+        return Err(RiskStoreError::InvalidCapacity);
+    }
+    Ok(())
+}
+
+fn enforce_capacity(
+    connection: &Connection,
+    reservation: &RiskReservation,
+    capacity: ReservationCapacity,
+) -> Result<(), RiskStoreError> {
+    if let Some(limit) = capacity.max_instrument_reserved_abs_lots {
+        let mut statement = connection.prepare(
+            "SELECT remaining_delta_lots
+             FROM risk_reservations
+             WHERE account_id = ?1 AND instrument_id = ?2
+               AND state IN ('ACTIVE','PARTIALLY_CONSUMED','UNKNOWN_HELD','ORPHANED')",
+        )?;
+        let values = statement.query_map(
+            params![reservation.account_id, reservation.instrument_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let mut active = 0_i64;
+        for value in values {
+            let value = value?;
+            let absolute =
+                i64::try_from(value.unsigned_abs()).map_err(|_| RiskStoreError::ArithmeticOverflow)?;
+            active = active
+                .checked_add(absolute)
+                .ok_or(RiskStoreError::ArithmeticOverflow)?;
+        }
+        let requested = i64::try_from(reservation.remaining_delta_lots.unsigned_abs())
+            .map_err(|_| RiskStoreError::ArithmeticOverflow)?;
+        if active
+            .checked_add(requested)
+            .ok_or(RiskStoreError::ArithmeticOverflow)?
+            > limit
+        {
+            return Err(RiskStoreError::CapacityExceeded);
+        }
+    }
+
+    if let Some(limit) = capacity.max_account_reserved_notional_nanos {
+        let mut statement = connection.prepare(
+            "SELECT reserved_notional_nanos
+             FROM risk_reservations
+             WHERE account_id = ?1
+               AND state IN ('ACTIVE','PARTIALLY_CONSUMED','UNKNOWN_HELD','ORPHANED')",
+        )?;
+        let values = statement.query_map([&reservation.account_id], |row| row.get::<_, String>(0))?;
+        let mut active = 0_i128;
+        for value in values {
+            let value = value?
+                .parse::<i128>()
+                .map_err(|error| RiskStoreError::StoredNumeric(error.to_string()))?;
+            active = active
+                .checked_add(value.checked_abs().ok_or(RiskStoreError::ArithmeticOverflow)?)
+                .ok_or(RiskStoreError::ArithmeticOverflow)?;
+        }
+        let requested = reservation
+            .reserved_notional_nanos
+            .checked_abs()
+            .ok_or(RiskStoreError::ArithmeticOverflow)?;
+        if active
+            .checked_add(requested)
+            .ok_or(RiskStoreError::ArithmeticOverflow)?
+            > limit
+        {
+            return Err(RiskStoreError::CapacityExceeded);
+        }
+    }
+
+    Ok(())
+}
+
+fn insert_decision(
+    connection: &Connection,
+    decision: &RiskDecision,
+) -> Result<(), RiskStoreError> {
+    let payload = serde_json::to_string(decision)?;
+    connection.execute(
+        "INSERT INTO risk_decisions(decision_id, request_id, account_id, policy_revision, payload)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            decision.decision_id,
+            decision.request_id,
+            decision.account_id,
+            decision.policy_revision,
+            payload
+        ],
+    )?;
+    Ok(())
+}
+
+fn decision_by_id_connection(
+    connection: &Connection,
+    decision_id: &str,
+) -> Result<Option<RiskDecision>, RiskStoreError> {
+    connection
+        .query_row(
+            "SELECT payload FROM risk_decisions WHERE decision_id = ?1",
+            [decision_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|payload| serde_json::from_str(&payload).map_err(Into::into))
+        .transpose()
+}
+
+fn decision_for_request_connection(
+    connection: &Connection,
+    account_id: &str,
+    request_id: &str,
+) -> Result<Option<RiskDecision>, RiskStoreError> {
+    connection
+        .query_row(
+            "SELECT payload FROM risk_decisions WHERE account_id = ?1 AND request_id = ?2",
+            params![account_id, request_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|payload| serde_json::from_str(&payload).map_err(Into::into))
+        .transpose()
 }
 
 fn insert_reservation(
@@ -349,7 +551,7 @@ CREATE TABLE IF NOT EXISTS risk_decisions (
     policy_revision INTEGER NOT NULL,
     payload TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_risk_decisions_request
+CREATE UNIQUE INDEX IF NOT EXISTS idx_risk_decisions_request
     ON risk_decisions(account_id, request_id);
 
 CREATE TABLE IF NOT EXISTS risk_reservations (
@@ -388,6 +590,10 @@ pub enum RiskStoreError {
     InvalidTransition,
     #[error("risk arithmetic overflow")]
     ArithmeticOverflow,
+    #[error("risk approval invariant violated: {0}")]
+    ApprovalInvariantViolation(&'static str),
+    #[error("stored risk numeric value is invalid: {0}")]
+    StoredNumeric(String),
 }
 
 #[cfg(test)]
