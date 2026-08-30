@@ -95,7 +95,9 @@ impl RiskEngine {
         }
 
         if increasing_lots > 0 {
-            validate_market_data(policy, request)?;
+            if let Some(decision) = validate_market_data(policy, request)? {
+                return Ok(decision);
+            }
             if policy.protection_required_for_new_exposure
                 && !request.protection_established_or_planned
             {
@@ -296,9 +298,9 @@ impl RiskEngine {
 fn validate_market_data(
     policy: &RiskPolicySet,
     request: &RiskRequest,
-) -> Result<(), RiskEngineError> {
+) -> Result<Option<RiskDecision>, RiskEngineError> {
     let Some(max_age) = policy.max_market_data_age_ms else {
-        return Ok(());
+        return Ok(None);
     };
     if max_age < 0 {
         return Err(RiskEngineError::InvalidPolicy(
@@ -306,7 +308,7 @@ fn validate_market_data(
         ));
     }
     let Some(as_of) = request.snapshot.validity.market_data_as_of_unix_ms else {
-        return Err(RiskEngineError::SafetyDecision(reject(
+        return Ok(Some(reject(
             policy,
             request,
             RiskOutcome::Reject,
@@ -316,7 +318,7 @@ fn validate_market_data(
     };
     let age = request.now_unix_ms.saturating_sub(as_of);
     if age > max_age {
-        return Err(RiskEngineError::SafetyDecision(reject(
+        return Ok(Some(reject(
             policy,
             request,
             RiskOutcome::Reject,
@@ -324,7 +326,7 @@ fn validate_market_data(
             "price-dependent new exposure uses stale market data",
         )));
     }
-    Ok(())
+    Ok(None)
 }
 
 fn provider_limit(
@@ -408,8 +410,6 @@ pub enum RiskEngineError {
     InvalidPolicy(&'static str),
     #[error("invalid provider risk fact: {0}")]
     InvalidProviderFact(&'static str),
-    #[error("risk decision: {0:?}")]
-    SafetyDecision(RiskDecision),
 }
 
 #[cfg(test)]
@@ -539,13 +539,9 @@ mod tests {
     fn stale_market_data_fails_closed_for_new_exposure() {
         let mut r = request(0, 10);
         r.snapshot.validity.market_data_as_of_unix_ms = Some(1);
-        let error = RiskEngine::evaluate(&policy(), &r).expect_err("stale must fail closed");
-        match error {
-            RiskEngineError::SafetyDecision(decision) => {
-                assert_eq!(decision.reasons[0].code, RiskReasonCode::MarketDataStale);
-            }
-            other => panic!("unexpected error: {other}"),
-        }
+        let decision = RiskEngine::evaluate(&policy(), &r).expect("risk decision");
+        assert_eq!(decision.outcome, RiskOutcome::Reject);
+        assert_eq!(decision.reasons[0].code, RiskReasonCode::MarketDataStale);
     }
 
     #[test]
