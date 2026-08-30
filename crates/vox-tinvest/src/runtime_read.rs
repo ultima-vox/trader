@@ -14,6 +14,7 @@ use crate::account::{AccountReadClient, PortfolioQuery};
 use crate::execution::{canonical_orders, canonical_stop_orders};
 use crate::generated::v1;
 use crate::{GrpcError, GrpcErrorKind, TInvestGrpcClient};
+use vox_domain::OrderSide;
 
 #[derive(Clone)]
 pub struct TInvestRuntimeReadAdapter {
@@ -300,9 +301,20 @@ fn order_fact(
             .ok_or_else(|| permanent("OrdersService", "order_decode", "order omitted identity"))?,
         logical_request_id: order.client_request_id,
         instrument_uid: order.instrument_uid.unwrap_or_default(),
+        side: order_side(order.direction),
+        lots_requested: order.lots_requested,
+        lots_executed: order.lots_executed,
         status: order_status(order.execution_status),
         status_cause: None,
     })
+}
+
+fn order_side(value: i32) -> Option<OrderSide> {
+    match v1::OrderDirection::try_from(value) {
+        Ok(v1::OrderDirection::Buy) => Some(OrderSide::Buy),
+        Ok(v1::OrderDirection::Sell) => Some(OrderSide::Sell),
+        _ => None,
+    }
 }
 
 fn order_status(value: i32) -> OrderExecutionStatus {

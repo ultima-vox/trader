@@ -6,6 +6,10 @@ pub mod reference;
 pub mod account;
 pub mod account_qualification;
 pub mod canonical;
+#[allow(
+    dead_code,
+    reason = "execution-session target and authorization revision accessors are reserved for the #21 risk admission adapter"
+)]
 pub mod connection_factory;
 pub mod connection_provider;
 pub mod execution;
@@ -18,6 +22,7 @@ pub mod market_stream;
 pub mod operations;
 pub mod operations_stream;
 pub mod reports;
+pub mod risk_read;
 pub mod runtime_execution;
 pub mod runtime_read;
 pub mod runtime_stream;
@@ -30,7 +35,7 @@ mod websocket;
 
 pub use connection_factory::{
     ConnectionFactoryError, StoredTInvestClientFactory, StoredTInvestExecutionPort,
-    StoredTInvestReadPort, StoredTInvestStreamPort, TInvestExecutionSession, TInvestReadSession,
+    StoredTInvestReadPort, StoredTInvestStreamPort, TInvestReadSession,
 };
 pub use grpc::{
     DEFAULT_GRPC_ENDPOINT, DEFAULT_SANDBOX_GRPC_ENDPOINT, GrpcCertificatePolicy, GrpcConfig,

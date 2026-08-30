@@ -11,6 +11,7 @@ pub mod execution;
 pub mod instrument;
 pub mod market;
 pub mod money;
+pub mod risk;
 pub mod runtime;
 pub mod scope;
 pub mod stream;

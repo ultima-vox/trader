@@ -30,6 +30,7 @@ pub struct TInvestReadSession {
     pub target: AccountTarget,
     pub client: AccountReadClient,
     pub runtime_reads: crate::runtime_read::TInvestRuntimeReadAdapter,
+    pub risk_reads: crate::risk_read::TInvestRiskReadAdapter,
     pub runtime_streams: crate::runtime_stream::TInvestRuntimeStreamAdapter,
 }
 
@@ -39,7 +40,7 @@ struct AuthorizedTInvestExecutionClient {
     authorization_revision: u64,
 }
 
-pub struct TInvestExecutionSession<R, S, P> {
+struct TInvestExecutionSession<R, S, P> {
     target: AccountTarget,
     adapter: TInvestRuntimeExecutionAdapter,
     authorization_revision: u64,
@@ -145,7 +146,7 @@ where
         Ok(resolved)
     }
 
-    pub fn execution_session(
+    fn execution_session(
         &self,
         connection_id: &ConnectionId,
         provider_account_id: &str,
@@ -451,6 +452,7 @@ fn build_session(
             client.clone(),
             environment,
         ),
+        risk_reads: crate::risk_read::TInvestRiskReadAdapter::new(client.clone(), environment),
         runtime_streams: crate::runtime_stream::TInvestRuntimeStreamAdapter::new(client),
     })
 }

@@ -5,6 +5,7 @@ members = [
     "crates/vox-core",
     "crates/vox-domain",
     "crates/vox-nautilus",
+    "crates/vox-risk",
     "crates/vox-runtime",
     "crates/vox-tinvest",
 ]

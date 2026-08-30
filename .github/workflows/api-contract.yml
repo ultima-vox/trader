@@ -31,24 +31,42 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  BASH_ENV: /dev/null
+  RUSTUP_HOME: /home/anubis/.rustup
+  CARGO_HOME: /home/anubis/.cargo
+  PATH: /home/anubis/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+defaults:
+  run:
+    shell: 'bash --noprofile --norc -e -o pipefail "{0}"'
 
 jobs:
   contract:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, "1"]
     steps:
       - name: Checkout the commit under review
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Report the verified commit
         run: echo "verifying $(git rev-parse HEAD)"
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - uses: Swatinem/rust-cache@v2
+      - name: Use the pinned local Rust toolchain
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | tr -d '\r' | head -n 1)"
+          test -n "$channel"
+          active="$(rustup show active-toolchain)"
+          echo "$active"
+          case "$active" in
+            "$channel"-*) ;;
+            *) echo "the active toolchain is not the pinned $channel" >&2; exit 1 ;;
+          esac
+          rustc --version
+          cargo --version
+          cargo clippy --version
+          cargo fmt --version
 
       - name: Build the workspace
         run: cargo build --workspace --locked
