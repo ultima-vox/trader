@@ -1,8 +1,20 @@
 # Vox Trader — backend dependency specification for the frontend
 
-What the backend must expose before frontend application code can be written. Companion
-to `BACKEND_CONTRACTS.md`, which records what exists today; this document specifies what
-is missing, in the shape the frontend needs it.
+Tracks frontend-facing backend dependencies and their current repository status. Companion
+to `BACKEND_CONTRACTS.md`, which records accepted contracts. Historical requirement text
+is retained below, but status notes are authoritative when a dependency has already landed.
+
+Current baseline:
+- **BD-1 / #38 is delivered**: versioned REST + bounded WebSocket, generated OpenAPI and
+  generated TypeScript client are in `main`.
+- **BD-3 / #38 is delivered at the application boundary**: provider-neutral quote, book,
+  trades, candles and session projections exist, including live application events.
+- **BD-5 / #17 is delivered at the platform boundary**: broker connections, encrypted
+  credential references, account discovery/binding, RBAC and execution authorization are
+  in `main`. Browser-session bootstrap hardening is tracked separately in PR #50.
+- **#18 remains open**: PR #48 delivered the reusable frontend foundation slice; real
+  platform/session integration and remaining reusable trading primitives still have to
+  be completed before #18 can close.
 
 Ground rules taken from issue #18 and applied to every item below:
 
@@ -25,10 +37,11 @@ workspace; **P2** blocks a capability inside a workspace.
 
 ---
 
-## BD-1 · Vox frontend transport — **P0**
+## BD-1 · Vox frontend transport — **DELIVERED / #38 CLOSED**
 
-Nothing else can be consumed without this. `vox-core` is currently a configuration binary;
-`reqwest`/`tonic` in the workspace are provider-facing clients, not a Vox server.
+The accepted application boundary now exists in `main`. The requirements below are kept as
+the design record for that boundary; new frontend work must consume the generated Vox client
+rather than recreate this transport.
 
 Required:
 
@@ -61,9 +74,9 @@ Acceptance: a client can list scopes, read one account fully, submit a command, 
 `DISPATCHING → ACKNOWLEDGED|REJECTED|UNKNOWN_AFTER_DISPATCH`, and be told to stop when the
 epoch changes.
 
-Owner: **#38 — Application API Foundation**, which was opened from the finding in
-`BACKEND_CONTRACTS.md` and covers exactly this dependency. It builds on **#11** for the
-read models and ownership/epoch semantics.
+Owner: **#38 — Application API Foundation (CLOSED)**. Accepted implementation is the
+versioned `/api/v1` REST/WebSocket boundary with generated OpenAPI/TypeScript contracts,
+built on #11 runtime ownership/reconciliation semantics.
 
 ## BD-2 · Risk read model — **P1** (Trade, Portfolio, Decision)
 
@@ -90,10 +103,11 @@ named; one that can be reduced returns `RESIZE` with `adjusted_quantity_lots`.
 Owner: **#21 — Risk Foundation** (pre-trade, portfolio risk, reservations, kill switch),
 surfaced through #38.
 
-## BD-3 · Market-data read model — **P1** (Markets, Trade)
+## BD-3 · Market-data read model — **DELIVERED AT APPLICATION BOUNDARY** (Markets, Trade)
 
-`vox-tinvest` has market data and streams, but `vox-runtime` exposes no market read model,
-so quote, order book, tape and chart have nothing to consume.
+The accepted #38 projection exposes provider-neutral quote, order book, trade tape, candles,
+candle interval capabilities and session state, plus bounded live application events. The
+requirements below remain the contract intent for downstream workspaces.
 
 Required:
 
@@ -111,9 +125,8 @@ Required:
 Acceptance: the Markets watchlist and the Trade quote strip render from Vox alone, and the
 ticket's lot/step validation is metadata-driven.
 
-Owner: **#38** — this is a Vox projection/API over the **already accepted** #8 provider
-layer. #8 is not reopened: its adapter contracts stand as qualified, and the work here is a
-Vox-side read model plus its endpoint and stream, assembled from that layer.
+Owner: **#38 (CLOSED)** over the **already accepted #8 provider layer**. #8 is not
+reopened. Workspace/chart consumption belongs downstream to #18/#30.
 
 ## BD-4 · Portfolio valuation and P&L — **P1** (Portfolio, Trade)
 
@@ -136,10 +149,11 @@ guess, and every figure is exact.
 Owner: **#22 — Portfolio Foundation** (allocation, capital budgets, exposure); depends on
 BD-3 for pricing and is surfaced through #38.
 
-## BD-5 · Account, credential and RBAC API — **P1** (Settings → Brokers & Accounts, Users)
+## BD-5 · Account, credential and RBAC API — **DELIVERED AT PLATFORM BOUNDARY / #17 CLOSED**
 
-`CredentialResolution { execution_authorized }` and `OpaqueRef` exist. The lifecycle around
-them does not.
+#17 is merged: broker connections, encrypted credential references, account discovery and
+binding, RBAC and execution authorization now exist server-side. PR #50 is a post-merge
+browser-session/CSRF hardening follow-up and must not be mistaken for reopening #17.
 
 Required:
 
@@ -160,7 +174,8 @@ Acceptance: the settings screen can add a sandbox and a production connection to
 provider, discover accounts, bind two of them, rotate a credential, and never receive the
 stored secret back.
 
-Owner: **#17 — Platform Foundation**, surfaced through #38.
+Owner: **#17 — Platform Foundation (CLOSED)**, surfaced through #38. Browser authentication
+transport hardening is tracked by PR #50.
 
 ## BD-9 · Protection defaults — **P2** (Trade, Portfolio, Settings)
 
@@ -337,9 +352,9 @@ BD-1  (transport)                    ← blocks everything
 BD-11, BD-12, BD-13 — after the workspaces they belong to.
 ```
 
-Frontend application code cannot begin before **BD-1**, because there is no transport to
-generate a typed client from. Everything after BD-1 unblocks a specific workspace, and the
-frontend can proceed workspace by workspace in the order above.
+BD-1 is complete, so frontend application work is no longer transport-blocked. Work now
+proceeds capability-by-capability over accepted generated contracts; unavailable backend
+owners remain explicitly gated rather than simulated.
 
 ---
 
@@ -375,5 +390,19 @@ screen; every one is infrastructure that #30 consumes.
 10. **No secret persistence**: nothing credential-shaped in URL, storage, logs or telemetry;
     connections addressed by `OpaqueRef` only.
 
-Work on 1–10 starts when #38 publishes its first generated client. Until then #18 has no
-application code to write, and the design system plus this specification are its output.
+PR #48 delivered the first implementation slice for items 1–10. #18 remains open until
+that infrastructure is integrated with the accepted #17 platform/session contracts and the
+remaining reusable trading primitives are complete. The shipped proof map is:
+
+| DoD | Implementation | Proof |
+| --- | --- | --- |
+| 1 | `frontend/api-client`, `frontend/app/src/vox/service.ts` | API-contract drift/typecheck + frontend tests |
+| 2–4 | `frontend/app/src/account/*`, `vox/service.ts` | account/store/service stale-response tests |
+| 5 | `frontend/app/src/command/target.ts` | frozen-target/receipt-binding tests |
+| 6 | `frontend/app/src/instrument/*` | linked/pinned context tests |
+| 7 | `frontend/app/src/ui/capability-gate.ts` | capability-gating tests |
+| 8 | `frontend/app/src/decimal/exact.ts` | exact-decimal boundary tests |
+| 9 | `frontend/app/src/state/*`, `ui/data-state.ts` | shared-state tests |
+| 10 | `frontend/app/src/security/*` | persistence/provider policy tests + CI scan |
+
+This table records shipped infrastructure only; it is **not** evidence that #18 is complete.
