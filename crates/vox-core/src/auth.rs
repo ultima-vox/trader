@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use axum::extract::{Request, State};
-use axum::http::{Method, StatusCode, header};
+use axum::http::{Method, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use ring::digest;
@@ -17,7 +17,8 @@ use vox_api::application::{AuthenticatedActor, EstablishedSession, SessionAuthen
 use vox_api::contract::auth::CreateSessionRequest;
 use vox_api::error::{ApiError, ErrorCategory};
 use vox_connections::{
-    ConnectionRepository, Permission, Role, RoleId, SqliteConnectionRepository, User, UserId,
+    AuditRecord, ConnectionRepository, Permission, Role, RoleId, SqliteConnectionRepository, User,
+    UserId,
 };
 
 const SESSION_COOKIE: &str = "vox_session";
@@ -56,25 +57,20 @@ impl AuthState {
         }
         validate_token(bootstrap.bootstrap_credential.expose_secret())?;
         let bootstrap_hash = digest_hex(bootstrap.bootstrap_credential.expose_secret());
-        let user = match users.user(&bootstrap.user_id)? {
-            Some(user) => user,
-            None => {
-                let user = User {
-                    id: bootstrap.user_id.clone(),
-                    display_name: bootstrap.display_name,
-                    enabled: true,
-                };
-                users.put_user(&user)?;
-                user
-            }
+        let user = User {
+            id: bootstrap.user_id.clone(),
+            display_name: bootstrap.display_name,
+            enabled: true,
         };
         let role = Role {
             id: deterministic_bootstrap_role_id()?,
             name: "SERVER_BOOTSTRAP".to_owned(),
             permissions: bootstrap.permissions,
         };
-        users.put_role(&role)?;
-        users.grant_role(&user.id, &role.id)?;
+        let correlation_id = format!("bootstrap-provisioning-{}", uuid::Uuid::new_v4());
+        let (provisioning_audits, adoption_audit) =
+            bootstrap_provisioning_audits(&user, &role, &correlation_id, now_unix_ms);
+        users.provision_bootstrap_identity(&user, &role, &provisioning_audits, &adoption_audit)?;
 
         let sessions = SessionStore::open(database_path)?;
         Ok(Self {
@@ -204,7 +200,7 @@ pub async fn authenticated_actor_middleware(
             ) && !session.permissions.contains(&required)
             {
                 return auth_error(
-                    StatusCode::FORBIDDEN,
+                    ErrorCategory::Permission,
                     "RBAC_PERMISSION_DENIED",
                     "authenticated principal lacks required permission",
                 );
@@ -215,34 +211,73 @@ pub async fn authenticated_actor_middleware(
         Err(
             AuthFailure::MissingSession | AuthFailure::InvalidSession | AuthFailure::RevokedUser,
         ) => auth_error(
-            StatusCode::UNAUTHORIZED,
+            ErrorCategory::Authentication,
             "AUTHENTICATION_REQUIRED",
             "valid server-side session required",
         ),
         Err(AuthFailure::MissingCsrf | AuthFailure::InvalidCsrf) => auth_error(
-            StatusCode::FORBIDDEN,
+            ErrorCategory::Permission,
             "CSRF_VALIDATION_FAILED",
             "state-changing request requires valid CSRF token",
         ),
         Err(AuthFailure::Unavailable) => auth_error(
-            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCategory::Transient,
             "AUTHENTICATION_UNAVAILABLE",
             "authentication subsystem unavailable",
         ),
     }
 }
 
-fn auth_error(status: StatusCode, code: &'static str, message: &'static str) -> Response {
+fn auth_error(category: ErrorCategory, code: &'static str, message: &'static str) -> Response {
+    ApiError::new(category, code, message).into_response()
+}
+
+fn bootstrap_provisioning_audits(
+    user: &User,
+    role: &Role,
+    correlation_id: &str,
+    occurred_at_unix_ms: i64,
+) -> ([AuditRecord; 3], AuditRecord) {
     (
-        status,
-        axum::Json(serde_json::json!({
-            "category": if status == StatusCode::UNAUTHORIZED { "AUTHENTICATION" } else { "PERMISSION" },
-            "code": code,
-            "message": message,
-            "retryable": false
-        })),
+        [
+            AuditRecord {
+                actor: user.id.clone(),
+                action: "BOOTSTRAP_USER_PROVISIONED".to_owned(),
+                target_ref: user.id.as_str().to_owned(),
+                previous_state: None,
+                new_state: Some("ENABLED".to_owned()),
+                correlation_id: correlation_id.to_owned(),
+                occurred_at_unix_ms,
+            },
+            AuditRecord {
+                actor: user.id.clone(),
+                action: "BOOTSTRAP_ROLE_PROVISIONED".to_owned(),
+                target_ref: role.id.as_str().to_owned(),
+                previous_state: None,
+                new_state: Some("SERVER_BOOTSTRAP".to_owned()),
+                correlation_id: correlation_id.to_owned(),
+                occurred_at_unix_ms,
+            },
+            AuditRecord {
+                actor: user.id.clone(),
+                action: "BOOTSTRAP_ROLE_ASSIGNED".to_owned(),
+                target_ref: user.id.as_str().to_owned(),
+                previous_state: None,
+                new_state: Some(role.id.as_str().to_owned()),
+                correlation_id: correlation_id.to_owned(),
+                occurred_at_unix_ms,
+            },
+        ],
+        AuditRecord {
+            actor: user.id.clone(),
+            action: "BOOTSTRAP_SECURITY_STATE_ADOPTED".to_owned(),
+            target_ref: user.id.as_str().to_owned(),
+            previous_state: Some("PERSISTED".to_owned()),
+            new_state: Some("AUTHORITATIVE".to_owned()),
+            correlation_id: correlation_id.to_owned(),
+            occurred_at_unix_ms,
+        },
     )
-        .into_response()
 }
 
 fn cookie_value(request: &Request, name: &str) -> Option<String> {

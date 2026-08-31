@@ -12,7 +12,8 @@ use vox_connections::{
     ConnectionHealthReason, ConnectionHealthState, ConnectionId, ConnectionRepository,
     CredentialClass, CredentialContext, CredentialRef, CredentialScope, CredentialStatus,
     ExecutionAuthorization, ExecutionAuthorizationMode, ExecutionPurpose, Permission, ProviderId,
-    SecretBytes, SecretStore, ServiceError, StaticKeyProvider, User, UserId, VoxAccountId,
+    Role, RoleId, SecretBytes, SecretStore, ServiceError, StaticKeyProvider, User, UserId,
+    VoxAccountId,
 };
 use vox_core::CoreConfig;
 use vox_core::auth::SessionBootstrap;
@@ -90,9 +91,76 @@ async fn production_composition_enforces_server_verified_session_and_rbac()
     composition.shutdown().await;
     drop(composition);
 
-    // Restart must not silently re-enable a revoked/disabled principal.
     let repository =
         vox_connections::SqliteConnectionRepository::open(root.join("platform.sqlite3"))?;
+    let provisioning_audits = repository.audit_records()?;
+    assert_eq!(provisioning_audits.len(), 3);
+    assert_eq!(
+        provisioning_audits
+            .iter()
+            .map(|audit| audit.action.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "BOOTSTRAP_ROLE_ASSIGNED",
+            "BOOTSTRAP_ROLE_PROVISIONED",
+            "BOOTSTRAP_USER_PROVISIONED",
+        ])
+    );
+    let bootstrap_role_id = RoleId::parse("role:00000000-0000-4000-8000-000000000017")?;
+    repository.put_role(&Role {
+        id: bootstrap_role_id,
+        name: "SERVER_BOOTSTRAP".to_owned(),
+        permissions: BTreeSet::new(),
+    })?;
+    drop(repository);
+
+    // Persisted permission reduction must remain authoritative across restart.
+    let reduced = ApplicationComposition::build(config(
+        &root,
+        user_id.clone(),
+        BTreeSet::from([Permission::ViewConnectionMetadata]),
+    ))
+    .await?;
+    let denied = reduced
+        .router()
+        .oneshot(
+            authenticated_request(reduced.router(), "GET", "/api/v1/broker-connections", false)
+                .await?,
+        )
+        .await?;
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    reduced.shutdown().await;
+    drop(reduced);
+
+    let repository =
+        vox_connections::SqliteConnectionRepository::open(root.join("platform.sqlite3"))?;
+    assert!(repository.permissions(&user_id)?.is_empty());
+    assert_eq!(repository.audit_records()?.len(), 3);
+
+    let database = rusqlite::Connection::open(root.join("platform.sqlite3"))?;
+    database.execute(
+        "DELETE FROM connection_roles WHERE role_id = ?1",
+        ["role:00000000-0000-4000-8000-000000000017"],
+    )?;
+    drop(database);
+    let removed = ApplicationComposition::build(config(
+        &root,
+        user_id.clone(),
+        BTreeSet::from([Permission::ViewConnectionMetadata]),
+    ))
+    .await?;
+    let denied = removed
+        .router()
+        .oneshot(
+            authenticated_request(removed.router(), "GET", "/api/v1/broker-connections", false)
+                .await?,
+        )
+        .await?;
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    removed.shutdown().await;
+    drop(removed);
+
+    // Restart must not silently re-enable a revoked/disabled principal.
     repository.put_user(&User {
         id: user_id.clone(),
         display_name: "revoked operator".to_owned(),
