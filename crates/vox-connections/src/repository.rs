@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
 
 use crate::model::{
@@ -12,6 +12,13 @@ use crate::model::{
 };
 
 pub trait ConnectionRepository: Send + Sync {
+    fn provision_bootstrap_identity(
+        &self,
+        user: &User,
+        role: &Role,
+        provisioning_audits: &[AuditRecord],
+        adoption_audit: &AuditRecord,
+    ) -> Result<bool, RepositoryError>;
     fn put_user(&self, user: &User) -> Result<(), RepositoryError>;
     fn user(&self, user_id: &UserId) -> Result<Option<User>, RepositoryError>;
     fn put_user_with_audit(&self, user: &User, audit: &AuditRecord) -> Result<(), RepositoryError>;
@@ -186,6 +193,68 @@ impl SqliteConnectionRepository {
 }
 
 impl ConnectionRepository for SqliteConnectionRepository {
+    fn provision_bootstrap_identity(
+        &self,
+        user: &User,
+        role: &Role,
+        provisioning_audits: &[AuditRecord],
+        adoption_audit: &AuditRecord,
+    ) -> Result<bool, RepositoryError> {
+        let mut database = self.connection()?;
+        let transaction = database.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let initialized = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM security_bootstrap_provisioning WHERE singleton = 1)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if initialized {
+            return Ok(false);
+        }
+        let user_exists = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM connection_users WHERE user_id = ?1)",
+            [user.id.as_str()],
+            |row| row.get::<_, bool>(0),
+        )?;
+        let role_exists = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM connection_roles WHERE role_id = ?1 OR name = ?2)",
+            params![role.id.as_str(), role.name],
+            |row| row.get::<_, bool>(0),
+        )?;
+        let adopting_existing_state = user_exists || role_exists;
+        if !adopting_existing_state {
+            write_user(&transaction, user)?;
+            write_role(&transaction, role)?;
+            write_grant(&transaction, &user.id, &role.id)?;
+        }
+        transaction.execute(
+            "INSERT INTO security_bootstrap_provisioning (
+                singleton, initialized_at_unix_ms, correlation_id
+             ) VALUES (1, ?1, ?2)",
+            params![
+                adoption_audit.occurred_at_unix_ms,
+                adoption_audit.correlation_id
+            ],
+        )?;
+        if self.fail_next_audit.swap(false, Ordering::SeqCst) {
+            return Err(RepositoryError::Persistence(
+                "injected audit failure".to_owned(),
+            ));
+        }
+        if adopting_existing_state {
+            if user_exists {
+                append_audit_row(&transaction, adoption_audit)?;
+            }
+            transaction.commit()?;
+            return Ok(false);
+        }
+
+        for audit in provisioning_audits {
+            append_audit_row(&transaction, audit)?;
+        }
+        transaction.commit()?;
+        Ok(true)
+    }
+
     fn put_user(&self, user: &User) -> Result<(), RepositoryError> {
         write_user(&self.connection()?, user)
     }
@@ -1055,6 +1124,11 @@ CREATE TABLE IF NOT EXISTS connection_user_roles (
     user_id TEXT NOT NULL REFERENCES connection_users(user_id) ON DELETE CASCADE,
     role_id TEXT NOT NULL REFERENCES connection_roles(role_id) ON DELETE CASCADE,
     PRIMARY KEY (user_id, role_id)
+) STRICT;
+CREATE TABLE IF NOT EXISTS security_bootstrap_provisioning (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    initialized_at_unix_ms INTEGER NOT NULL,
+    correlation_id TEXT NOT NULL
 ) STRICT;
 CREATE TABLE IF NOT EXISTS broker_connections (
     connection_id TEXT PRIMARY KEY,

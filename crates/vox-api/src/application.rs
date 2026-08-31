@@ -12,6 +12,7 @@ use crate::contract::account::{
     BrokerAccountDto, OperationsPageDto, OrderDto, PortfolioDto, PositionDto, ReconciliationDto,
     StopOrderDto,
 };
+use crate::contract::auth::CreateSessionRequest;
 use crate::contract::capability::{AttachedBackends, CapabilitySet};
 use crate::contract::connections::{
     BindBrokerAccountRequest, BrokerAccountBindingDto, BrokerConnectionMetadataDto,
@@ -146,6 +147,34 @@ pub struct AuthenticatedActor {
     pub user_id: String,
 }
 
+/// Session material passed only from application auth port to HTTP transport.
+pub struct EstablishedSession {
+    pub session_token: String,
+    pub csrf_token: String,
+    pub expires_at_unix_ms: i64,
+    pub cookie_secure: bool,
+}
+
+impl core::fmt::Debug for EstablishedSession {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("EstablishedSession")
+            .field("session_token", &"[REDACTED]")
+            .field("csrf_token", &"[REDACTED]")
+            .field("expires_at_unix_ms", &self.expires_at_unix_ms)
+            .field("cookie_secure", &self.cookie_secure)
+            .finish()
+    }
+}
+
+#[async_trait]
+pub trait SessionAuthentication: Send + Sync {
+    async fn establish_session(
+        &self,
+        request: CreateSessionRequest,
+    ) -> Result<EstablishedSession, ApiError>;
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConnectionRequestContext {
     pub actor: AuthenticatedActor,
@@ -235,6 +264,7 @@ pub struct AppState {
     pub execution: Option<Arc<dyn ExecutionCommands>>,
     pub market_data: Option<Arc<dyn MarketDataQueries>>,
     pub connections: Option<Arc<dyn ConnectionAdministration>>,
+    pub authentication: Option<Arc<dyn SessionAuthentication>>,
     /// Application-side live bus. Not a broker stream.
     pub events: ApplicationEventBus,
 }
@@ -249,6 +279,7 @@ impl AppState {
         accounts: Arc<dyn AccountQueries>,
         execution: Arc<dyn ExecutionCommands>,
         connections: Arc<dyn ConnectionAdministration>,
+        authentication: Arc<dyn SessionAuthentication>,
     ) -> Self {
         Self {
             provider,
@@ -258,6 +289,7 @@ impl AppState {
             execution: Some(execution),
             market_data: None,
             connections: Some(connections),
+            authentication: Some(authentication),
             events: ApplicationEventBus::new(),
         }
     }
@@ -273,6 +305,7 @@ impl AppState {
             execution: None,
             market_data: None,
             connections: None,
+            authentication: None,
             events: ApplicationEventBus::new(),
         }
     }
@@ -366,6 +399,12 @@ impl AppState {
         self.connections
             .as_ref()
             .ok_or_else(|| ApiError::capability_unavailable("BROKER_CONNECTIONS", "#17"))
+    }
+
+    pub(crate) fn authentication_port(&self) -> Result<&Arc<dyn SessionAuthentication>, ApiError> {
+        self.authentication.as_ref().ok_or_else(|| {
+            ApiError::capability_unavailable("SESSION_AUTHENTICATION", "#47 follow-up")
+        })
     }
 }
 

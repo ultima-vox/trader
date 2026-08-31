@@ -31,7 +31,7 @@ jobs:
   quality:
     name: fmt, clippy, test
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, X64, "1"]
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 30
     env:
       BASH_ENV: /dev/null
@@ -42,6 +42,10 @@ jobs:
       CARGO_HTTP_LOW_SPEED_LIMIT: 1
       CARGO_HTTP_TIMEOUT: 120
       CARGO_NET_RETRY: 5
+      # Three self-hosted runners share one WSL host. Bound parallel rustc
+      # processes so concurrent Rust and API jobs cannot exhaust host memory.
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
       # The build tree is per-run and disposable; the toolchain is not. It
       # lives on the disk, not on /tmp: that is a 7.8G RAM-backed tmpfs here,
       # and a debug build of the whole workspace with all targets does not fit.

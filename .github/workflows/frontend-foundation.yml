@@ -29,7 +29,12 @@ concurrency:
 
 jobs:
   foundation:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
+    env:
+      BASH_ENV: /dev/null
+    defaults:
+      run:
+        shell: 'bash --noprofile --norc -e -o pipefail "{0}"'
     steps:
       - name: Checkout the commit under review
         uses: actions/checkout@v4
@@ -249,11 +254,10 @@ jobs:
           print("no provider fetch URLs and no secret-shaped storage keys")
           PY
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: frontend/app/package-lock.json
+      - name: Use local runner Node.js
+        run: |
+          node --version
+          npm --version
 
       - name: Install
         working-directory: frontend/app
@@ -269,7 +273,7 @@ jobs:
 
       - name: Install Chromium
         working-directory: frontend/app
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
 
       - name: Browser shell at 1280 / 1440 / 1920
         working-directory: frontend/app

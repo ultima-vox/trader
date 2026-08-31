@@ -5,6 +5,7 @@
 //! domain and runtime vocabulary.
 
 pub mod account;
+pub mod auth;
 pub mod capability;
 pub mod connections;
 pub mod execution;

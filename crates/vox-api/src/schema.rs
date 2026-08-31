@@ -13,6 +13,7 @@ use crate::contract::account::{
     OrderDto, OrderExecutionStatusDto, PortfolioDto, PositionDto, ReconciliationDto,
     StopExecutionStatusDto, StopOrderDto,
 };
+use crate::contract::auth::{AuthSessionDto, CreateSessionRequest};
 use crate::contract::capability::{Capability, CapabilitySet, UnavailableCapability};
 use crate::contract::connections::{
     BindBrokerAccountRequest, BrokerAccountBindingDto, BrokerConnectionMetadataDto,
@@ -57,6 +58,7 @@ use crate::transport::http;
     servers((url = "/", description = "Same-origin deployment")),
     paths(
         http::system_health,
+        http::create_session,
         http::capabilities,
         http::broker_connections,
         http::create_broker_connection,
@@ -95,7 +97,7 @@ use crate::transport::http;
         http::candle_intervals,
     ),
     components(schemas(
-        ApiError, ErrorCategory, FieldError,
+        ApiError, ErrorCategory, FieldError, CreateSessionRequest, AuthSessionDto,
         SystemHealthDto, RuntimeHealthDto, RuntimeStateDto, ReasonCodeDto, SafetyConditionDto,
         StreamHealthDto, StreamKindDto, StreamStateDto,
         ExecutionScope, ProviderDto, BrokerEnvironment, TradingMode,
@@ -121,6 +123,7 @@ use crate::transport::http;
         ClientMessage, ServerEvent, EventPayload, Topic, SubscriptionStatus,
     )),
     tags(
+        (name = "auth", description = "Server-side browser session bootstrap"),
         (name = "system", description = "Process liveness and capability discovery"),
         (name = "runtime", description = "Runtime state, readiness and reconciliation"),
         (name = "accounts", description = "Account-scoped read side"),
@@ -193,17 +196,21 @@ mod tests {
     #[test]
     fn no_secret_shaped_field_is_describable() -> Result<(), serde_json::Error> {
         let json = openapi_json()?.to_lowercase();
-        for forbidden in [
-            "\"token\"",
-            "\"secret\"",
-            "\"password\"",
-            "\"authorization\"",
-        ] {
+        for forbidden in ["\"secret\"", "\"password\"", "\"authorization\""] {
             assert!(
                 !json.contains(forbidden),
                 "a secret-shaped field is in the public schema: {forbidden}"
             );
         }
+        let doc: serde_json::Value = serde_json::from_str(&openapi_json()?)?;
+        let request = &doc["components"]["schemas"]["CreateSessionRequest"];
+        assert_eq!(
+            request["properties"]["bootstrap_credential"]["writeOnly"],
+            true
+        );
+        let response = serde_json::to_string(&doc["components"]["schemas"]["AuthSessionDto"])?
+            .to_ascii_lowercase();
+        assert!(!response.contains("session_token"));
         Ok(())
     }
 

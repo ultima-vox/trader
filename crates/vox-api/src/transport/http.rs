@@ -4,7 +4,7 @@
 //! typed response. No business rule, no risk decision, no precedence arithmetic lives here.
 
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Extension, Json, Router};
@@ -16,6 +16,7 @@ use crate::contract::account::{
     BrokerAccountDto, OperationsPageDto, OrderDto, PortfolioDto, PositionDto, ReconciliationDto,
     StopOrderDto,
 };
+use crate::contract::auth::{AuthSessionDto, CreateSessionRequest};
 use crate::contract::capability::CapabilitySet;
 use crate::contract::connections::{
     BindBrokerAccountRequest, BrokerAccountBindingDto, BrokerConnectionMetadataDto,
@@ -111,6 +112,55 @@ pub async fn system_health() -> Json<SystemHealthDto> {
         api_version: "v1".to_owned(),
         server_time_unix_ms: now_unix_ms(),
     })
+}
+
+/// Exchanges trusted bootstrap credential for browser session cookie and CSRF state.
+#[utoipa::path(
+    post, path = "/api/v1/auth/session", tag = "auth",
+    request_body = CreateSessionRequest,
+    responses(
+        (status = 200, description = "Session established; authentication is in HttpOnly cookie", body = AuthSessionDto),
+        (status = 401, description = "Bootstrap credential rejected", body = ApiError),
+        (status = 503, description = "Authentication persistence unavailable", body = ApiError),
+    )
+)]
+pub async fn create_session(
+    State(state): State<AppState>,
+    Json(request): Json<CreateSessionRequest>,
+) -> Result<(HeaderMap, Json<AuthSessionDto>), ApiError> {
+    let session = state
+        .authentication_port()?
+        .establish_session(request)
+        .await?;
+    let max_age = ((session.expires_at_unix_ms - now_unix_ms()) / 1_000).max(0);
+    let secure = if session.cookie_secure {
+        "; Secure"
+    } else {
+        ""
+    };
+    let cookie = format!(
+        "vox_session={}; HttpOnly{}; SameSite=Strict; Path=/; Max-Age={max_age}",
+        session.session_token, secure
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&cookie).map_err(|_| {
+            ApiError::new(
+                ErrorCategory::Internal,
+                "SESSION_COOKIE_ENCODING_FAILED",
+                "server could not encode session cookie",
+            )
+        })?,
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok((
+        headers,
+        Json(AuthSessionDto {
+            csrf_token: session.csrf_token,
+            expires_at_unix_ms: session.expires_at_unix_ms,
+        }),
+    ))
 }
 
 /// Runtime state, readiness and stream health.
@@ -928,6 +978,7 @@ pub async fn not_found() -> ApiError {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/system/health", get(system_health))
+        .route("/api/v1/auth/session", post(create_session))
         .route("/api/v1/capabilities", get(capabilities))
         .route(
             "/api/v1/broker-connections",
