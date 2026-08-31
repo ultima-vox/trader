@@ -6,6 +6,15 @@
 /actions-runner/
 **/__pycache__/
 *.egg-info/
+.grok/
+.codex/
+.cursor/
+.claude/
+.design-sync/
+.opencode/
+.qwen38-agent/
+runners/
+actions-runner/
 
 # Restored from docs/design/source/canonical.xz.b64.part* by restore-canonical-design.sh.
 # The parts are the committed provenance; the restored HTML is a local artefact.
