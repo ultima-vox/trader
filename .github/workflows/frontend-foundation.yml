@@ -30,6 +30,11 @@ concurrency:
 jobs:
   foundation:
     runs-on: [self-hosted, Linux, X64, "1"]
+    env:
+      BASH_ENV: /dev/null
+    defaults:
+      run:
+        shell: 'bash --noprofile --norc -e -o pipefail "{0}"'
     steps:
       - name: Checkout the commit under review
         uses: actions/checkout@v4
