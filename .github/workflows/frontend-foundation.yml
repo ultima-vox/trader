@@ -273,7 +273,7 @@ jobs:
 
       - name: Install Chromium
         working-directory: frontend/app
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
 
       - name: Browser shell at 1280 / 1440 / 1920
         working-directory: frontend/app
