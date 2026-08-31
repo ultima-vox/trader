@@ -149,10 +149,16 @@ codes remain in the reference and all nine are canonical values from `ReasonCode
 `ProtectionCapabilityError`. Environments are `SANDBOX`/`PRODUCTION` only; the single
 `Provider` variant is used throughout; the runtime chip carries all eight states.
 
-Deferred regions and their dependencies: BD-2 risk · BD-3 market data · BD-4 valuation and
-P&L · BD-5 credential lifecycle and RBAC · BD-7 models · BD-8 research · BD-9 protection
-defaults · BD-10 bulk migration · BD-11 aggregate accounts · BD-12 updates and jobs ·
-BD-13 second provider and PAPER/BACKTEST.
+Current backend status must be read together with `BACKEND_DEPENDENCY_SPEC.md`:
+- BD-3 market data is delivered through the closed #38 application boundary;
+- BD-5 broker connections/account binding/RBAC/execution authorization is delivered through
+  the closed #17 platform foundation; PR #50 is browser-session/CSRF hardening;
+- BD-2 risk is actively being implemented in #21 and is not accepted yet;
+- BD-4, BD-7, BD-8, BD-9, BD-10, BD-11, BD-12 and BD-13 remain dependent/deferred as
+  documented by their owners.
+
+A rendered design can remain visually represented even when its production workspace is
+still waiting for an owner contract; design status is not runtime-capability status.
 
 ## 5. Outstanding
 
@@ -162,11 +168,15 @@ BD-13 second provider and PAPER/BACKTEST.
    are specified.
 2. **`Все счета`** read-only aggregate — deferred by the issue until a backend aggregate
    execution contract exists.
-3. **Implementation half of #18** — typed Vox API clients, atomic account-context
-   switching, stale-response guards and the test matrix. The design contract for each is
-   written; the code is not part of this artefact.
+3. **#18 application integration remains open.** PR #48 shipped the reusable frontend
+   foundation: generated-client consumption, atomic account context, stale-response guards,
+   frozen command target, exact decimal handling, instrument context, capability gating,
+   workspace grid/persistence and browser validation. This does **not** close #18.
+   Remaining #18 work includes integration with the accepted #17 broker/account/session
+   contracts and the reusable trading primitives that production workspaces consume.
 
-Items 1 and 2 are scoped out by issue #18 itself. Item 3 is application code.
+Items 1 and 2 are scoped out by issue #18 itself. Item 3 is the remaining application work
+and must not be confused with #30 production workspace composition.
 
 ## 6. Verification matrix
 
@@ -200,3 +210,5 @@ Defects the matrix found and that were fixed rather than waived:
   uses the settings form row, which sizes its own label.
 
 On the design side, no directive of issue #18 or of the PR #20 review is unrepresented.
+Repository status is intentionally separate: #18 remains OPEN until its application-side
+acceptance criteria are complete.
