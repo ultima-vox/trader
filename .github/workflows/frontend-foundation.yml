@@ -254,11 +254,10 @@ jobs:
           print("no provider fetch URLs and no secret-shaped storage keys")
           PY
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: frontend/app/package-lock.json
+      - name: Use local runner Node.js
+        run: |
+          node --version
+          npm --version
 
       - name: Install
         working-directory: frontend/app

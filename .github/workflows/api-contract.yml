@@ -49,11 +49,13 @@ jobs:
       - name: Report the verified commit
         run: echo "verifying $(git rev-parse HEAD)"
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - uses: Swatinem/rust-cache@v2
+      - name: Use local runner toolchains
+        run: |
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" show active-toolchain
+          python3 --version
+          node --version
+          npm --version
 
       - name: Build the workspace
         run: cargo build --workspace --locked
@@ -67,12 +69,8 @@ jobs:
       - name: Regenerate the OpenAPI document
         run: cargo run -p vox-api --bin openapi --locked -- docs/api/openapi.json
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       - name: Regenerate the TypeScript client
-        run: python tools/api-client/generate.py
+        run: python3 tools/api-client/generate.py
 
       - name: Fail on generated-artefact drift
         run: |
@@ -84,10 +82,6 @@ jobs:
             exit 1
           fi
           echo "generated artefacts are current"
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
 
       - name: Typecheck the generated client
         working-directory: frontend/api-client
