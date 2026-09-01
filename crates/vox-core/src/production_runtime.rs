@@ -333,6 +333,7 @@ impl RuntimeQueries for ProductionRuntimeRegistry {
                 execution: true,
                 market_data: false,
                 connections: true,
+                risk: false,
             },
         );
         let scopes = self.scopes().await?;

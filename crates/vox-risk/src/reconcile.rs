@@ -3,6 +3,18 @@ use thiserror::Error;
 use crate::model::{ReservationState, RiskReservation};
 use crate::store::{RiskStore, RiskStoreError};
 
+/// Formats a reservation state for tracing output.
+fn state_label(state: ReservationState) -> &'static str {
+    match state {
+        ReservationState::Active => "active",
+        ReservationState::PartiallyConsumed => "partially_consumed",
+        ReservationState::Consumed => "consumed",
+        ReservationState::Released => "released",
+        ReservationState::UnknownHeld => "unknown_held",
+        ReservationState::Orphaned => "orphaned",
+    }
+}
+
 /// #21-owned reservation lifecycle reconciler.
 ///
 /// #11 remains authoritative for broker mutation evidence. This type consumes that evidence
@@ -24,6 +36,12 @@ impl<S: RiskStore> RiskReservationReconciler<S> {
         logical_request_id: &str,
         now_unix_ms: i64,
     ) -> Result<RiskReservation, RiskReservationReconcileError> {
+        tracing::info!(
+            risk.account_id = %account_id,
+            risk.request_id = %logical_request_id,
+            reconciliation.event = "proven_pre_dispatch_failure",
+            "reconciliation: proven pre-dispatch failure - releasing reservation",
+        );
         let reservation = self.required(account_id, logical_request_id)?;
         self.store
             .update_reservation(
@@ -45,8 +63,25 @@ impl<S: RiskStore> RiskReservationReconciler<S> {
     ) -> Result<RiskReservation, RiskReservationReconcileError> {
         let reservation = self.required(account_id, logical_request_id)?;
         if reservation.state == ReservationState::UnknownHeld {
+            tracing::info!(
+                risk.reservation_id = %reservation.reservation_id,
+                risk.account_id = %account_id,
+                risk.request_id = %logical_request_id,
+                reconciliation.event = "unknown_after_dispatch",
+                reconciliation.state = state_label(reservation.state),
+                "reconciliation: unknown_after_dispatch (already unknown_held, idempotent)",
+            );
             return Ok(reservation);
         }
+        tracing::info!(
+            risk.reservation_id = %reservation.reservation_id,
+            risk.account_id = %account_id,
+            risk.request_id = %logical_request_id,
+            reconciliation.event = "unknown_after_dispatch",
+            reconciliation.from_state = state_label(reservation.state),
+            reconciliation.remaining_delta_lots = reservation.remaining_delta_lots,
+            "reconciliation: unknown_after_dispatch - fail-closed, marking unknown_held",
+        );
         self.store
             .update_reservation(
                 &reservation.reservation_id,
@@ -98,6 +133,16 @@ impl<S: RiskStore> RiskReservationReconciler<S> {
         } else {
             ReservationState::PartiallyConsumed
         };
+        tracing::info!(
+            risk.reservation_id = %reservation.reservation_id,
+            risk.account_id = %account_id,
+            risk.request_id = %logical_request_id,
+            reconciliation.event = "authoritative_fill",
+            reconciliation.filled_delta_lots = filled_delta_lots,
+            reconciliation.remaining_delta_lots = remaining,
+            reconciliation.to_state = state_label(target),
+            "reconciliation: authoritative_fill",
+        );
         self.store
             .update_reservation(
                 &reservation.reservation_id,
@@ -126,8 +171,24 @@ impl<S: RiskStore> RiskReservationReconciler<S> {
             reservation.state,
             ReservationState::Consumed | ReservationState::Released
         ) {
+            tracing::info!(
+                risk.reservation_id = %reservation.reservation_id,
+                risk.account_id = %account_id,
+                risk.request_id = %logical_request_id,
+                reconciliation.event = "broker_authoritative_no_remaining_exposure",
+                reconciliation.state = state_label(reservation.state),
+                "reconciliation: broker authoritative no remaining exposure (already terminal, idempotent)",
+            );
             return Ok(reservation);
         }
+        tracing::info!(
+            risk.reservation_id = %reservation.reservation_id,
+            risk.account_id = %account_id,
+            risk.request_id = %logical_request_id,
+            reconciliation.event = "broker_authoritative_no_remaining_exposure",
+            reconciliation.from_state = state_label(reservation.state),
+            "reconciliation: broker authoritative no remaining exposure - releasing reservation",
+        );
         self.store
             .update_reservation(
                 &reservation.reservation_id,
@@ -154,8 +215,25 @@ impl<S: RiskStore> RiskReservationReconciler<S> {
     ) -> Result<RiskReservation, RiskReservationReconcileError> {
         let reservation = self.required(account_id, logical_request_id)?;
         if reservation.state == ReservationState::Orphaned {
+            tracing::info!(
+                risk.reservation_id = %reservation.reservation_id,
+                risk.account_id = %account_id,
+                risk.request_id = %logical_request_id,
+                reconciliation.event = "orphan_fail_closed",
+                reconciliation.state = state_label(reservation.state),
+                "reconciliation: orphan_fail_closed (already orphaned, idempotent)",
+            );
             return Ok(reservation);
         }
+        tracing::info!(
+            risk.reservation_id = %reservation.reservation_id,
+            risk.account_id = %account_id,
+            risk.request_id = %logical_request_id,
+            reconciliation.event = "orphan_fail_closed",
+            reconciliation.from_state = state_label(reservation.state),
+            reconciliation.remaining_delta_lots = reservation.remaining_delta_lots,
+            "reconciliation: orphan_fail_closed - marking reservation orphaned (fail-closed)",
+        );
         self.store
             .update_reservation(
                 &reservation.reservation_id,
@@ -188,6 +266,14 @@ impl<S: RiskStore> RiskReservationReconciler<S> {
         ) {
             return Err(RiskReservationReconcileError::TerminalReservation);
         }
+        tracing::info!(
+            risk.reservation_id = %reservation.reservation_id,
+            risk.account_id = %account_id,
+            risk.request_id = %logical_request_id,
+            reconciliation.event = "dispatch_acknowledged",
+            reconciliation.state = state_label(reservation.state),
+            "reconciliation: dispatch acknowledged by broker",
+        );
         Ok(reservation)
     }
 
@@ -205,8 +291,24 @@ impl<S: RiskStore> RiskReservationReconciler<S> {
             reservation.state,
             ReservationState::Consumed | ReservationState::Released
         ) {
+            tracing::info!(
+                risk.reservation_id = %reservation.reservation_id,
+                risk.account_id = %account_id,
+                risk.request_id = %logical_request_id,
+                reconciliation.event = "broker_authoritative_reject",
+                reconciliation.state = state_label(reservation.state),
+                "reconciliation: broker authoritative reject (already terminal, idempotent)",
+            );
             return Ok(reservation);
         }
+        tracing::info!(
+            risk.reservation_id = %reservation.reservation_id,
+            risk.account_id = %account_id,
+            risk.request_id = %logical_request_id,
+            reconciliation.event = "broker_authoritative_reject",
+            reconciliation.from_state = state_label(reservation.state),
+            "reconciliation: broker authoritative reject - releasing reservation",
+        );
         self.store
             .update_reservation(
                 &reservation.reservation_id,
@@ -247,7 +349,9 @@ impl<S: RiskStore> RiskReservationReconciler<S> {
         if original_sign == 0 {
             return Err(RiskReservationReconcileError::InvalidFill);
         }
-        if runtime_remaining_lots.signum() != original_sign {
+        // Zero runtime remaining is always valid (full fill/close).
+        // Otherwise the direction must match the reservation direction.
+        if runtime_remaining_lots != 0 && runtime_remaining_lots.signum() != original_sign {
             return Err(RiskReservationReconcileError::FillDirectionMismatch);
         }
         let runtime_abs = i64::try_from(runtime_remaining_lots.unsigned_abs())
@@ -263,6 +367,17 @@ impl<S: RiskStore> RiskReservationReconciler<S> {
         } else {
             ReservationState::PartiallyConsumed
         };
+        tracing::info!(
+            risk.reservation_id = %reservation.reservation_id,
+            risk.account_id = %account_id,
+            risk.request_id = %logical_request_id,
+            reconciliation.event = "runtime_reconciliation",
+            reconciliation.from_state = state_label(reservation.state),
+            reconciliation.to_state = state_label(target),
+            reconciliation.original_remaining_lots = reservation.remaining_delta_lots,
+            reconciliation.runtime_remaining_lots = runtime_remaining_lots,
+            "reconciliation: runtime_reconciliation",
+        );
         self.store
             .update_reservation(
                 &reservation.reservation_id,
@@ -538,7 +653,7 @@ mod tests {
         let store = store();
         let original = reservation();
         store.reserve_atomic(&original, 100).expect("reserve");
-        let reconciler = RiskReservationReconciler::new(store);
+        let reconciler = RiskReservationReconciler::new(store.clone());
 
         // Step 1: Dispatch acknowledged
         let acked = reconciler

@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
@@ -76,6 +77,7 @@ impl SqliteRiskStore {
 
 impl RiskStore for SqliteRiskStore {
     fn put_decision(&self, decision: &RiskDecision) -> Result<(), RiskStoreError> {
+        let start = Instant::now();
         let payload = serde_json::to_string(decision)?;
         self.connection()?.execute(
             "INSERT INTO risk_decisions(decision_id, request_id, account_id, policy_revision, payload)
@@ -89,6 +91,14 @@ impl RiskStore for SqliteRiskStore {
                 payload
             ],
         )?;
+        tracing::debug!(
+            risk.decision_id = %decision.decision_id,
+            risk.request_id = %decision.request_id,
+            risk.account_id = %decision.account_id,
+            risk.outcome = ?decision.outcome,
+            persistence.elapsed_ms = start.elapsed().as_millis(),
+            "risk decision persisted",
+        );
         Ok(())
     }
 
@@ -102,6 +112,7 @@ impl RiskStore for SqliteRiskStore {
         reservation: &RiskReservation,
         capacity: ReservationCapacity,
     ) -> Result<PersistedRiskApproval, RiskStoreError> {
+        let start = Instant::now();
         validate_approval_link(decision, reservation)?;
         validate_capacity(capacity)?;
 
@@ -122,6 +133,15 @@ impl RiskStore for SqliteRiskStore {
                 "reservation exists without its risk decision",
             ))?;
             transaction.commit()?;
+            tracing::debug!(
+                risk.decision_id = %existing_decision.decision_id,
+                risk.reservation_id = %existing_reservation.reservation_id,
+                risk.account_id = %decision.account_id,
+                risk.request_id = %decision.request_id,
+                persistence.event = "idempotent_approval",
+                persistence.elapsed_ms = start.elapsed().as_millis(),
+                "risk approval persisted (idempotent replay)",
+            );
             return Ok(PersistedRiskApproval {
                 decision: existing_decision,
                 reservation: existing_reservation,
@@ -132,6 +152,18 @@ impl RiskStore for SqliteRiskStore {
         insert_decision(&transaction, decision)?;
         insert_reservation(&transaction, reservation)?;
         transaction.commit()?;
+
+        tracing::info!(
+            risk.decision_id = %decision.decision_id,
+            risk.reservation_id = %reservation.reservation_id,
+            risk.account_id = %decision.account_id,
+            risk.request_id = %decision.request_id,
+            risk.instrument_id = %reservation.instrument_id,
+            risk.reserved_delta_lots = reservation.reserved_delta_lots,
+            persistence.event = "approval_reserved",
+            persistence.elapsed_ms = start.elapsed().as_millis(),
+            "risk approval persisted with reservation",
+        );
 
         Ok(PersistedRiskApproval {
             decision: decision.clone(),
@@ -144,6 +176,7 @@ impl RiskStore for SqliteRiskStore {
         reservation: &RiskReservation,
         max_active_abs_lots: i64,
     ) -> Result<RiskReservation, RiskStoreError> {
+        let start = Instant::now();
         if max_active_abs_lots < 0 {
             return Err(RiskStoreError::InvalidCapacity);
         }
@@ -156,6 +189,14 @@ impl RiskStore for SqliteRiskStore {
             &reservation.logical_request_id,
         )? {
             transaction.commit()?;
+            tracing::debug!(
+                risk.reservation_id = %existing.reservation_id,
+                risk.account_id = %reservation.account_id,
+                risk.request_id = %reservation.logical_request_id,
+                persistence.event = "idempotent_reserve",
+                persistence.elapsed_ms = start.elapsed().as_millis(),
+                "risk reservation created (idempotent replay)",
+            );
             return Ok(existing);
         }
 
@@ -173,11 +214,33 @@ impl RiskStore for SqliteRiskStore {
             .checked_add(requested)
             .ok_or(RiskStoreError::ArithmeticOverflow)?;
         if projected > max_active_abs_lots {
+            tracing::info!(
+                risk.account_id = %reservation.account_id,
+                risk.instrument_id = %reservation.instrument_id,
+                risk.request_id = %reservation.logical_request_id,
+                persistence.event = "capacity_exceeded",
+                persistence.active_lots = active,
+                persistence.requested_lots = requested,
+                persistence.max_lots = max_active_abs_lots,
+                "risk reservation capacity exceeded",
+            );
             return Err(RiskStoreError::CapacityExceeded);
         }
 
         insert_reservation(&transaction, reservation)?;
         transaction.commit()?;
+        tracing::info!(
+            risk.reservation_id = %reservation.reservation_id,
+            risk.account_id = %reservation.account_id,
+            risk.instrument_id = %reservation.instrument_id,
+            risk.request_id = %reservation.logical_request_id,
+            risk.reserved_delta_lots = reservation.reserved_delta_lots,
+            persistence.event = "reservation_created",
+            persistence.active_lots_after = projected,
+            persistence.max_lots = max_active_abs_lots,
+            persistence.elapsed_ms = start.elapsed().as_millis(),
+            "risk reservation created",
+        );
         Ok(reservation.clone())
     }
 
@@ -214,6 +277,7 @@ impl RiskStore for SqliteRiskStore {
         state: ReservationState,
         now_unix_ms: i64,
     ) -> Result<RiskReservation, RiskStoreError> {
+        let start = Instant::now();
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = reservation_by_id(&transaction, reservation_id)?
@@ -235,6 +299,18 @@ impl RiskStore for SqliteRiskStore {
         let updated = reservation_by_id(&transaction, reservation_id)?
             .ok_or(RiskStoreError::ReservationNotFound)?;
         transaction.commit()?;
+        tracing::info!(
+            risk.reservation_id = %reservation_id,
+            risk.account_id = %updated.account_id,
+            persistence.event = "reservation_state_transition",
+            persistence.from_state = ?current.state,
+            persistence.to_state = ?state,
+            persistence.remaining_delta_lots = remaining_delta_lots,
+            persistence.elapsed_ms = start.elapsed().as_millis(),
+            "risk reservation state transition: {:?} -> {:?}",
+            current.state,
+            state,
+        );
         Ok(updated)
     }
 }

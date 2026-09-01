@@ -32,6 +32,9 @@ use crate::contract::market::{
     CandleIntervalCapability, CandleIntervalDto, CandlesDto, InstrumentSummaryDto, OrderBookDto,
     QuoteDto, SessionDto, TradeTickDto,
 };
+use crate::contract::risk::{
+    ChangeRiskStateRequest, RiskReservationDto, RiskStatusDto,
+};
 use crate::contract::runtime::{RuntimeHealthDto, SystemHealthDto};
 use crate::contract::scope::{BrokerEnvironment, ExecutionScope, ProviderDto, TradingMode};
 use crate::error::{ApiError, ErrorCategory, FieldError};
@@ -585,6 +588,57 @@ pub async fn mutations(
     Ok(Json(state.accounts_port()?.mutations(&scope).await?))
 }
 
+/// Current risk status for one execution scope.
+#[utoipa::path(
+    get, path = "/api/v1/risk/status", tag = "risk", params(ScopeQuery),
+    responses(
+        (status = 200, description = "Current risk status", body = RiskStatusDto),
+        (status = 503, description = "No risk queries port is attached", body = ApiError),
+    )
+)]
+pub async fn risk_status(
+    State(state): State<AppState>,
+    Query(query): Query<ScopeQuery>,
+) -> Result<Json<RiskStatusDto>, ApiError> {
+    let scope = query.into_scope()?;
+    Ok(Json(state.risk_queries_port()?.risk_status(&scope).await?))
+}
+
+/// Active risk reservations for one execution scope.
+#[utoipa::path(
+    get, path = "/api/v1/risk/reservations", tag = "risk", params(ScopeQuery),
+    responses(
+        (status = 200, description = "Active risk reservations", body = Vec<RiskReservationDto>),
+        (status = 503, description = "No risk queries port is attached", body = ApiError),
+    )
+)]
+pub async fn risk_reservations(
+    State(state): State<AppState>,
+    Query(query): Query<ScopeQuery>,
+) -> Result<Json<Vec<RiskReservationDto>>, ApiError> {
+    let scope = query.into_scope()?;
+    Ok(Json(
+        state.risk_queries_port()?.active_reservations(&scope).await?,
+    ))
+}
+
+/// Change the risk state for one execution scope.
+#[utoipa::path(
+    post, path = "/api/v1/risk/state", tag = "risk",
+    request_body = ChangeRiskStateRequest,
+    responses(
+        (status = 200, description = "Updated risk status", body = RiskStatusDto),
+        (status = 409, description = "Stale policy revision", body = ApiError),
+        (status = 503, description = "No risk commands port is attached", body = ApiError),
+    )
+)]
+pub async fn change_risk_state(
+    State(state): State<AppState>,
+    Json(request): Json<ChangeRiskStateRequest>,
+) -> Result<Json<RiskStatusDto>, ApiError> {
+    Ok(Json(state.risk_commands_port()?.change_state(request).await?))
+}
+
 /// Submit a regular order. The scope in the body is the frozen target of the command.
 #[utoipa::path(
     post, path = "/api/v1/commands/order", tag = "execution", request_body = SubmitOrderRequest,
@@ -1056,6 +1110,9 @@ pub fn router(state: AppState) -> Router {
             post(cancel_stop_order),
         )
         .route("/api/v1/commands/protection", post(submit_protection))
+        .route("/api/v1/risk/status", get(risk_status))
+        .route("/api/v1/risk/reservations", get(risk_reservations))
+        .route("/api/v1/risk/state", post(change_risk_state))
         .route("/api/v1/market/instruments", get(instruments))
         .route("/api/v1/market/quote", get(quote))
         .route("/api/v1/market/order-book", get(order_book))

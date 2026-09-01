@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use thiserror::Error;
 
 use crate::model::{
@@ -12,11 +14,50 @@ impl RiskEngine {
         policy: &RiskPolicySet,
         request: &RiskRequest,
     ) -> Result<RiskDecision, RiskEngineError> {
+        let start = Instant::now();
+        let action_str = format!("{:?}", request.action);
+        let outcome_label = |o: &RiskOutcome| -> &'static str {
+            match o {
+                RiskOutcome::Approve => "approve",
+                RiskOutcome::Resize => "resize",
+                RiskOutcome::Reject => "reject",
+                RiskOutcome::ReduceOnly => "reduce_only",
+                RiskOutcome::Halt => "halt",
+            }
+        };
+        let state_label = |s: &RiskState| -> &'static str {
+            match s {
+                RiskState::Normal => "normal",
+                RiskState::Warning => "warning",
+                RiskState::ReduceOnly => "reduce_only",
+                RiskState::Halted => "halted",
+                RiskState::KillSwitch => "kill_switch",
+            }
+        };
+
+        tracing::debug!(
+            risk.request_id = %request.request_id,
+            risk.account_id = %request.account_id,
+            risk.instrument_id = %request.instrument_id,
+            risk.action = %action_str,
+            risk.requested_delta_lots = request.requested_delta_lots,
+            risk.policy_revision = policy.revision,
+            risk.policy_state = %state_label(&policy.state),
+            "risk evaluation started",
+        );
+
         let directional = matches!(
             request.action,
             RiskActionKind::DirectionalOrder | RiskActionKind::ReplaceDirectionalOrder
         );
         if directional && request.requested_delta_lots == 0 {
+            tracing::info!(
+                risk.request_id = %request.request_id,
+                risk.account_id = %request.account_id,
+                risk.outcome = "reject",
+                risk.reason_code = ?RiskReasonCode::InvalidQuantity,
+                "risk decision: reject - invalid quantity",
+            );
             return Ok(reject(
                 policy,
                 request,
@@ -26,6 +67,13 @@ impl RiskEngine {
             ));
         }
         if !directional && request.requested_delta_lots != 0 {
+            tracing::info!(
+                risk.request_id = %request.request_id,
+                risk.account_id = %request.account_id,
+                risk.outcome = "reject",
+                risk.reason_code = ?RiskReasonCode::InvalidQuantity,
+                "risk decision: reject - non-directional action has directional exposure",
+            );
             return Ok(reject(
                 policy,
                 request,
@@ -36,6 +84,14 @@ impl RiskEngine {
         }
 
         if request.snapshot.validity.policy_revision != policy.revision {
+            tracing::info!(
+                risk.request_id = %request.request_id,
+                risk.account_id = %request.account_id,
+                risk.outcome = "reject",
+                risk.reason_code = ?RiskReasonCode::PolicyRevisionChanged,
+                policy.revision = policy.revision,
+                "risk decision: reject - policy revision mismatch",
+            );
             return Ok(reject(
                 policy,
                 request,
@@ -46,6 +102,13 @@ impl RiskEngine {
         }
 
         if !request.snapshot.runtime_ready {
+            tracing::info!(
+                risk.request_id = %request.request_id,
+                risk.account_id = %request.account_id,
+                risk.outcome = "halt",
+                risk.reason_code = ?RiskReasonCode::RuntimeNotReady,
+                "risk decision: halt - runtime not ready",
+            );
             return Ok(reject(
                 policy,
                 request,
@@ -55,6 +118,13 @@ impl RiskEngine {
             ));
         }
         if !request.snapshot.execution_authorized {
+            tracing::info!(
+                risk.request_id = %request.request_id,
+                risk.account_id = %request.account_id,
+                risk.outcome = "reject",
+                risk.reason_code = ?RiskReasonCode::ExecutionUnauthorized,
+                "risk decision: reject - execution unauthorized",
+            );
             return Ok(reject(
                 policy,
                 request,
@@ -64,6 +134,13 @@ impl RiskEngine {
             ));
         }
         if request.snapshot.unresolved_unknown_conflict {
+            tracing::info!(
+                risk.request_id = %request.request_id,
+                risk.account_id = %request.account_id,
+                risk.outcome = "halt",
+                risk.reason_code = ?RiskReasonCode::UnknownMutationConflict,
+                "risk decision: halt - unknown mutation conflict",
+            );
             return Ok(reject(
                 policy,
                 request,
@@ -92,9 +169,32 @@ impl RiskEngine {
                 | RiskActionKind::CancelProtection
         );
         match policy.state {
+            RiskState::KillSwitch => {
+                tracing::info!(
+                    risk.request_id = %request.request_id,
+                    risk.account_id = %request.account_id,
+                    risk.outcome = "halt",
+                    risk.reason_code = ?RiskReasonCode::KillSwitchActive,
+                    "risk decision: halt - kill-switch is active",
+                );
+                return Ok(reject(
+                    policy,
+                    request,
+                    RiskOutcome::Halt,
+                    RiskReasonCode::KillSwitchActive,
+                    "global kill-switch is active",
+                ));
+            }
             RiskState::Halted
                 if !(request.emergency_reduction && increasing_lots == 0) && !cleanup_action =>
             {
+                tracing::info!(
+                    risk.request_id = %request.request_id,
+                    risk.account_id = %request.account_id,
+                    risk.outcome = "halt",
+                    risk.reason_code = ?RiskReasonCode::Halted,
+                    "risk decision: halt - risk state is HALTED",
+                );
                 return Ok(reject(
                     policy,
                     request,
@@ -104,6 +204,14 @@ impl RiskEngine {
                 ));
             }
             RiskState::ReduceOnly if increasing_lots > 0 => {
+                tracing::info!(
+                    risk.request_id = %request.request_id,
+                    risk.account_id = %request.account_id,
+                    risk.outcome = "reduce_only",
+                    risk.reason_code = ?RiskReasonCode::ReduceOnly,
+                    risk.increasing_lots = increasing_lots,
+                    "risk decision: reduce_only - new exposure blocked in reduce-only state",
+                );
                 return Ok(reject(
                     policy,
                     request,
@@ -112,10 +220,21 @@ impl RiskEngine {
                     "risk state permits reductions only",
                 ));
             }
-            RiskState::Normal | RiskState::Warning | RiskState::ReduceOnly | RiskState::Halted => {}
+            RiskState::Normal
+            | RiskState::Warning
+            | RiskState::ReduceOnly
+            | RiskState::Halted => {}
         }
 
         if !directional {
+            tracing::info!(
+                risk.request_id = %request.request_id,
+                risk.account_id = %request.account_id,
+                risk.outcome = "approve",
+                risk.reason_code = ?RiskReasonCode::Approved,
+                risk.action = %action_str,
+                "risk decision: approve - non-directional action",
+            );
             return Ok(RiskDecision {
                 decision_id: RiskDecision::new_id(),
                 request_id: request.request_id.clone(),
@@ -142,6 +261,13 @@ impl RiskEngine {
             if policy.protection_required_for_new_exposure
                 && !request.protection_established_or_planned
             {
+                tracing::info!(
+                    risk.request_id = %request.request_id,
+                    risk.account_id = %request.account_id,
+                    risk.outcome = "reject",
+                    risk.reason_code = ?RiskReasonCode::ProtectionRequired,
+                    "risk decision: reject - protection plan required for new exposure",
+                );
                 return Ok(reject(
                     policy,
                     request,
@@ -153,6 +279,13 @@ impl RiskEngine {
         }
 
         if request.confirm_margin_trade && !policy.allow_margin {
+            tracing::info!(
+                risk.request_id = %request.request_id,
+                risk.account_id = %request.account_id,
+                risk.outcome = "reject",
+                risk.reason_code = ?RiskReasonCode::MarginNotAllowed,
+                "risk decision: reject - margin not allowed by policy",
+            );
             return Ok(reject(
                 policy,
                 request,
@@ -167,6 +300,14 @@ impl RiskEngine {
             && day_pnl < -positive_limit(max_loss, "max_daily_loss_nanos")?
             && increasing_lots > 0
         {
+            tracing::info!(
+                risk.request_id = %request.request_id,
+                risk.account_id = %request.account_id,
+                risk.outcome = "reduce_only",
+                risk.reason_code = ?RiskReasonCode::DailyLossExceeded,
+                risk.broker_daily_pnl_nanos = day_pnl,
+                "risk decision: reduce_only - daily loss limit exceeded",
+            );
             return Ok(reject(
                 policy,
                 request,
@@ -180,6 +321,14 @@ impl RiskEngine {
             && projected_position.unsigned_abs() > max_position.unsigned_abs()
             && increasing_lots > 0
         {
+            tracing::info!(
+                risk.request_id = %request.request_id,
+                risk.account_id = %request.account_id,
+                risk.outcome = "reject",
+                risk.reason_code = ?RiskReasonCode::MaxPositionExceeded,
+                risk.projected_position = projected_position.unsigned_abs(),
+                "risk decision: reject - projected position exceeds limit",
+            );
             return Ok(reject(
                 policy,
                 request,
@@ -198,6 +347,13 @@ impl RiskEngine {
             if projected > positive_limit(max_gross, "max_gross_exposure_nanos")?
                 && increasing_lots > 0
             {
+                tracing::info!(
+                    risk.request_id = %request.request_id,
+                    risk.account_id = %request.account_id,
+                    risk.outcome = "reject",
+                    risk.reason_code = ?RiskReasonCode::MaxGrossExposureExceeded,
+                    "risk decision: reject - gross exposure exceeds limit",
+                );
                 return Ok(reject(
                     policy,
                     request,
@@ -217,6 +373,13 @@ impl RiskEngine {
             if checked_abs(projected)? > positive_limit(max_net, "max_net_exposure_abs_nanos")?
                 && increasing_lots > 0
             {
+                tracing::info!(
+                    risk.request_id = %request.request_id,
+                    risk.account_id = %request.account_id,
+                    risk.outcome = "reject",
+                    risk.reason_code = ?RiskReasonCode::MaxNetExposureExceeded,
+                    "risk decision: reject - net exposure exceeds limit",
+                );
                 return Ok(reject(
                     policy,
                     request,
@@ -237,6 +400,13 @@ impl RiskEngine {
                 > positive_limit(max_instrument, "max_instrument_exposure_nanos")?
                 && increasing_lots > 0
             {
+                tracing::info!(
+                    risk.request_id = %request.request_id,
+                    risk.account_id = %request.account_id,
+                    risk.outcome = "reject",
+                    risk.reason_code = ?RiskReasonCode::MaxInstrumentExposureExceeded,
+                    "risk decision: reject - instrument exposure exceeds limit",
+                );
                 return Ok(reject(
                     policy,
                     request,
@@ -276,6 +446,13 @@ impl RiskEngine {
                 ));
             }
             None if policy.require_provider_lot_limit && increasing_lots > 0 => {
+                tracing::info!(
+                    risk.request_id = %request.request_id,
+                    risk.account_id = %request.account_id,
+                    risk.outcome = "reject",
+                    risk.reason_code = ?RiskReasonCode::ProviderLimitUnavailable,
+                    "risk decision: reject - provider limit unavailable",
+                );
                 return Ok(reject(
                     policy,
                     request,
@@ -288,6 +465,13 @@ impl RiskEngine {
         }
 
         if approved_abs == 0 {
+            tracing::info!(
+                risk.request_id = %request.request_id,
+                risk.account_id = %request.account_id,
+                risk.outcome = "reject",
+                risk.reason_code = ?RiskReasonCode::ProviderLimitExceeded,
+                "risk decision: reject - zero executable quantity after constraints",
+            );
             return Ok(reject(
                 policy,
                 request,
@@ -314,8 +498,30 @@ impl RiskEngine {
             (RiskOutcome::Resize, vec![RiskReason::new(code, message)])
         };
 
+        let decision_id = RiskDecision::new_id();
+        let elapsed = start.elapsed();
+        tracing::info!(
+            risk.request_id = %request.request_id,
+            risk.account_id = %request.account_id,
+            risk.instrument_id = %request.instrument_id,
+            risk.decision_id = %decision_id,
+            risk.action = %action_str,
+            risk.requested_delta_lots = request.requested_delta_lots,
+            risk.approved_delta_lots = approved_delta_lots,
+            risk.outcome = outcome_label(&outcome),
+            risk.policy_revision = policy.revision,
+            risk.policy_state = %state_label(&policy.state),
+            risk.elapsed_ms = elapsed.as_millis(),
+            "risk decision: {} (requested={}, approved={}, outcome={}, reasons=[{}])",
+            outcome_label(&outcome),
+            request.requested_delta_lots,
+            approved_delta_lots,
+            outcome_label(&outcome),
+            reasons.iter().map(|r| format!("{:?}", r.code)).collect::<Vec<_>>().join(", "),
+        );
+
         Ok(RiskDecision {
-            decision_id: RiskDecision::new_id(),
+            decision_id,
             request_id: request.request_id.clone(),
             policy_revision: policy.revision,
             account_id: request.account_id.clone(),

@@ -18,6 +18,14 @@ pub enum RiskState {
     Warning,
     ReduceOnly,
     Halted,
+    KillSwitch,
+}
+
+impl Default for RiskState {
+    #[inline]
+    fn default() -> Self {
+        Self::Normal
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -71,6 +79,7 @@ pub enum RiskReasonCode {
     MaxInstrumentExposureExceeded,
     DailyLossExceeded,
     ProtectionRequired,
+    KillSwitchActive,
     PersistenceFailure,
 }
 
@@ -278,4 +287,96 @@ impl RiskReservation {
     pub fn new_id() -> String {
         format!("risk-reservation:{}", Uuid::new_v4())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Persistence models (risk policy, account/strategy/global risk state)
+// ---------------------------------------------------------------------------
+
+/// Current risk policy row persisted in the risk state store.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RiskPolicyRow {
+    pub revision: u64,
+    pub state: RiskState,
+    pub allow_margin: bool,
+    pub require_provider_lot_limit: bool,
+    pub max_market_data_age_ms: Option<i64>,
+    pub max_single_order_lots: Option<i64>,
+    pub max_position_abs_lots: Option<i64>,
+    pub max_gross_exposure_nanos: Option<i128>,
+    pub max_net_exposure_abs_nanos: Option<i128>,
+    pub max_instrument_exposure_nanos: Option<i128>,
+    pub max_daily_loss_nanos: Option<i128>,
+    pub protection_required_for_new_exposure: bool,
+    pub updated_at_unix_ms: i64,
+}
+
+impl RiskPolicyRow {
+    #[must_use]
+    pub fn from_policy(policy: &RiskPolicySet, now_unix_ms: i64) -> Self {
+        Self {
+            revision: policy.revision,
+            state: policy.state,
+            allow_margin: policy.allow_margin,
+            require_provider_lot_limit: policy.require_provider_lot_limit,
+            max_market_data_age_ms: policy.max_market_data_age_ms,
+            max_single_order_lots: policy.max_single_order_lots,
+            max_position_abs_lots: policy.max_position_abs_lots,
+            max_gross_exposure_nanos: policy.max_gross_exposure_nanos,
+            max_net_exposure_abs_nanos: policy.max_net_exposure_abs_nanos,
+            max_instrument_exposure_nanos: policy.max_instrument_exposure_nanos,
+            max_daily_loss_nanos: policy.max_daily_loss_nanos,
+            protection_required_for_new_exposure: policy.protection_required_for_new_exposure,
+            updated_at_unix_ms: now_unix_ms,
+        }
+    }
+
+    #[must_use]
+    pub fn into_policy(self) -> RiskPolicySet {
+        RiskPolicySet {
+            revision: self.revision,
+            state: self.state,
+            allow_margin: self.allow_margin,
+            require_provider_lot_limit: self.require_provider_lot_limit,
+            max_market_data_age_ms: self.max_market_data_age_ms,
+            max_single_order_lots: self.max_single_order_lots,
+            max_position_abs_lots: self.max_position_abs_lots,
+            max_gross_exposure_nanos: self.max_gross_exposure_nanos,
+            max_net_exposure_abs_nanos: self.max_net_exposure_abs_nanos,
+            max_instrument_exposure_nanos: self.max_instrument_exposure_nanos,
+            max_daily_loss_nanos: self.max_daily_loss_nanos,
+            protection_required_for_new_exposure: self.protection_required_for_new_exposure,
+        }
+    }
+}
+
+/// Account-level risk state persisted in the risk state store.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AccountRiskStateRow {
+    pub account_id: String,
+    pub state: RiskState,
+    pub reduce_only: bool,
+    pub halted: bool,
+    pub max_position_abs_lots: Option<i64>,
+    pub max_daily_loss_nanos: Option<i128>,
+    pub updated_at_unix_ms: i64,
+}
+
+/// Strategy-level risk state persisted in the risk state store.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StrategyRiskStateRow {
+    pub strategy_id: String,
+    pub account_id: String,
+    pub state: RiskState,
+    pub reduce_only: bool,
+    pub halted: bool,
+    pub max_position_abs_lots: Option<i64>,
+    pub updated_at_unix_ms: i64,
+}
+
+/// Global risk state (kill-switch) persisted in the risk state store.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct GlobalRiskStateRow {
+    pub kill_switch: bool,
+    pub updated_at_unix_ms: i64,
 }
