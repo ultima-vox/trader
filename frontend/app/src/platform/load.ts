@@ -22,7 +22,7 @@ export async function loadPlatform(
 ): Promise<PlatformLoadResult> {
   const [connections, runtime] = await Promise.all([
     service.brokerConnections(),
-    service.runtime(),
+    service.processRuntime(),
   ]);
   if (!connections.ok) return connections;
   if (!runtime.ok) return runtime;
@@ -40,7 +40,7 @@ export async function loadPlatform(
       session,
       connections: Object.freeze([...connections.value]),
       accounts: Object.freeze(details.flatMap(accountsFromDetails)),
-      runtime: runtime.value,
+      processRuntime: runtime.value,
     }),
   };
 }

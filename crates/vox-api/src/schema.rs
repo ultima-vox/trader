@@ -73,6 +73,7 @@ use crate::transport::http;
         http::unbind_broker_account,
         http::change_execution_authorization,
         http::runtime_health,
+        http::scoped_runtime_health,
         http::runtime_scopes,
         http::reconciliation,
         http::mutations,
@@ -257,6 +258,33 @@ mod tests {
                 "missing market route: {path}"
             );
         }
+    }
+
+    #[test]
+    fn instrument_picker_contract_has_human_fields_and_scoped_runtime_is_explicit()
+    -> Result<(), serde_json::Error> {
+        let doc: serde_json::Value = serde_json::from_str(&openapi_json()?)?;
+        let summary = &doc["components"]["schemas"]["InstrumentSummaryDto"];
+        assert!(summary["required"].as_array().is_some_and(|required| {
+            required.iter().any(|field| field == "name")
+                && required.iter().any(|field| field == "instrument_type")
+        }));
+        let parameters = doc["paths"]["/api/v1/runtime/scoped"]["get"]["parameters"]
+            .as_array()
+            .expect("scoped runtime parameters");
+        for field in [
+            "provider",
+            "environment",
+            "broker_connection_id",
+            "account_id",
+        ] {
+            assert!(
+                parameters.iter().any(|parameter| {
+                    parameter["name"] == field && parameter["required"] == true
+                })
+            );
+        }
+        Ok(())
     }
 
     #[test]

@@ -179,6 +179,24 @@ pub async fn runtime_health(
     Ok(Json(state.runtime_port()?.health().await?))
 }
 
+/// Runtime state for one explicit execution scope. Capital UI must use this route.
+#[utoipa::path(
+    get, path = "/api/v1/runtime/scoped", tag = "runtime", params(ScopeQuery),
+    responses(
+        (status = 200, description = "Runtime health for the exact requested scope", body = RuntimeHealthDto),
+        (status = 400, body = ApiError),
+        (status = 404, body = ApiError),
+        (status = 503, body = ApiError),
+    )
+)]
+pub async fn scoped_runtime_health(
+    State(state): State<AppState>,
+    Query(query): Query<ScopeQuery>,
+) -> Result<Json<RuntimeHealthDto>, ApiError> {
+    let scope = query.into_scope()?;
+    Ok(Json(state.runtime_port()?.scoped_health(&scope).await?))
+}
+
 /// Scopes the operator may select. Empty until #17 bindings exist.
 #[utoipa::path(
     get, path = "/api/v1/runtime/scopes", tag = "runtime",
@@ -1019,6 +1037,7 @@ pub fn router(state: AppState) -> Router {
             delete(unbind_broker_account),
         )
         .route("/api/v1/runtime", get(runtime_health))
+        .route("/api/v1/runtime/scoped", get(scoped_runtime_health))
         .route("/api/v1/runtime/scopes", get(runtime_scopes))
         .route("/api/v1/reconciliation", get(reconciliation))
         .route("/api/v1/accounts", get(accounts))

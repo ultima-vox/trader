@@ -34,7 +34,7 @@ export type PlatformSnapshot = Readonly<{
   session: BrowserSession;
   connections: readonly BrokerConnectionMetadataDto[];
   accounts: readonly PlatformAccount[];
-  runtime: RuntimeHealthDto;
+  processRuntime: RuntimeHealthDto;
 }>;
 
 export function browserSession(dto: AuthSessionDto): BrowserSession {

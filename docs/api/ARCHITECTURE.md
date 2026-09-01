@@ -50,6 +50,9 @@ canonical `account_id` + `broker_connection_id` to `broker_account_id` before a
 `RuntimeScope` is built. Matching strings are never a binding. Until #17 persists those
 bindings, the server attaches runtime health only and account routes answer
 `CAPABILITY_UNAVAILABLE` naming `#17`. Execution stays gated by #10.
+`GET /api/v1/runtime` is process diagnostics only. Capital UI uses
+`GET /api/v1/runtime/scoped` with every `ExecutionScope` identity field; production resolves
+that exact binding and never substitutes the first active runtime.
 
 **Connection identity.** Public `broker_connection_id` is the same opaque application
 identity as `RuntimeScope.connection_ref`. The only conversion is
@@ -75,7 +78,9 @@ inside a provider-named scope.
 
 **Instrument catalogue identity remains the domain's.** `InstrumentIdentityDto` still
 publishes `vox-domain::InstrumentIdentity` (`provider` + `uid`, with FIGI/ticker/class code
-as aliases). That is lookup identity, not the capital-command target.
+as aliases). That is lookup identity, not the capital-command target. Normal picker rows and
+search use contract fields `name`, `instrument_type`, ticker and class code; UID stays in
+diagnostics and never becomes a normal browser interaction path.
 
 **Market data is a projection, not a second broker client.** `SnapshotMarketProjection`
 stores facts already acquired by the #8 adapter and republishes them provider-neutrally:

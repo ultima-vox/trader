@@ -320,6 +320,10 @@ export type InstrumentIdentityDto = {
 /** A catalogue entry: the canonical identity plus what the ticket needs to validate an order. Lot size and price step are metadata, not UI rules: without them a quantity field would be guessing, and this API refuses to make the browser guess. */
 export type InstrumentSummaryDto = {
   identity: InstrumentIdentityDto;
+  /** Human-readable instrument name from the provider catalogue. */
+  name: string;
+  /** Human-readable instrument kind, for example share, bond or futures. */
+  instrument_type: string;
   /** Instrument units in one lot. */
   lot_size: number;
   /** Minimum price increment. */

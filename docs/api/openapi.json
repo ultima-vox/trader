@@ -2089,6 +2089,95 @@
         }
       }
     },
+    "/api/v1/runtime/scoped": {
+      "get": {
+        "tags": [
+          "runtime"
+        ],
+        "summary": "Runtime state for one explicit execution scope. Capital UI must use this route.",
+        "operationId": "scoped_runtime_health",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "description": "Provider of the connection, for example `T_INVEST`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "description": "Broker environment: `SANDBOX` or `PRODUCTION`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BrokerEnvironment"
+            }
+          },
+          {
+            "name": "broker_connection_id",
+            "in": "query",
+            "description": "Application connection identity. Never a credential.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "description": "Canonical Vox account/binding identity.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Runtime health for the exact requested scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeHealthDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runtime/scopes": {
       "get": {
         "tags": [
@@ -3457,6 +3546,8 @@
         "description": "A catalogue entry: the canonical identity plus what the ticket needs to validate an order.\n\nLot size and price step are metadata, not UI rules: without them a quantity field would be\nguessing, and this API refuses to make the browser guess.",
         "required": [
           "identity",
+          "name",
+          "instrument_type",
           "lot_size",
           "min_price_increment",
           "currency",
@@ -3465,6 +3556,14 @@
         "properties": {
           "identity": {
             "$ref": "#/components/schemas/InstrumentIdentityDto"
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable instrument name from the provider catalogue."
+          },
+          "instrument_type": {
+            "type": "string",
+            "description": "Human-readable instrument kind, for example share, bond or futures."
           },
           "lot_size": {
             "type": "integer",

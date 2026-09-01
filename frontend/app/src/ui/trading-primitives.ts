@@ -221,7 +221,7 @@ export function createInstrumentPicker(options: InstrumentPickerOptions): HTMLEl
   const root = el("div", "vox-stack vox-gap-1");
   const input = document.createElement("input");
   input.className = "vox-input vox-input__field";
-  input.placeholder = "Тикер, площадка или UID";
+  input.placeholder = "Тикер, название, площадка или тип";
   input.setAttribute("aria-label", "Инструмент");
   const list = el("div", "vox-menu");
   const paint = (): void => {
@@ -229,7 +229,7 @@ export function createInstrumentPicker(options: InstrumentPickerOptions): HTMLEl
     const query = input.value.trim().toLocaleUpperCase("ru-RU");
     const visible = options.instruments.filter((item) => {
       const identity = item.identity;
-      return query === "" || [identity.ticker, identity.class_code, identity.uid]
+      return query === "" || [identity.ticker, item.name, identity.class_code, item.instrument_type]
         .some((value) => value.toLocaleUpperCase("ru-RU").includes(query));
     });
     if (visible.length === 0) {
@@ -240,7 +240,7 @@ export function createInstrumentPicker(options: InstrumentPickerOptions): HTMLEl
       const row = el(
         "button",
         "vox-menu__item",
-        `${item.identity.ticker} · ${item.identity.class_code} · ${item.currency}`,
+        `${item.identity.ticker} · ${item.name} · ${item.identity.class_code} · ${item.instrument_type}`,
       );
       row.type = "button";
       row.disabled = !item.tradable;

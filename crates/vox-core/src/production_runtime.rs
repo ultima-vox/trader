@@ -256,6 +256,11 @@ impl RuntimeQueries for ProductionRuntimeRegistry {
         .await
     }
 
+    async fn scoped_health(&self, scope: &ExecutionScope) -> Result<RuntimeHealthDto, ApiError> {
+        let entry = self.entry(scope).await?;
+        Ok(RuntimeHealthDto::from(&entry.coordinator.health().await))
+    }
+
     async fn scopes(&self) -> Result<Vec<ExecutionScope>, ApiError> {
         let connections = self
             .repository

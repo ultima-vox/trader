@@ -98,6 +98,7 @@ describe("platform loader", () => {
     expect(result.value.session.userId).toBe("operator-1");
     expect(result.value.session.effectivePermissions.has("SUBMIT_PRODUCTION_MANUAL_ORDERS")).toBe(true);
     expect(result.value.accounts).toHaveLength(1);
+    expect(result.value.processRuntime).toEqual(runtime);
     expect(result.value.accounts[0]).toMatchObject({
       accountDisplay: "Capital account",
       providerAccountId: "provider-4417",

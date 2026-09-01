@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { CapabilitySet, RuntimeHealthDto } from "@vox/api-client";
 import { CommandHandle } from "../command";
 import type { BrowserSession, PlatformAccount } from "../platform";
-import { createCapitalConfirmation, createCommandLifecycle, createOrderTicket, executionGate } from "./trading-primitives";
+import { createCapitalConfirmation, createCommandLifecycle, createInstrumentPicker, createOrderTicket, executionGate } from "./trading-primitives";
 
 const account: PlatformAccount = {
   scope: { provider: "T_INVEST", environment: "PRODUCTION", broker_connection_id: "conn-1", account_id: "account-1", trading_mode: "LIVE" },
@@ -50,6 +50,23 @@ describe("trading primitives", () => {
     input.dispatchEvent(new Event("input"));
     button.click();
     expect(onConfirm).toHaveBeenCalledOnce();
+  });
+
+  it("picker exposes human identity and never raw UID", () => {
+    const instrument = {
+      identity: { provider: "T_INVEST", uid: "secret-provider-uid", ticker: "SBER", class_code: "TQBR" },
+      name: "Сбербанк",
+      instrument_type: "Акция",
+      lot_size: 10,
+      min_price_increment: "0.01",
+      currency: "RUB",
+      tradable: true,
+    };
+    const picker = createInstrumentPicker({ instruments: [instrument], onSelect: vi.fn() });
+    expect(picker.querySelector("input")?.getAttribute("placeholder")).not.toContain("UID");
+    expect(picker.textContent).toContain("Сбербанк");
+    expect(picker.textContent).toContain("Акция");
+    expect(picker.textContent).not.toContain("secret-provider-uid");
   });
 
   it("keeps UNKNOWN state and frozen target visible after active account changes", () => {

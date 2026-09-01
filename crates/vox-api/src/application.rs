@@ -34,6 +34,13 @@ use crate::events::{ApplicationEventBus, spawn_runtime_health_watch};
 #[async_trait]
 pub trait RuntimeQueries: Send + Sync {
     async fn health(&self) -> Result<RuntimeHealthDto, ApiError>;
+    /// Health for one explicit capital scope. Implementations must not substitute another scope.
+    async fn scoped_health(&self, _scope: &ExecutionScope) -> Result<RuntimeHealthDto, ApiError> {
+        Err(ApiError::capability_unavailable(
+            "SCOPED_RUNTIME_HEALTH",
+            "#18",
+        ))
+    }
     /// Scopes the operator may select. Empty until #17 bindings exist.
     async fn scopes(&self) -> Result<Vec<ExecutionScope>, ApiError>;
 

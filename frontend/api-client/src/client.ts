@@ -229,6 +229,11 @@ export class VoxClient {
     return this.request("GET", "/api/v1/runtime", undefined);
   }
 
+  /** Runtime state for one explicit execution scope. Capital UI must use this route. */
+  runtimeScoped(query: { account_id: string; broker_connection_id: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<T.RuntimeHealthDto> {
+    return this.request("GET", "/api/v1/runtime/scoped", query);
+  }
+
   /** Scopes the operator may select. Empty until #17 bindings exist. */
   runtimeScopes(): Promise<Array<T.ExecutionScope>> {
     return this.request("GET", "/api/v1/runtime/scopes", undefined);
