@@ -157,6 +157,8 @@ pub async fn create_session(
     Ok((
         headers,
         Json(AuthSessionDto {
+            user_id: session.user_id,
+            effective_permissions: session.effective_permissions,
             csrf_token: session.csrf_token,
             expires_at_unix_ms: session.expires_at_unix_ms,
         }),

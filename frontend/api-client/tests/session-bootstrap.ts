@@ -56,6 +56,9 @@ const session = await client.postAuthSession({ bootstrap_credential: bootstrapCr
 if (!session.csrf_token || !cookie?.startsWith("vox_session=")) {
   throw new Error("generated client did not establish browser session");
 }
+if (!session.user_id || !Array.isArray(session.effective_permissions)) {
+  throw new Error("generated client omitted authenticated principal or effective permissions");
+}
 
 const noCsrfClient = new VoxClient({ baseUrl, fetch: browserFetch });
 await expectApiError(

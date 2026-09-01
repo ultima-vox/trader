@@ -149,6 +149,8 @@ pub struct AuthenticatedActor {
 
 /// Session material passed only from application auth port to HTTP transport.
 pub struct EstablishedSession {
+    pub user_id: String,
+    pub effective_permissions: Vec<crate::contract::auth::PermissionDto>,
     pub session_token: String,
     pub csrf_token: String,
     pub expires_at_unix_ms: i64,
@@ -159,6 +161,8 @@ impl core::fmt::Debug for EstablishedSession {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("EstablishedSession")
+            .field("user_id", &self.user_id)
+            .field("effective_permissions", &self.effective_permissions)
             .field("session_token", &"[REDACTED]")
             .field("csrf_token", &"[REDACTED]")
             .field("expires_at_unix_ms", &self.expires_at_unix_ms)

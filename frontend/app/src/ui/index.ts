@@ -1,6 +1,7 @@
 export { createAccountContextIndicator } from "./account-context-indicator";
 export { createAccountSelector } from "./account-selector";
 export { createAppShell } from "./app-shell";
+export { mountApplication } from "./application";
 export { createCapabilityGate, findUnavailable } from "./capability-gate";
 export { createDataState } from "./data-state";
 export { createDeferred } from "./deferred";
@@ -12,6 +13,14 @@ export {
 } from "./instrument-context-indicator";
 export { mountFoundationPlayground } from "./playground";
 export { createRuntimeStatus } from "./runtime-status";
+export {
+  createCapitalConfirmation,
+  createCommandLifecycle,
+  createExecutionTargetIndicator,
+  createInstrumentPicker,
+  createOrderTicket,
+  executionGate,
+} from "./trading-primitives";
 export { createWidget } from "./widget";
 export {
   applyGridPlacement,
@@ -37,6 +46,13 @@ export type {
 } from "./dense-table";
 export type { InstrumentContextIndicatorOptions } from "./instrument-context-indicator";
 export type { RuntimeStatusOptions } from "./runtime-status";
+export type {
+  ConfirmationOptions,
+  ExecutionGate,
+  ExecutionTargetIndicatorOptions,
+  InstrumentPickerOptions,
+  OrderTicketOptions,
+} from "./trading-primitives";
 export type { WidgetOptions, WidgetState } from "./widget";
 export type { GridColSpan, WorkspaceGridItem, WorkspaceGridOptions } from "./workspace-grid";
 

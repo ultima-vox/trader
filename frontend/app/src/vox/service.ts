@@ -1,9 +1,14 @@
 import {
   VoxApiError,
   VoxClient,
+  type AuthSessionDto,
   type BrokerAccountDto,
+  type BrokerConnectionMetadataDto,
   type CapabilitySet,
+  type ConnectionDetailsDto,
+  type CreateSessionRequest,
   type ExecutionScope,
+  type InstrumentSummaryDto,
   type MutationReceiptDto,
   type OperationsPageDto,
   type OrderDto,
@@ -12,6 +17,7 @@ import {
   type ReconciliationDto,
   type RuntimeHealthDto,
   type StopOrderDto,
+  type SubmitOrderRequest,
   type SystemHealthDto,
   type VoxClientOptions,
 } from "@vox/api-client";
@@ -20,6 +26,7 @@ import {
   type AccountContext,
 } from "../account/context";
 import type { AccountStore } from "../account/store";
+import type { CommandHandle } from "../command";
 import { assertSafeBaseUrl } from "../security/provider";
 
 export type ScopedResult<T> =
@@ -30,6 +37,10 @@ export type ScopedResult<T> =
 
 export type UnscopedResult<T> =
   | { ok: true; value: T }
+  | { ok: false; error: VoxApiError };
+
+export type CommandResult =
+  | { ok: true; handle: CommandHandle }
   | { ok: false; error: VoxApiError };
 
 export type VoxServiceOptions = {
@@ -235,6 +246,56 @@ export class VoxService {
 
   systemHealth(): Promise<UnscopedResult<SystemHealthDto>> {
     return this.runUnscoped(() => this.client.systemHealth());
+  }
+
+  establishSession(request: CreateSessionRequest): Promise<UnscopedResult<AuthSessionDto>> {
+    return this.runUnscoped(() => this.client.postAuthSession(request));
+  }
+
+  brokerConnections(): Promise<UnscopedResult<Array<BrokerConnectionMetadataDto>>> {
+    return this.runUnscoped(() => this.client.brokerConnections());
+  }
+
+  connectionDetails(connectionId: string): Promise<UnscopedResult<ConnectionDetailsDto>> {
+    return this.runUnscoped(() =>
+      this.client.brokerConnectionsConnection_id({ connection_id: connectionId }),
+    );
+  }
+
+  instruments(provider: ExecutionScope["provider"], query: string): Promise<UnscopedResult<Array<InstrumentSummaryDto>>> {
+    return this.runUnscoped(() => this.client.marketInstruments({ provider, query, limit: 50 }));
+  }
+
+  async submitOrder(
+    handle: CommandHandle,
+    request: Omit<SubmitOrderRequest, "scope" | "client_request_id">,
+  ): Promise<CommandResult> {
+    try {
+      const receipt = await this.client.postCommandsOrder({
+        ...request,
+        scope: handle.scope,
+        client_request_id: handle.logicalRequestId,
+      });
+      return { ok: true, handle: handle.bind(receipt) };
+    } catch (error) {
+      if (error instanceof VoxApiError) return { ok: false, error };
+      throw error;
+    }
+  }
+
+  async refreshCommand(handle: CommandHandle): Promise<CommandResult> {
+    try {
+      const receipts = await this.client.mutations(scopeQuery(handle.scope));
+      const receipt = receipts.find(
+        (candidate) => candidate.logical_request_id === handle.logicalRequestId,
+      );
+      return receipt === undefined
+        ? { ok: true, handle }
+        : { ok: true, handle: handle.bind(receipt) };
+    } catch (error) {
+      if (error instanceof VoxApiError) return { ok: false, error };
+      throw error;
+    }
   }
 
   private async runUnscoped<T>(fn: () => Promise<T>): Promise<UnscopedResult<T>> {

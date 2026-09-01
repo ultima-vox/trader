@@ -31,7 +31,7 @@ describe("FrozenExecutionTarget", () => {
   it("survives a UI account switch: freeze under A, switch to B, handle.scope stays A", () => {
     const store = new AccountStore();
     store.switchTo(scope("account:a"));
-    const handle = new CommandHandle(store.current()!);
+    const handle = new CommandHandle(store.current()!, "req-1");
     expect(handle.scope.frozen).toBe(true);
     expect(handle.scope.account_id).toBe("account:a");
 
@@ -42,7 +42,7 @@ describe("FrozenExecutionTarget", () => {
   });
 
   it("throws on mutation after freeze and does not retarget on bind", () => {
-    const handle = new CommandHandle(scope("account:a"));
+    const handle = new CommandHandle(scope("account:a"), "req-1");
     expect(() => {
       (handle.scope as { account_id: string }).account_id = "account:mutated";
     }).toThrow(TypeError);
@@ -64,5 +64,30 @@ describe("FrozenExecutionTarget", () => {
       /receipt scope does not match frozen execution target/,
     );
     expect(handle.scope.account_id).toBe("account:a");
+    expect(handle.logicalRequestId).toBe("req-1");
+  });
+
+  it("rejects receipt with another logical request identity", () => {
+    const handle = new CommandHandle(scope("account:a"), "req-1");
+    expect(() => handle.bind({ ...receipt("account:a"), logical_request_id: "req-2" })).toThrow(
+      /receipt identity does not match frozen logical request/,
+    );
+  });
+
+  it("freezes human broker-account metadata through receipt binding", () => {
+    const handle = new CommandHandle(scope("account:a"), "req-1", undefined, {
+      providerAccountId: "provider-4417",
+      accountDisplay: "Capital",
+      connectionLabel: "Primary",
+    });
+    const bound = handle.bind(receipt("account:a"));
+    expect(bound.targetDisplay).toEqual({
+      providerAccountId: "provider-4417",
+      accountDisplay: "Capital",
+      connectionLabel: "Primary",
+    });
+    expect(() => {
+      (bound.targetDisplay as { accountDisplay: string }).accountDisplay = "Other";
+    }).toThrow(TypeError);
   });
 });

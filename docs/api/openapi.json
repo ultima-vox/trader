@@ -2264,10 +2264,21 @@
         "type": "object",
         "description": "Browser-readable anti-CSRF state. Authentication remains in HttpOnly cookie.",
         "required": [
+          "user_id",
+          "effective_permissions",
           "csrf_token",
           "expires_at_unix_ms"
         ],
         "properties": {
+          "user_id": {
+            "type": "string"
+          },
+          "effective_permissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PermissionDto"
+            }
+          },
           "csrf_token": {
             "type": "string"
           },
@@ -3878,6 +3889,24 @@
           "LIMIT",
           "MARKET",
           "BEST_PRICE"
+        ]
+      },
+      "PermissionDto": {
+        "type": "string",
+        "description": "Effective permission names for the authenticated browser principal.",
+        "enum": [
+          "VIEW_CONNECTION_METADATA",
+          "MANAGE_CREDENTIALS",
+          "DISABLE_DELETE_CONNECTION",
+          "DISCOVER_ACCOUNTS",
+          "BIND_ACCOUNTS",
+          "VIEW_PORTFOLIO",
+          "SUBMIT_SANDBOX_ORDERS",
+          "SUBMIT_PRODUCTION_MANUAL_ORDERS",
+          "ENABLE_AUTOMATED_PRODUCTION_EXECUTION",
+          "CHANGE_RISK_POLICY",
+          "EMERGENCY_HALT",
+          "SECURITY_ADMIN"
         ]
       },
       "PortfolioDto": {

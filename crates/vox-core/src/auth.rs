@@ -15,6 +15,7 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 use vox_api::application::{AuthenticatedActor, EstablishedSession, SessionAuthentication};
 use vox_api::contract::auth::CreateSessionRequest;
+use vox_api::contract::auth::PermissionDto;
 use vox_api::error::{ApiError, ErrorCategory};
 use vox_connections::{
     AuditRecord, ConnectionRepository, Permission, Role, RoleId, SqliteConnectionRepository, User,
@@ -158,6 +159,13 @@ impl SessionAuthentication for AuthState {
             })?;
         let session_token = random_token().map_err(|_| auth_unavailable())?;
         let csrf_token = random_token().map_err(|_| auth_unavailable())?;
+        let effective_permissions = self
+            .users
+            .permissions(&user.id)
+            .map_err(|_| auth_unavailable())?
+            .into_iter()
+            .map(permission_dto)
+            .collect();
         self.sessions
             .upsert(
                 &user.id,
@@ -168,11 +176,32 @@ impl SessionAuthentication for AuthState {
             )
             .map_err(|_| auth_unavailable())?;
         Ok(EstablishedSession {
+            user_id: user.id.as_str().to_owned(),
+            effective_permissions,
             session_token,
             csrf_token,
             expires_at_unix_ms: self.bootstrap_expires_at_unix_ms,
             cookie_secure: self.cookie_secure,
         })
+    }
+}
+
+fn permission_dto(permission: Permission) -> PermissionDto {
+    match permission {
+        Permission::ViewConnectionMetadata => PermissionDto::ViewConnectionMetadata,
+        Permission::ManageCredentials => PermissionDto::ManageCredentials,
+        Permission::DisableDeleteConnection => PermissionDto::DisableDeleteConnection,
+        Permission::DiscoverAccounts => PermissionDto::DiscoverAccounts,
+        Permission::BindAccounts => PermissionDto::BindAccounts,
+        Permission::ViewPortfolio => PermissionDto::ViewPortfolio,
+        Permission::SubmitSandboxOrders => PermissionDto::SubmitSandboxOrders,
+        Permission::SubmitProductionManualOrders => PermissionDto::SubmitProductionManualOrders,
+        Permission::EnableAutomatedProductionExecution => {
+            PermissionDto::EnableAutomatedProductionExecution
+        }
+        Permission::ChangeRiskPolicy => PermissionDto::ChangeRiskPolicy,
+        Permission::EmergencyHalt => PermissionDto::EmergencyHalt,
+        Permission::SecurityAdmin => PermissionDto::SecurityAdmin,
     }
 }
 
