@@ -67,7 +67,10 @@ jobs:
             fi
             case "$resolved" in
               /tmp/vox-cargo-[0-9]*|/tmp/vox-rustup-[0-9]*|/tmp/vox-target-[0-9]*|/var/tmp/vox-target-[0-9]*)
-                rm -rf -- "$resolved"
+                for attempt in 1 2 3; do
+                  if rm -rf -- "$resolved" 2>/dev/null; then break; fi
+                  sleep 1
+                done
                 ;;
               *)
                 echo "Refusing unexpected cleanup target: $resolved" >&2
