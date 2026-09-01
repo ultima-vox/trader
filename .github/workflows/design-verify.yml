@@ -33,7 +33,13 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, "1"]
+    timeout-minutes: 20
+    env:
+      BASH_ENV: /dev/null
+    defaults:
+      run:
+        shell: 'bash --noprofile --norc -e -o pipefail "{0}"'
     steps:
       - name: Checkout the commit under review
         uses: actions/checkout@v4

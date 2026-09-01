@@ -40,7 +40,7 @@ struct AuthorizedTInvestExecutionClient {
     authorization_revision: u64,
 }
 
-struct TInvestExecutionSession<R, S, P> {
+pub struct TInvestExecutionSession<R, S, P> {
     target: AccountTarget,
     adapter: TInvestRuntimeExecutionAdapter,
     authorization_revision: u64,
@@ -146,7 +146,7 @@ where
         Ok(resolved)
     }
 
-    fn execution_session(
+    pub fn execution_session(
         &self,
         connection_id: &ConnectionId,
         provider_account_id: &str,
