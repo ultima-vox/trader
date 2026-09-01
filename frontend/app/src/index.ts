@@ -5,5 +5,6 @@ export * from "./account/index";
 export * from "./vox/index";
 export * from "./command/index";
 export * from "./instrument/index";
+export * from "./platform/index";
 export * from "./workspace/index";
 export * from "./ui/index";

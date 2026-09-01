@@ -46,11 +46,22 @@ async fn production_composition_enforces_server_verified_session_and_rbac()
     let first_bootstrap = bootstrap_response(app.clone()).await?;
     assert_eq!(first_bootstrap.status(), StatusCode::OK);
     assert_eq!(first_bootstrap.headers()["cache-control"], "no-store");
-    let first_cookie = first_bootstrap.headers()["set-cookie"].to_str()?;
+    let first_cookie = first_bootstrap.headers()["set-cookie"].to_str()?.to_owned();
     assert!(first_cookie.contains("HttpOnly"));
     assert!(first_cookie.contains("Secure"));
     assert!(first_cookie.contains("SameSite=Strict"));
     assert!(!first_cookie.contains(SESSION));
+    let first_session = response_json(first_bootstrap).await?;
+    assert_eq!(first_session["user_id"], user_id.as_str());
+    assert_eq!(
+        first_session["effective_permissions"],
+        serde_json::json!(["VIEW_CONNECTION_METADATA"])
+    );
+    assert!(
+        first_session["csrf_token"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
     let second_bootstrap = bootstrap_response(app.clone()).await?;
     assert_ne!(
         first_cookie,

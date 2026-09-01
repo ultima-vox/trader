@@ -7,6 +7,14 @@
 
 /* ---------- Application shell ---------- */
 .vox-shell { display: flex; flex-direction: column; min-height: 100vh; background: var(--vox-bg-canvas); }
+.vox-session {
+  width: min(420px, calc(100vw - 32px)); margin: 12vh auto 0; padding: 20px;
+  display: flex; flex-direction: column; gap: var(--vox-space-3);
+  background: var(--vox-bg-surface); border: 1px solid var(--vox-border-default); border-radius: var(--vox-radius-md);
+}
+.vox-session__status { min-height: 20px; color: var(--vox-text-secondary); overflow-wrap: anywhere; }
+.vox-platform { min-width: 0; }
+.vox-density { display: flex; justify-content: flex-end; gap: var(--vox-space-1); padding: 6px; background: var(--vox-bg-workspace); }
 .vox-topbar {
   min-height: 44px; flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; padding: 0 12px;
   background: var(--vox-bg-workspace); border-bottom: 1px solid var(--vox-border-default);

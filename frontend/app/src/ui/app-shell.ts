@@ -1,5 +1,6 @@
 import type { AccountStore } from "../account";
 import type { BrokerEnvironment, RuntimeHealthDto } from "@vox/api-client";
+import type { PlatformAccount } from "../platform";
 import { createAccountContextIndicator } from "./account-context-indicator";
 import { createAccountSelector } from "./account-selector";
 import { append, el } from "./dom";
@@ -10,6 +11,7 @@ export type AppShellOptions = {
   environment: BrokerEnvironment;
   accountStore: AccountStore;
   runtime: RuntimeHealthDto;
+  accounts?: readonly PlatformAccount[];
   body?: HTMLElement;
 };
 
@@ -44,7 +46,10 @@ export function createAppShell(options: AppShellOptions): AppShellHandle {
   const accountGroup = el("div", "vox-topbar__group");
   append(
     accountGroup,
-    createAccountSelector({ store: options.accountStore }),
+    createAccountSelector({
+      store: options.accountStore,
+      ...(options.accounts === undefined ? {} : { accounts: options.accounts }),
+    }),
     createAccountContextIndicator({ store: options.accountStore }),
   );
 

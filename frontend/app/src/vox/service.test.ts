@@ -10,6 +10,7 @@ import { VoxApiError } from "@vox/api-client";
 import { freezeAccountContext } from "../account/context";
 import { AccountStore } from "../account/store";
 import { VoxService } from "./service";
+import { CommandHandle } from "../command";
 
 function scope(account_id: string): ExecutionScope {
   return {
@@ -108,6 +109,50 @@ function take(pending: Pending[], pathname: string, accountId?: string): Pending
 }
 
 describe("VoxService stale suppression", () => {
+  it("submits and refreshes against frozen A after UI switches to B", async () => {
+    const store = new AccountStore();
+    const requests: Array<{ url: URL; init?: RequestInit }> = [];
+    const handle = new CommandHandle(scope("account:a"), "req-frozen");
+    const commandReceipt: MutationReceiptDto = {
+      logical_request_id: "req-frozen",
+      scope: scope("account:a"),
+      kind: "POST_ORDER",
+      state: "ACKNOWLEDGED",
+      decision: "DO_NOT_SUBMIT",
+      correlation_id: "corr-frozen",
+      runtime_epoch: 1,
+      created_at_unix_ms: 1,
+      updated_at_unix_ms: 2,
+    };
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(String(input), "http://localhost");
+      requests.push({ url, ...(init === undefined ? {} : { init }) });
+      const body = url.pathname === "/api/v1/mutations" ? [commandReceipt] : commandReceipt;
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const service = new VoxService(store, { fetch: fetchImpl });
+    store.switchTo(scope("account:a"));
+    store.switchTo(scope("account:b"));
+
+    const submitted = await service.submitOrder(handle, {
+      instrument_id: "instrument-1",
+      side: "BUY",
+      order_type: "MARKET",
+      quantity_lots: 1,
+      price_convention: "SETTLEMENT_CURRENCY",
+      time_in_force: "DAY",
+      confirm_margin_trade: false,
+    });
+    const refreshed = await service.refreshCommand(handle);
+
+    expect(submitted.ok && submitted.handle.receipt?.scope.account_id).toBe("account:a");
+    expect(refreshed.ok && refreshed.handle.receipt?.logical_request_id).toBe("req-frozen");
+    expect(JSON.parse(String(requests[0]?.init?.body))).toMatchObject({
+      scope: { account_id: "account:a" },
+      client_request_id: "req-frozen",
+    });
+    expect(requests[1]?.url.searchParams.get("account_id")).toBe("account:a");
+  });
   it("discards account A after switch to B: A resolves later, store stays B", async () => {
     const store = new AccountStore();
     const { fetchImpl, pending } = deferredFetch();

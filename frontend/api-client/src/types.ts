@@ -19,6 +19,8 @@ export type ApiError = {
 
 /** Browser-readable anti-CSRF state. Authentication remains in HttpOnly cookie. */
 export type AuthSessionDto = {
+  user_id: string;
+  effective_permissions: Array<PermissionDto>;
   csrf_token: string;
   expires_at_unix_ms: number;
 };
@@ -432,6 +434,9 @@ export type OrderExecutionStatusDto = {
 export type OrderSideDto = "BUY" | "SELL";
 
 export type OrderTypeDto = "LIMIT" | "MARKET" | "BEST_PRICE";
+
+/** Effective permission names for the authenticated browser principal. */
+export type PermissionDto = "VIEW_CONNECTION_METADATA" | "MANAGE_CREDENTIALS" | "DISABLE_DELETE_CONNECTION" | "DISCOVER_ACCOUNTS" | "BIND_ACCOUNTS" | "VIEW_PORTFOLIO" | "SUBMIT_SANDBOX_ORDERS" | "SUBMIT_PRODUCTION_MANUAL_ORDERS" | "ENABLE_AUTOMATED_PRODUCTION_EXECUTION" | "CHANGE_RISK_POLICY" | "EMERGENCY_HALT" | "SECURITY_ADMIN";
 
 /** Portfolio aggregates and authoritative cash balances remain separate. */
 export type PortfolioDto = {
