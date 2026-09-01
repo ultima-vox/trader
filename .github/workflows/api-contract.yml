@@ -118,3 +118,10 @@ jobs:
 
           VOX_API_BASE_URL=http://127.0.0.1:18099 \
             npm --prefix frontend/api-client run test:session
+
+      - name: Prove the real frontend against the Vox boundary
+        working-directory: frontend/app
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install chromium
+          npm run test:e2e:real

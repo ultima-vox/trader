@@ -1,6 +1,7 @@
 node_modules/
 e2e/artifacts/
 e2e/test-results/
+e2e/test-results-real/
 playwright-report/
 blob-report/
 test-results/

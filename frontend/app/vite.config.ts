@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const apiProxy = process.env.VOX_API_PROXY;
 
 export default defineConfig({
   resolve: {
@@ -11,6 +12,7 @@ export default defineConfig({
     },
   },
   server: {
+    ...(apiProxy === undefined ? {} : { proxy: { "/api": apiProxy } }),
     fs: {
       allow: [path.resolve(root, "..")],
     },

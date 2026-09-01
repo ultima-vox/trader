@@ -216,12 +216,13 @@ impl MarketDataQueries for SnapshotMarketProjection {
                     true
                 } else {
                     row.identity.ticker.to_ascii_lowercase().contains(&needle)
+                        || row.name.to_ascii_lowercase().contains(&needle)
+                        || row.instrument_type.to_ascii_lowercase().contains(&needle)
                         || row
                             .identity
                             .class_code
                             .to_ascii_lowercase()
                             .contains(&needle)
-                        || row.identity.uid.to_ascii_lowercase().contains(&needle)
                 }
             })
             .take(usize::from(limit))
@@ -651,6 +652,8 @@ mod tests {
                 ticker: "SBER".into(),
                 class_code: "TQBR".into(),
             },
+            name: "Sberbank".into(),
+            instrument_type: "share".into(),
             lot_size: 10,
             min_price_increment: Decimal::from_units_nano(0, 10_000_000)?,
             currency: "rub".into(),
@@ -661,6 +664,13 @@ mod tests {
             .await?;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].identity.ticker, "SBER");
+        assert_eq!(hits[0].name, "Sberbank");
+        assert!(
+            projection
+                .search_instruments(ProviderDto::TInvest, "uid-sber", 10)
+                .await?
+                .is_empty()
+        );
         Ok(())
     }
 

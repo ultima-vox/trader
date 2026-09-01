@@ -325,6 +325,10 @@ pub struct CandlesDto {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct InstrumentSummaryDto {
     pub identity: InstrumentIdentityDto,
+    /// Human-readable instrument name from the provider catalogue.
+    pub name: String,
+    /// Human-readable instrument kind, for example share, bond or futures.
+    pub instrument_type: String,
     /// Instrument units in one lot.
     pub lot_size: i64,
     /// Minimum price increment.

@@ -57,6 +57,7 @@ async function mockPlatform(page: Page): Promise<void> {
         }],
       },
       "/api/v1/runtime": runtime,
+      "/api/v1/runtime/scoped": runtime,
       "/api/v1/capabilities": {
         provider: "T_INVEST", environment: "PRODUCTION", account_id: "account-real",
         supported: ["RUNTIME_HEALTH", "ORDER_EXECUTION", "MARKET_DATA"],
@@ -67,6 +68,8 @@ async function mockPlatform(page: Page): Promise<void> {
       },
       "/api/v1/market/instruments": [{
         identity: { provider: "T_INVEST", uid: "uid-sber", ticker: "SBER", class_code: "TQBR" },
+        name: "Сбербанк",
+        instrument_type: "Акция",
         lot_size: 10, min_price_increment: "0.01", currency: "RUB", tradable: true,
       }],
     };

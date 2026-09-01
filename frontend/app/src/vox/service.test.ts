@@ -244,18 +244,37 @@ describe("VoxService stale suppression", () => {
     expect(store.runtimeEpoch()).toBe(7);
   });
 
-  it("does not abort or discard unscoped runtime() when the account switches", async () => {
+  it("does not abort or discard processRuntime() when the account switches", async () => {
     const store = new AccountStore();
     const { fetchImpl, pending } = deferredFetch();
     const service = new VoxService(store, { fetch: fetchImpl });
 
     store.switchTo(scope("account:a"));
-    const pendingRuntime = service.runtime();
+    const pendingRuntime = service.processRuntime();
     store.switchTo(scope("account:b"));
     take(pending, "/api/v1/runtime").resolve(health(7, "A"));
 
     expect(await pendingRuntime).toEqual({ ok: true, value: health(7, "A") });
     expect(store.current()?.account_id).toBe("account:b");
+  });
+
+  it("discards scoped runtime A after switch and requests every scope field", async () => {
+    const store = new AccountStore();
+    const { fetchImpl, pending } = deferredFetch();
+    const service = new VoxService(store, { fetch: fetchImpl });
+    store.switchTo(scope("account:a"));
+    const fromA = service.runtime();
+    store.switchTo(scope("account:b"));
+    const fromB = service.runtime();
+    const requestA = take(pending, "/api/v1/runtime/scoped", "account:a");
+    const requestB = take(pending, "/api/v1/runtime/scoped", "account:b");
+    expect(requestB.url.searchParams.get("broker_connection_id")).toBe("connection:primary");
+    expect(requestB.url.searchParams.get("provider")).toBe("T_INVEST");
+    expect(requestB.url.searchParams.get("environment")).toBe("SANDBOX");
+    requestA.resolve(health(1, "A"));
+    requestB.resolve(health(2, "B"));
+    expect(await fromA).toEqual({ ok: false, stale: true });
+    expect(await fromB).toMatchObject({ ok: true, value: { account_display: "B" } });
   });
 
   it("does not surface a VoxApiError from a previous generation", async () => {
@@ -332,11 +351,11 @@ describe("VoxService stale suppression", () => {
     expect(await service.portfolio()).toEqual({ ok: false, noContext: true });
   });
 
-  it("loads unscoped runtime without an account", async () => {
+  it("loads process runtime without an account", async () => {
     const store = new AccountStore();
     const { fetchImpl, pending } = deferredFetch();
     const service = new VoxService(store, { fetch: fetchImpl });
-    const pendingResult = service.runtime();
+    const pendingResult = service.processRuntime();
     take(pending, "/api/v1/runtime").resolve(health(1, "—"));
     expect(await pendingResult).toEqual({ ok: true, value: health(1, "—") });
   });

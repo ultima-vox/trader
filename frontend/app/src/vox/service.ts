@@ -236,8 +236,12 @@ export class VoxService {
     return this.runScoped((ctx, client) => client.capabilities({ account_id: ctx.account_id }));
   }
 
-  runtime(): Promise<UnscopedResult<RuntimeHealthDto>> {
+  processRuntime(): Promise<UnscopedResult<RuntimeHealthDto>> {
     return this.runUnscoped(() => this.client.runtime());
+  }
+
+  runtime(): Promise<ScopedResult<RuntimeHealthDto>> {
+    return this.runScoped((ctx, client) => client.runtimeScoped(scopeQuery(ctx)));
   }
 
   runtimeScopes(): Promise<UnscopedResult<Array<ExecutionScope>>> {

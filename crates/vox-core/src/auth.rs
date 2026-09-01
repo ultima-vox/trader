@@ -335,6 +335,7 @@ fn required_permission(
     if matches!(
         path,
         "/api/v1/runtime"
+            | "/api/v1/runtime/scoped"
             | "/api/v1/runtime/scopes"
             | "/api/v1/reconciliation"
             | "/api/v1/accounts"

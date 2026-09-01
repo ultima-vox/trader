@@ -241,6 +241,9 @@ Two facts this work established that the earlier map did not record:
 
 1. **`vox-runtime` is on `main` (#11 / PR #39).** The API maps those types exhaustively.
    `/api/v1/runtime` serves accepted `RuntimeHealth` without an account binding.
+   That route is process diagnostics. `/api/v1/runtime/scoped` requires provider,
+   environment, connection and canonical account; capital UI gates only on this exact-scope
+   response.
    Canonical `account_id` is resolved through `AccountBindingResolver` before a
    `RuntimeScope` is built; it is never copied into `broker_account_id`. Public
    `broker_connection_id` is `RuntimeScope.connection_ref` via one conversion.

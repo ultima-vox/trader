@@ -78,7 +78,9 @@ async function showPlatform(
   isCurrent: () => boolean,
 ): Promise<void> {
   const account = findCurrentAccount(store, snapshot);
-  const capabilities = account === undefined ? undefined : await service.capabilities();
+  const [capabilities, scopedRuntime] = account === undefined
+    ? [undefined, undefined]
+    : await Promise.all([service.capabilities(), service.runtime()]);
   if (!isCurrent()) return;
   clear(root);
   const body = el("main", "vox-platform");
@@ -87,21 +89,31 @@ async function showPlatform(
 
   if (account === undefined) {
     append(body, connectionTable(snapshot), el("div", "vox-deferred", "Vox не вернул active account binding. Demo account не создан."));
-  } else if (capabilities === undefined || !capabilities.ok) {
-    const message = capabilities !== undefined && "error" in capabilities
-      ? `${capabilities.error.status}: ${capabilities.error.body.message}`
-      : "Capability contract unavailable";
+  } else if (
+    capabilities === undefined || !capabilities.ok ||
+    scopedRuntime === undefined || !scopedRuntime.ok
+  ) {
+    const failed = capabilities !== undefined && !capabilities.ok ? capabilities : scopedRuntime;
+    const message = failed !== undefined && "error" in failed
+      ? `${failed.error.status}: ${failed.error.body.message}`
+      : "Selected-scope runtime or capability contract unavailable";
     append(body, connectionTable(snapshot), el("div", "vox-deferred", message));
   } else {
-    const workspace = await tradingWorkspace(service, snapshot, account, capabilities.value);
+    const workspace = await tradingWorkspace(
+      service,
+      snapshot,
+      account,
+      capabilities.value,
+      scopedRuntime.value,
+    );
     if (!isCurrent()) return;
     append(body, workspace);
   }
 
   const shell = createAppShell({
-    environment: account?.scope.environment ?? snapshot.runtime.environment,
+    environment: account?.scope.environment ?? snapshot.processRuntime.environment,
     accountStore: store,
-    runtime: snapshot.runtime,
+    runtime: scopedRuntime?.ok === true ? scopedRuntime.value : snapshot.processRuntime,
     accounts: snapshot.accounts,
     body,
   });
@@ -113,6 +125,7 @@ async function tradingWorkspace(
   snapshot: PlatformSnapshot,
   account: PlatformAccount,
   capabilities: CapabilitySet,
+  runtime: PlatformSnapshot["processRuntime"],
 ): Promise<HTMLElement> {
   const instruments = await service.instruments(account.scope.provider, "S");
   let selected = instruments.ok ? instruments.value[0] : undefined;
@@ -128,7 +141,7 @@ async function tradingWorkspace(
       account,
       session: snapshot.session,
       capabilities,
-      runtime: snapshot.runtime,
+      runtime,
       command,
       ...(selected === undefined ? {} : { instrument: selected }),
     }));
