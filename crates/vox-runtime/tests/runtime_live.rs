@@ -19,9 +19,9 @@ use vox_runtime::{
     CredentialResolverPort, ExecutionPort, ExecutionResult, ExecutionStreamPort, HealthReadPort,
     InMemoryMetrics, JournalState, MoneyFact, MutationRecord, OpaqueRef, OperationFact,
     OperationsPage, OrderExecutionStatus, OrderFact, PortfolioFact, Provider, ProviderStatusCause,
-    ReconciliationConfig, RuntimeConfig, RuntimeCoordinator, RuntimeEnvironment,
-    RuntimeExecutionCommand, RuntimeScope, RuntimeState, RuntimeStore, SqliteRuntimeStore,
-    StopExecutionStatus, StopFact, StreamKind, StreamSignal,
+    ReconciliationConfig, RiskAdmission, RiskAdmissionError, RiskAdmissionPort, RuntimeConfig,
+    RuntimeCoordinator, RuntimeEnvironment, RuntimeExecutionCommand, RuntimeScope, RuntimeState,
+    RuntimeStore, SqliteRuntimeStore, StopExecutionStatus, StopFact, StreamKind, StreamSignal,
 };
 use vox_tinvest::account::AccountReadClient;
 use vox_tinvest::execution::{
@@ -104,6 +104,7 @@ impl BrokerReadPort for SandboxReads {
                 .unwrap_or_else(|| scope.broker_account_id.clone()),
             total_portfolio_valuation,
             total_currency_valuation,
+            broker_daily_yield: portfolio.daily_yield.map(money_fact),
             cash_balances: BTreeMap::new(),
             broker_observed_at_unix_ms: None,
         })
@@ -797,6 +798,36 @@ where
 }
 
 struct SandboxCredential;
+struct SandboxRiskAdmission;
+
+#[async_trait]
+impl RiskAdmissionPort for SandboxRiskAdmission {
+    async fn admit(
+        &self,
+        _: &RuntimeScope,
+        _: vox_runtime::RuntimeExecutionPurpose,
+        command: &RuntimeExecutionCommand,
+        logical_request_id: &str,
+    ) -> Result<RiskAdmission, RiskAdmissionError> {
+        let approved_delta_lots = match command {
+            RuntimeExecutionCommand::RegularOrder(command)
+            | RuntimeExecutionCommand::PostOrderAsync(command) => command.quantity_lots,
+            RuntimeExecutionCommand::ReplaceOrder(command) => command.quantity_lots,
+            RuntimeExecutionCommand::PostStopOrder(command)
+            | RuntimeExecutionCommand::ProtectionLeg(command) => command.quantity_lots,
+            RuntimeExecutionCommand::CancelOrder(_)
+            | RuntimeExecutionCommand::CancelStopOrder(_) => 1,
+        };
+        Ok(RiskAdmission {
+            decision_id: format!("runtime-qualification:{logical_request_id}"),
+            reservation_id: Some(format!(
+                "runtime-qualification-reservation:{logical_request_id}"
+            )),
+            policy_revision: 1,
+            approved_delta_lots,
+        })
+    }
+}
 
 #[async_trait]
 impl CredentialResolverPort for SandboxCredential {
@@ -1294,6 +1325,7 @@ fn build_coordinator(
         execution,
         streams,
         Arc::new(SandboxCredential),
+        Arc::new(SandboxRiskAdmission),
         metrics,
         ReconciliationConfig::default(),
         RuntimeConfig {
@@ -1506,6 +1538,13 @@ fn order_fact(
         })?,
         logical_request_id: order.client_request_id,
         instrument_uid: order.instrument_uid.unwrap_or_default(),
+        side: match vox_tinvest::generated::v1::OrderDirection::try_from(order.direction) {
+            Ok(vox_tinvest::generated::v1::OrderDirection::Buy) => Some(OrderSide::Buy),
+            Ok(vox_tinvest::generated::v1::OrderDirection::Sell) => Some(OrderSide::Sell),
+            _ => None,
+        },
+        lots_requested: order.lots_requested,
+        lots_executed: order.lots_executed,
         status: order_status(order.execution_status),
         status_cause: None,
     })

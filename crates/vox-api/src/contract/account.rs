@@ -351,6 +351,7 @@ impl From<&ReconciliationCheckpoint> for ReconciliationDto {
 mod tests {
     use std::collections::BTreeMap;
 
+    use vox_domain::OrderSide;
     use vox_runtime::{ProviderStatusCause, StopExecutionStatus};
 
     use super::*;
@@ -374,6 +375,7 @@ mod tests {
                     currency: "RUB".into(),
                     amount_nanos: "25000000002".into(),
                 }),
+                broker_daily_yield: None,
                 cash_balances: BTreeMap::new(),
                 broker_observed_at_unix_ms: Some(1),
             },
@@ -404,6 +406,9 @@ mod tests {
                 broker_order_id: "order-one".into(),
                 logical_request_id: Some("request-one".into()),
                 instrument_uid: "instrument-one".into(),
+                side: Some(OrderSide::Sell),
+                lots_requested: 4,
+                lots_executed: 0,
                 status: OrderExecutionStatus::Rejected,
                 status_cause: Some(ProviderStatusCause { code: 15 }),
             },

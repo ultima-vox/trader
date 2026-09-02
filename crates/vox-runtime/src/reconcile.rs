@@ -55,6 +55,11 @@ pub struct ReconciliationReport {
     pub active_stop_count: usize,
     pub deduplicated_event_count: u64,
     pub completed_at_unix_ms: i64,
+    /// Broker-authoritative facts reused by #21. This avoids duplicate unary reads per order.
+    pub portfolio: crate::model::PortfolioFact,
+    pub positions: Vec<crate::model::PositionFact>,
+    pub active_orders: Vec<crate::model::OrderFact>,
+    pub snapshot_observed_at_unix_ms: i64,
 }
 
 pub struct Reconciler<R, S, M> {
@@ -306,6 +311,10 @@ where
                 .count(),
             deduplicated_event_count,
             completed_at_unix_ms: now,
+            portfolio: snapshot.portfolio,
+            positions: snapshot.positions,
+            active_orders: snapshot.active_orders,
+            snapshot_observed_at_unix_ms: snapshot.observed_at_unix_ms,
         })
     }
 

@@ -84,6 +84,7 @@ pub struct AttachedBackends {
     pub execution: bool,
     pub market_data: bool,
     pub connections: bool,
+    pub risk: bool,
 }
 
 impl CapabilitySet {
@@ -148,6 +149,17 @@ impl CapabilitySet {
                 owner: "#17".to_owned(),
             });
         }
+        if attached.risk {
+            supported.push(Capability::RiskVerdict);
+        } else {
+            unavailable.push(UnavailableCapability {
+                capability: Capability::RiskVerdict,
+                reason:
+                    "no risk engine contract exists; new_exposure_allowed is the only safety fact"
+                        .to_owned(),
+                owner: "#21".to_owned(),
+            });
+        }
         for (capability, reason, owner) in [
             (
                 Capability::ProtectionDefaults,
@@ -163,11 +175,6 @@ impl CapabilitySet {
                 Capability::Rbac,
                 "role and permission read model has no contract",
                 "#17",
-            ),
-            (
-                Capability::RiskVerdict,
-                "no risk engine contract exists; new_exposure_allowed is the only safety fact",
-                "#21",
             ),
             (
                 Capability::PortfolioValuation,
@@ -299,6 +306,25 @@ mod tests {
             !set.unavailable
                 .iter()
                 .any(|item| item.capability == Capability::ConnectionManagement)
+        );
+    }
+
+    #[test]
+    fn attached_risk_port_advertises_risk_verdict() {
+        let set = CapabilitySet::without_backend_owners(
+            ProviderDto::TInvest,
+            BrokerEnvironment::Sandbox,
+            None,
+            AttachedBackends {
+                risk: true,
+                ..AttachedBackends::default()
+            },
+        );
+        assert!(set.supported.contains(&Capability::RiskVerdict));
+        assert!(
+            !set.unavailable
+                .iter()
+                .any(|item| item.capability == Capability::RiskVerdict)
         );
     }
 }

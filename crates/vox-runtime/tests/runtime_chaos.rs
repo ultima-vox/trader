@@ -17,10 +17,10 @@ use vox_runtime::{
     CredentialResolverPort, ExecutionPort, ExecutionResult, ExecutionStreamPort, HealthReadPort,
     InMemoryMetrics, JournalState, MetricLabel, MetricName, MutationEvidence, MutationKind,
     MutationRecord, OpaqueRef, OperationFact, OperationsPage, OrderExecutionStatus, OrderFact,
-    PortfolioFact, Provider, ReasonCode, ReconciliationConfig, RuntimeConfig, RuntimeCoordinator,
-    RuntimeEnvironment, RuntimeError, RuntimeExecutionCommand, RuntimeExecutionPurpose,
-    RuntimeScope, RuntimeState, RuntimeStore, SqliteRuntimeStore, StopExecutionStatus, StopFact,
-    StreamKind, StreamSignal,
+    PortfolioFact, Provider, ReasonCode, ReconciliationConfig, RiskAdmission, RiskAdmissionError,
+    RiskAdmissionPort, RuntimeConfig, RuntimeCoordinator, RuntimeEnvironment, RuntimeError,
+    RuntimeExecutionCommand, RuntimeExecutionPurpose, RuntimeScope, RuntimeState, RuntimeStore,
+    SqliteRuntimeStore, StopExecutionStatus, StopFact, StreamKind, StreamSignal,
 };
 
 #[derive(Clone)]
@@ -46,6 +46,7 @@ impl FakeSnapshot {
                 account_id: account_id.into(),
                 total_portfolio_valuation: None,
                 total_currency_valuation: None,
+                broker_daily_yield: None,
                 cash_balances: BTreeMap::new(),
                 broker_observed_at_unix_ms: Some(1),
             },
@@ -280,6 +281,48 @@ impl ExecutionStreamPort for FakeStreams {
     }
 }
 
+struct FakeRiskAdmission;
+
+#[async_trait]
+impl RiskAdmissionPort for FakeRiskAdmission {
+    async fn admit(
+        &self,
+        _: &RuntimeScope,
+        _: vox_runtime::RuntimeExecutionPurpose,
+        command: &RuntimeExecutionCommand,
+        logical_request_id: &str,
+    ) -> Result<RiskAdmission, RiskAdmissionError> {
+        let approved_delta_lots = match command {
+            RuntimeExecutionCommand::RegularOrder(command)
+            | RuntimeExecutionCommand::PostOrderAsync(command) => match command.side {
+                OrderSide::Buy => command.quantity_lots,
+                OrderSide::Sell => -command.quantity_lots,
+            },
+            RuntimeExecutionCommand::ReplaceOrder(command) => command.quantity_lots,
+            RuntimeExecutionCommand::PostStopOrder(command)
+            | RuntimeExecutionCommand::ProtectionLeg(command) => {
+                let _ = command;
+                0
+            }
+            RuntimeExecutionCommand::CancelOrder(_)
+            | RuntimeExecutionCommand::CancelStopOrder(_) => 0,
+        };
+        let reservation_id = matches!(
+            command,
+            RuntimeExecutionCommand::RegularOrder(_)
+                | RuntimeExecutionCommand::PostOrderAsync(_)
+                | RuntimeExecutionCommand::ReplaceOrder(_)
+        )
+        .then(|| format!("test-reservation:{logical_request_id}"));
+        Ok(RiskAdmission {
+            decision_id: format!("test-risk:{logical_request_id}"),
+            reservation_id,
+            policy_revision: 1,
+            approved_delta_lots,
+        })
+    }
+}
+
 struct FakeCredential {
     valid: AtomicBool,
     execution_authorized: AtomicBool,
@@ -355,6 +398,7 @@ impl Harness {
             execution.clone(),
             streams.clone(),
             credentials.clone(),
+            Arc::new(FakeRiskAdmission),
             metrics.clone(),
             ReconciliationConfig {
                 max_safe_read_attempts: 3,
@@ -521,6 +565,9 @@ async fn unknown_survives_restart_resolves_from_direct_readback_without_replay()
             broker_order_id: "broker-recovered".into(),
             logical_request_id: Some("request-unknown".into()),
             instrument_uid: "instrument-1".into(),
+            side: None,
+            lots_requested: 0,
+            lots_executed: 0,
             status: OrderExecutionStatus::New,
             status_cause: None,
         };
@@ -539,6 +586,7 @@ async fn unknown_survives_restart_resolves_from_direct_readback_without_replay()
         execution.clone(),
         streams,
         credentials,
+        Arc::new(FakeRiskAdmission),
         metrics,
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
@@ -579,6 +627,7 @@ async fn cancel_absence_never_fabricates_rejection_or_success()
         execution.clone(),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
@@ -624,6 +673,9 @@ async fn partial_fill_operation_does_not_resolve_ambiguous_cancel_until_terminal
         broker_order_id: "old-order".into(),
         logical_request_id: Some("original-post".into()),
         instrument_uid: "instrument-1".into(),
+        side: None,
+        lots_requested: 0,
+        lots_executed: 0,
         status: OrderExecutionStatus::PartiallyFilled,
         status_cause: None,
     };
@@ -647,6 +699,7 @@ async fn partial_fill_operation_does_not_resolve_ambiguous_cancel_until_terminal
         Arc::new(FakeExecution::new([])),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
@@ -662,6 +715,9 @@ async fn partial_fill_operation_does_not_resolve_ambiguous_cancel_until_terminal
             broker_order_id: "old-order".into(),
             logical_request_id: Some("original-post".into()),
             instrument_uid: "instrument-1".into(),
+            side: None,
+            lots_requested: 0,
+            lots_executed: 0,
             status: OrderExecutionStatus::Cancelled,
             status_cause: None,
         }];
@@ -712,6 +768,9 @@ async fn old_order_fill_does_not_resolve_replace_until_exact_replacement_identit
         broker_order_id: "old-order".into(),
         logical_request_id: Some("original-post".into()),
         instrument_uid: "instrument-1".into(),
+        side: None,
+        lots_requested: 0,
+        lots_executed: 0,
         status: OrderExecutionStatus::Filled,
         status_cause: None,
     };
@@ -734,6 +793,7 @@ async fn old_order_fill_does_not_resolve_replace_until_exact_replacement_identit
         Arc::new(FakeExecution::new([])),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
@@ -748,6 +808,9 @@ async fn old_order_fill_does_not_resolve_replace_until_exact_replacement_identit
             broker_order_id: "replacement-order".into(),
             logical_request_id: Some("replace-1".into()),
             instrument_uid: "instrument-1".into(),
+            side: None,
+            lots_requested: 0,
+            lots_executed: 0,
             status: OrderExecutionStatus::New,
             status_cause: None,
         };
@@ -790,6 +853,9 @@ async fn manual_order_and_orphan_stop_are_preserved_and_halt_runtime()
         broker_order_id: "manual-order".into(),
         logical_request_id: None,
         instrument_uid: "instrument-1".into(),
+        side: None,
+        lots_requested: 0,
+        lots_executed: 0,
         status: OrderExecutionStatus::New,
         status_cause: None,
     });
@@ -1228,6 +1294,9 @@ async fn restart_with_vox_owned_open_order_and_stop_converges_without_mutation()
         broker_order_id: "broker-owned-order".into(),
         logical_request_id: Some("owned-order".into()),
         instrument_uid: "instrument-1".into(),
+        side: None,
+        lots_requested: 0,
+        lots_executed: 0,
         status: OrderExecutionStatus::New,
         status_cause: None,
     });
@@ -1247,6 +1316,7 @@ async fn restart_with_vox_owned_open_order_and_stop_converges_without_mutation()
         execution.clone(),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
@@ -1311,6 +1381,7 @@ async fn protection_legs_resolve_independently_and_partial_plan_stays_halted()
         Arc::new(FakeExecution::new([])),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
@@ -1352,6 +1423,7 @@ async fn corrupt_checkpoint_rebuilds_but_corrupt_unknown_evidence_fails_closed()
         Arc::new(FakeExecution::new([])),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
@@ -1391,6 +1463,7 @@ async fn corrupt_checkpoint_rebuilds_but_corrupt_unknown_evidence_fails_closed()
         Arc::new(FakeExecution::new([])),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),
@@ -1580,6 +1653,7 @@ async fn ambiguous_post_stop_restart_never_fuzzy_matches_or_replays()
         execution.clone(),
         Arc::new(FakeStreams::default()),
         Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
         Arc::new(InMemoryMetrics::default()),
         ReconciliationConfig::default(),
         RuntimeConfig::default(),

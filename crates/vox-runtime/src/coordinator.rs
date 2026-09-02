@@ -16,8 +16,8 @@ use crate::model::{
 use crate::policy::RuntimeStateMachine;
 use crate::ports::{
     BrokerPortError, CredentialResolverPort, ExecutionPort, ExecutionResult, ExecutionStreamPort,
-    HealthReadPort, MetricLabel, MetricName, MetricsPort, RuntimeExecutionPurpose, RuntimeStore,
-    StoreError, StreamSignal,
+    HealthReadPort, MetricLabel, MetricName, MetricsPort, RiskAdmissionError, RiskAdmissionPort,
+    RiskDispatchOutcome, RuntimeExecutionPurpose, RuntimeStore, StoreError, StreamSignal,
 };
 use crate::reconcile::{Reconciler, ReconciliationError, ReconciliationReport};
 
@@ -48,6 +48,7 @@ pub struct RuntimeCoordinator<R, E, X, C, S, M> {
     execution: Arc<E>,
     streams: Arc<X>,
     credentials: Arc<C>,
+    risk_admission: Arc<dyn RiskAdmissionPort>,
     metrics: Arc<M>,
     config: RuntimeConfig,
     owner_id: String,
@@ -99,6 +100,7 @@ where
         execution: Arc<E>,
         streams: Arc<X>,
         credentials: Arc<C>,
+        risk_admission: Arc<dyn RiskAdmissionPort>,
         metrics: Arc<M>,
         reconciliation_config: crate::reconcile::ReconciliationConfig,
         config: RuntimeConfig,
@@ -129,6 +131,7 @@ where
             execution,
             streams,
             credentials,
+            risk_admission,
             metrics,
             config,
             owner_id: uuid::Uuid::new_v4().to_string(),
@@ -308,7 +311,7 @@ where
         correlation_id: impl Into<String>,
         purpose: RuntimeExecutionPurpose,
     ) -> Result<DispatchReceipt, RuntimeError> {
-        self.ensure_execution_allowed(purpose).await?;
+        self.ensure_execution_allowed(purpose, &command).await?;
         let logical_request_id = logical_request_id.into();
         if command.account_id() != self.scope.broker_account_id {
             return Err(RuntimeError::Safety(
@@ -323,11 +326,88 @@ where
                 "execution command request identity does not match runtime logical identity".into(),
             ));
         }
-        let permit = self
-            .command_slots
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| RuntimeError::CommandQueueFull)?;
+        let admission = self
+            .risk_admission
+            .admit(&self.scope, purpose, &command, &logical_request_id)
+            .await?;
+        let exposure_bearing = matches!(
+            command,
+            RuntimeExecutionCommand::RegularOrder(_)
+                | RuntimeExecutionCommand::PostOrderAsync(_)
+                | RuntimeExecutionCommand::ReplaceOrder(_)
+        );
+        if admission.decision_id.trim().is_empty()
+            || (exposure_bearing
+                && (admission.approved_delta_lots == 0
+                    || admission
+                        .reservation_id
+                        .as_deref()
+                        .is_none_or(str::is_empty)))
+            || (!exposure_bearing
+                && (admission.approved_delta_lots != 0 || admission.reservation_id.is_some()))
+        {
+            if admission.reservation_id.is_some() {
+                self.record_risk_dispatch_outcome(
+                    &logical_request_id,
+                    RiskDispatchOutcome::Rejected,
+                )
+                .await?;
+            }
+            return Err(RuntimeError::RiskAdmission(
+                RiskAdmissionError::Unavailable(
+                    "risk admission returned an incomplete approval".into(),
+                ),
+            ));
+        }
+        let command = match apply_risk_approval(command, admission.approved_delta_lots) {
+            Ok(command) => command,
+            Err(error) => {
+                self.record_risk_dispatch_outcome(
+                    &logical_request_id,
+                    RiskDispatchOutcome::Rejected,
+                )
+                .await?;
+                return Err(error);
+            }
+        };
+        tracing::info!(
+            event = "risk_admission_granted",
+            runtime_epoch = self.current_epoch()?,
+            provider = ?self.scope.provider,
+            environment = ?self.scope.environment,
+            account_scope = %self.scope.redacted_account_id(),
+            logical_request_id = %logical_request_id,
+            risk_decision_id = %admission.decision_id,
+            risk_reservation_id = ?admission.reservation_id,
+            risk_policy_revision = admission.policy_revision,
+            approved_delta_lots = admission.approved_delta_lots,
+        );
+        let permit = match self.command_slots.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                self.record_risk_dispatch_outcome(
+                    &logical_request_id,
+                    RiskDispatchOutcome::Rejected,
+                )
+                .await?;
+                return Err(RuntimeError::CommandQueueFull);
+            }
+        };
+        if let Err(error) = self
+            .risk_admission
+            .validate_before_dispatch(
+                &self.scope,
+                purpose,
+                &command,
+                &logical_request_id,
+                &admission,
+            )
+            .await
+        {
+            self.record_risk_dispatch_outcome(&logical_request_id, RiskDispatchOutcome::Rejected)
+                .await?;
+            return Err(RuntimeError::RiskAdmission(error));
+        }
         self.metrics.set_gauge(
             MetricName::RuntimeCommandQueueDepth,
             &[],
@@ -358,9 +438,29 @@ where
         logical_request_id: String,
         correlation_id: String,
     ) -> Result<DispatchReceipt, RuntimeError> {
-        let epoch = self.current_epoch()?;
-        let now = now_unix_ms()?;
-        let prepared = MutationRecord::prepared(
+        let epoch = match self.current_epoch() {
+            Ok(epoch) => epoch,
+            Err(error) => {
+                self.record_risk_dispatch_outcome(
+                    &logical_request_id,
+                    RiskDispatchOutcome::Rejected,
+                )
+                .await?;
+                return Err(error);
+            }
+        };
+        let now = match now_unix_ms() {
+            Ok(now) => now,
+            Err(error) => {
+                self.record_risk_dispatch_outcome(
+                    &logical_request_id,
+                    RiskDispatchOutcome::Rejected,
+                )
+                .await?;
+                return Err(error);
+            }
+        };
+        let prepared = match MutationRecord::prepared(
             &self.scope,
             logical_request_id.clone(),
             command.kind(),
@@ -368,23 +468,50 @@ where
             correlation_id,
             epoch,
             now,
-        )?;
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.record_risk_dispatch_outcome(
+                    &logical_request_id,
+                    RiskDispatchOutcome::Rejected,
+                )
+                .await?;
+                return Err(error.into());
+            }
+        };
         let inserted = store_call(self.store.clone(), {
             let prepared = prepared.clone();
             move |store| store.insert_mutation(&prepared)
         })
         .await;
-        self.require_store(inserted, "failed to persist mutation intent")
-            .await?;
+        if let Err(error) = self
+            .require_store(inserted, "failed to persist mutation intent")
+            .await
+        {
+            self.record_risk_dispatch_outcome(&logical_request_id, RiskDispatchOutcome::Rejected)
+                .await?;
+            return Err(error);
+        }
         let fenced = store_call(self.store.clone(), {
             let scope_key = self.scope.key();
             let logical_request_id = logical_request_id.clone();
             move |store| store.claim_dispatch_unknown(&scope_key, &logical_request_id, epoch, now)
         })
         .await;
-        let fenced = self
+        let fenced = match self
             .require_store(fenced, "failed to persist pre-dispatch UNKNOWN fence")
-            .await?;
+            .await
+        {
+            Ok(fenced) => fenced,
+            Err(error) => {
+                self.record_risk_dispatch_outcome(
+                    &logical_request_id,
+                    RiskDispatchOutcome::Rejected,
+                )
+                .await?;
+                return Err(error);
+            }
+        };
         tracing::info!(
             event = "mutation_dispatch_fenced",
             runtime_epoch = epoch,
@@ -425,6 +552,11 @@ where
                         None,
                     )
                     .await?;
+                self.record_risk_dispatch_outcome(
+                    &logical_request_id,
+                    RiskDispatchOutcome::Acknowledged,
+                )
+                .await?;
                 Ok(receipt(record))
             }
             Ok(ExecutionResult::Rejected {
@@ -438,6 +570,11 @@ where
                         None,
                     )
                     .await?;
+                self.record_risk_dispatch_outcome(
+                    &logical_request_id,
+                    RiskDispatchOutcome::Rejected,
+                )
+                .await?;
                 Ok(receipt(record))
             }
             Ok(ExecutionResult::UnknownAfterDispatch {
@@ -458,6 +595,17 @@ where
                     "capital mutation remains UNKNOWN_AFTER_DISPATCH",
                 )
                 .await?;
+                if let Err(error) = self
+                    .risk_admission
+                    .record_dispatch_outcome(
+                        &self.scope,
+                        &logical_request_id,
+                        RiskDispatchOutcome::UnknownAfterDispatch,
+                    )
+                    .await
+                {
+                    tracing::error!(error = %error, "risk reservation UNKNOWN transition failed");
+                }
                 Err(RuntimeError::UnknownAfterDispatch(logical_request_id))
             }
             Err(error) => {
@@ -467,6 +615,17 @@ where
                     "mutation transport failed after durable dispatch fence",
                 )
                 .await?;
+                if let Err(risk_error) = self
+                    .risk_admission
+                    .record_dispatch_outcome(
+                        &self.scope,
+                        &logical_request_id,
+                        RiskDispatchOutcome::UnknownAfterDispatch,
+                    )
+                    .await
+                {
+                    tracing::error!(error = %risk_error, "risk reservation transport-UNKNOWN transition failed");
+                }
                 Err(RuntimeError::UnknownTransport {
                     logical_request_id,
                     source: error,
@@ -583,12 +742,21 @@ where
     async fn ensure_execution_allowed(
         &self,
         purpose: RuntimeExecutionPurpose,
+        command: &RuntimeExecutionCommand,
     ) -> Result<(), RuntimeError> {
         let state = self.state.lock().await.state();
-        if state != RuntimeState::Ready
-            || !self.connected.load(Ordering::SeqCst)
-            || self.reconciliation_dirty.load(Ordering::SeqCst)
-            || self.reconciliation_running.load(Ordering::SeqCst)
+        let cleanup = matches!(
+            command,
+            RuntimeExecutionCommand::CancelOrder(_)
+                | RuntimeExecutionCommand::PostStopOrder(_)
+                | RuntimeExecutionCommand::CancelStopOrder(_)
+                | RuntimeExecutionCommand::ProtectionLeg(_)
+        );
+        if !self.connected.load(Ordering::SeqCst)
+            || (!cleanup
+                && (state != RuntimeState::Ready
+                    || self.reconciliation_dirty.load(Ordering::SeqCst)
+                    || self.reconciliation_running.load(Ordering::SeqCst)))
         {
             return Err(RuntimeError::ExecutionGateClosed);
         }
@@ -715,6 +883,15 @@ where
         &self,
         report: &ReconciliationReport,
     ) -> Result<(), RuntimeError> {
+        if let Err(error) = self.risk_admission.reconcile(&self.scope, report).await {
+            self.transition(
+                RuntimeState::Halted,
+                ReasonCode::PersistenceFailure,
+                "risk reservation reconciliation failed",
+            )
+            .await?;
+            return Err(RuntimeError::RiskAdmission(error));
+        }
         self.update_health(|health| {
             health.last_successful_reconciliation_at_unix_ms = Some(report.completed_at_unix_ms);
             health.reconciliation_age_ms = Some(0);
@@ -731,6 +908,27 @@ where
         };
         self.transition(report.resulting_state, report.reason_code, &detail)
             .await
+    }
+
+    async fn record_risk_dispatch_outcome(
+        &self,
+        logical_request_id: &str,
+        outcome: RiskDispatchOutcome,
+    ) -> Result<(), RuntimeError> {
+        if let Err(error) = self
+            .risk_admission
+            .record_dispatch_outcome(&self.scope, logical_request_id, outcome)
+            .await
+        {
+            self.transition(
+                RuntimeState::Halted,
+                ReasonCode::PersistenceFailure,
+                "risk reservation outcome persistence failed",
+            )
+            .await?;
+            return Err(RuntimeError::RiskAdmission(error));
+        }
+        Ok(())
     }
 
     async fn transition(
@@ -1215,6 +1413,51 @@ const fn required_stream(stream: StreamKind) -> bool {
     )
 }
 
+fn apply_risk_approval(
+    mut command: RuntimeExecutionCommand,
+    approved_delta_lots: i64,
+) -> Result<RuntimeExecutionCommand, RuntimeError> {
+    match &mut command {
+        RuntimeExecutionCommand::RegularOrder(order)
+        | RuntimeExecutionCommand::PostOrderAsync(order) => {
+            let expected_sign = match order.side {
+                vox_domain::OrderSide::Buy => 1,
+                vox_domain::OrderSide::Sell => -1,
+            };
+            if approved_delta_lots.signum() != expected_sign {
+                return Err(RuntimeError::RiskAdmission(RiskAdmissionError::Stale(
+                    "approved direction does not match execution command".into(),
+                )));
+            }
+            order.quantity_lots =
+                i64::try_from(approved_delta_lots.unsigned_abs()).map_err(|_| {
+                    RuntimeError::RiskAdmission(RiskAdmissionError::Stale(
+                        "approved quantity is not representable".into(),
+                    ))
+                })?;
+        }
+        RuntimeExecutionCommand::ReplaceOrder(order) => {
+            order.quantity_lots =
+                i64::try_from(approved_delta_lots.unsigned_abs()).map_err(|_| {
+                    RuntimeError::RiskAdmission(RiskAdmissionError::Stale(
+                        "approved replacement quantity is not representable".into(),
+                    ))
+                })?;
+        }
+        RuntimeExecutionCommand::CancelOrder(_)
+        | RuntimeExecutionCommand::PostStopOrder(_)
+        | RuntimeExecutionCommand::CancelStopOrder(_)
+        | RuntimeExecutionCommand::ProtectionLeg(_) => {
+            if approved_delta_lots != 0 {
+                return Err(RuntimeError::RiskAdmission(RiskAdmissionError::Stale(
+                    "maintenance approval unexpectedly changes exposure".into(),
+                )));
+            }
+        }
+    }
+    Ok(command)
+}
+
 fn receipt(record: MutationRecord) -> DispatchReceipt {
     DispatchReceipt {
         logical_request_id: record.logical_request_id,
@@ -1288,12 +1531,54 @@ where
         .map_err(|error| StoreError::BlockingTask(error.to_string()))?
 }
 
+#[cfg(test)]
+mod risk_approval_tests {
+    use super::*;
+    use vox_domain::{
+        ExecutionPriceConvention, FixedPoint, OrderSide, RegularOrderCommand, RegularOrderType,
+    };
+
+    fn order(side: OrderSide, quantity_lots: i64) -> RuntimeExecutionCommand {
+        RuntimeExecutionCommand::RegularOrder(RegularOrderCommand {
+            account_id: "account-1".into(),
+            instrument_id: "instrument-1".into(),
+            client_request_id: "request-1".into(),
+            quantity_lots,
+            price: Some(FixedPoint::from_units_nano(10, 0).expect("price")),
+            price_convention: ExecutionPriceConvention::SettlementCurrency,
+            side,
+            order_type: RegularOrderType::Limit,
+            time_in_force: None,
+            confirm_margin_trade: false,
+        })
+    }
+
+    #[test]
+    fn resize_changes_dispatched_quantity_to_exact_approved_delta() {
+        let command = apply_risk_approval(order(OrderSide::Buy, 10), 4).expect("approval");
+        let RuntimeExecutionCommand::RegularOrder(command) = command else {
+            panic!("regular order");
+        };
+        assert_eq!(command.quantity_lots, 4);
+    }
+
+    #[test]
+    fn approval_cannot_reverse_command_direction() {
+        assert!(matches!(
+            apply_risk_approval(order(OrderSide::Sell, 10), 4),
+            Err(RuntimeError::RiskAdmission(RiskAdmissionError::Stale(_)))
+        ));
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]
     Broker(#[from] BrokerPortError),
+    #[error(transparent)]
+    RiskAdmission(#[from] RiskAdmissionError),
     #[error(transparent)]
     Reconciliation(#[from] ReconciliationError),
     #[error(transparent)]

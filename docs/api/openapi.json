@@ -2058,6 +2058,198 @@
         }
       }
     },
+    "/api/v1/risk/reservations": {
+      "get": {
+        "tags": [
+          "risk"
+        ],
+        "summary": "Active risk reservations for one execution scope.",
+        "operationId": "risk_reservations",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "description": "Provider of the connection, for example `T_INVEST`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "description": "Broker environment: `SANDBOX` or `PRODUCTION`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BrokerEnvironment"
+            }
+          },
+          {
+            "name": "broker_connection_id",
+            "in": "query",
+            "description": "Application connection identity. Never a credential.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "description": "Canonical Vox account/binding identity.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active risk reservations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RiskReservationDto"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No risk queries port is attached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/risk/state": {
+      "post": {
+        "tags": [
+          "risk"
+        ],
+        "summary": "Change the risk state for one execution scope.",
+        "operationId": "change_risk_state",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRiskStateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated risk status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskStatusDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale policy revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No risk commands port is attached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/risk/status": {
+      "get": {
+        "tags": [
+          "risk"
+        ],
+        "summary": "Current risk status for one execution scope.",
+        "operationId": "risk_status",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "description": "Provider of the connection, for example `T_INVEST`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProviderDto"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "description": "Broker environment: `SANDBOX` or `PRODUCTION`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BrokerEnvironment"
+            }
+          },
+          {
+            "name": "broker_connection_id",
+            "in": "query",
+            "description": "Application connection identity. Never a credential.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "description": "Canonical Vox account/binding identity.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current risk status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskStatusDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No risk queries port is attached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runtime": {
       "get": {
         "tags": [
@@ -2774,6 +2966,32 @@
             "format": "int64",
             "description": "Compare-and-swap token returned by the latest authorization read.",
             "minimum": 0
+          }
+        }
+      },
+      "ChangeRiskStateRequest": {
+        "type": "object",
+        "required": [
+          "scope",
+          "state",
+          "expected_policy_revision",
+          "reason"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/ExecutionScope"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RiskStateDto"
+          },
+          "expected_policy_revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimistic concurrency: stale operator state cannot overwrite a newer control action.",
+            "minimum": 0
+          },
+          "reason": {
+            "type": "string"
           }
         }
       },
@@ -3693,6 +3911,17 @@
             "$ref": "#/components/schemas/MutationDecisionDto",
             "description": "What the backend says the client may do next."
           },
+          "risk_decision": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RiskDecisionDto",
+                "description": "Canonical #21 verdict which authorized this command."
+              }
+            ]
+          },
           "correlation_id": {
             "type": "string"
           },
@@ -4498,6 +4727,314 @@
           "confirm_margin_trade": {
             "type": "boolean",
             "description": "Explicit broker margin acknowledgement. Never inferred by server."
+          }
+        }
+      },
+      "ReservationStateDto": {
+        "type": "string",
+        "enum": [
+          "ACTIVE",
+          "PARTIALLY_CONSUMED",
+          "CONSUMED",
+          "RELEASED",
+          "UNKNOWN_HELD",
+          "ORPHANED"
+        ]
+      },
+      "RiskActionKindDto": {
+        "type": "string",
+        "enum": [
+          "DIRECTIONAL_ORDER",
+          "REPLACE_DIRECTIONAL_ORDER",
+          "CANCEL_ORDER",
+          "PROTECTION_MAINTENANCE",
+          "CANCEL_PROTECTION"
+        ]
+      },
+      "RiskDecisionDto": {
+        "type": "object",
+        "required": [
+          "decision_id",
+          "policy_revision",
+          "action",
+          "requested_delta_lots",
+          "approved_delta_lots",
+          "outcome",
+          "reasons",
+          "validity"
+        ],
+        "properties": {
+          "decision_id": {
+            "type": "string"
+          },
+          "policy_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "action": {
+            "$ref": "#/components/schemas/RiskActionKindDto"
+          },
+          "requested_delta_lots": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "approved_delta_lots": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/RiskOutcomeDto"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RiskReasonDto"
+            }
+          },
+          "reservation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "validity": {
+            "$ref": "#/components/schemas/RiskValidityDto"
+          }
+        }
+      },
+      "RiskLimitUsageDto": {
+        "type": "object",
+        "required": [
+          "name",
+          "used",
+          "unit"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "used": {
+            "type": "string",
+            "description": "Exact decimal string in the unit named by `unit`; never a binary float."
+          },
+          "limit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": "string"
+          }
+        }
+      },
+      "RiskOutcomeDto": {
+        "type": "string",
+        "enum": [
+          "APPROVE",
+          "RESIZE",
+          "REJECT",
+          "REDUCE_ONLY",
+          "HALT"
+        ]
+      },
+      "RiskReasonCodeDto": {
+        "type": "string",
+        "enum": [
+          "APPROVED",
+          "RESIZED_TO_PROVIDER_LIMIT",
+          "RESIZED_TO_POLICY_LIMIT",
+          "INVALID_QUANTITY",
+          "INSTRUMENT_UNAVAILABLE",
+          "INSTRUMENT_NOT_TRADABLE",
+          "PRICE_UNAVAILABLE",
+          "POSITION_LOT_MISMATCH",
+          "CRITICAL_INPUT_MISSING",
+          "RUNTIME_NOT_READY",
+          "EXECUTION_UNAUTHORIZED",
+          "AUTHORIZATION_REVISION_CHANGED",
+          "POLICY_REVISION_CHANGED",
+          "RECONCILIATION_REVISION_CHANGED",
+          "POSITION_REVISION_CHANGED",
+          "ORDER_REVISION_CHANGED",
+          "INSTRUMENT_CONSTRAINT_REVISION_CHANGED",
+          "MARKET_DATA_MISSING",
+          "MARKET_DATA_STALE",
+          "UNKNOWN_MUTATION_CONFLICT",
+          "REDUCE_ONLY",
+          "HALTED",
+          "MARGIN_NOT_ALLOWED",
+          "MARGIN_CONFIRMATION_REQUIRED",
+          "MARGIN_UTILIZATION_EXCEEDED",
+          "PROVIDER_LIMIT_UNAVAILABLE",
+          "PROVIDER_LIMIT_EXCEEDED",
+          "MAX_SINGLE_ORDER_EXCEEDED",
+          "MAX_POSITION_EXCEEDED",
+          "MAX_GROSS_EXPOSURE_EXCEEDED",
+          "MAX_NET_EXPOSURE_EXCEEDED",
+          "MAX_INSTRUMENT_EXPOSURE_EXCEEDED",
+          "DAILY_LOSS_EXCEEDED",
+          "PROTECTION_REQUIRED",
+          "KILL_SWITCH_ACTIVE",
+          "PERSISTENCE_FAILURE"
+        ]
+      },
+      "RiskReasonDto": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/RiskReasonCodeDto"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "RiskReservationDto": {
+        "type": "object",
+        "required": [
+          "reservation_id",
+          "scope",
+          "instrument_id",
+          "logical_request_id",
+          "remaining_delta_lots",
+          "state",
+          "updated_at_unix_ms"
+        ],
+        "properties": {
+          "reservation_id": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ExecutionScope"
+          },
+          "instrument_id": {
+            "type": "string"
+          },
+          "logical_request_id": {
+            "type": "string"
+          },
+          "remaining_delta_lots": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ReservationStateDto"
+          },
+          "updated_at_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RiskStateDto": {
+        "type": "string",
+        "enum": [
+          "NORMAL",
+          "WARNING",
+          "REDUCE_ONLY",
+          "HALTED",
+          "KILL_SWITCH"
+        ]
+      },
+      "RiskStatusDto": {
+        "type": "object",
+        "required": [
+          "scope",
+          "state",
+          "policy_revision",
+          "limits",
+          "reasons",
+          "updated_at_unix_ms"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/ExecutionScope"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RiskStateDto"
+          },
+          "policy_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "limits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RiskLimitUsageDto"
+            }
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RiskReasonDto"
+            }
+          },
+          "updated_at_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RiskValidityDto": {
+        "type": "object",
+        "required": [
+          "runtime_epoch",
+          "reconciliation_revision",
+          "position_revision",
+          "order_revision",
+          "instrument_constraints_revision",
+          "policy_revision",
+          "execution_authorization_revision"
+        ],
+        "properties": {
+          "runtime_epoch": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "reconciliation_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "position_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "order_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "market_data_as_of_unix_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "instrument_constraints_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "policy_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "execution_authorization_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -5440,6 +5977,10 @@
     {
       "name": "market",
       "description": "Provider-neutral market data, projected over the #8 adapter layer"
+    },
+    {
+      "name": "risk",
+      "description": "Risk state and policy mutations"
     }
   ]
 }

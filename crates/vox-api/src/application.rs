@@ -25,6 +25,7 @@ use crate::contract::market::{
     CandleIntervalDto, CandlesDto, InstrumentSummaryDto, OrderBookDto, QuoteDto, SessionDto,
     TradeTickDto,
 };
+use crate::contract::risk::{RiskReservationDto, RiskStatusDto};
 use crate::contract::runtime::RuntimeHealthDto;
 use crate::contract::scope::{BrokerEnvironment, ExecutionScope, ProviderDto};
 use crate::error::ApiError;
@@ -186,6 +187,35 @@ pub trait SessionAuthentication: Send + Sync {
     ) -> Result<EstablishedSession, ApiError>;
 }
 
+/// Risk state and policy queries, owned by #21.
+///
+/// The transport reads risk state through this port; the risk engine itself lives behind
+/// the application boundary. Handlers never derive risk verdicts locally.
+#[async_trait]
+pub trait RiskQueries: Send + Sync {
+    /// Current risk status for one execution scope.
+    async fn risk_status(&self, scope: &ExecutionScope) -> Result<RiskStatusDto, ApiError>;
+    /// Active reservations for one execution scope.
+    async fn active_reservations(
+        &self,
+        scope: &ExecutionScope,
+    ) -> Result<Vec<RiskReservationDto>, ApiError>;
+}
+
+/// Risk state mutations, owned by #21.
+///
+/// Operators change risk state (for example, halting trading during anomalous conditions)
+/// through this port. The risk engine validates and persists the transition; the transport
+/// merely relays the request.
+#[async_trait]
+pub trait RiskCommands: Send + Sync {
+    /// Change the risk state for one execution scope.
+    async fn change_state(
+        &self,
+        request: crate::contract::risk::ChangeRiskStateRequest,
+    ) -> Result<RiskStatusDto, ApiError>;
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConnectionRequestContext {
     pub actor: AuthenticatedActor,
@@ -276,6 +306,8 @@ pub struct AppState {
     pub market_data: Option<Arc<dyn MarketDataQueries>>,
     pub connections: Option<Arc<dyn ConnectionAdministration>>,
     pub authentication: Option<Arc<dyn SessionAuthentication>>,
+    pub risk_queries: Option<Arc<dyn RiskQueries>>,
+    pub risk_commands: Option<Arc<dyn RiskCommands>>,
     /// Application-side live bus. Not a broker stream.
     pub events: ApplicationEventBus,
 }
@@ -301,6 +333,8 @@ impl AppState {
             market_data: None,
             connections: Some(connections),
             authentication: Some(authentication),
+            risk_queries: None,
+            risk_commands: None,
             events: ApplicationEventBus::new(),
         }
     }
@@ -317,6 +351,8 @@ impl AppState {
             market_data: None,
             connections: None,
             authentication: None,
+            risk_queries: None,
+            risk_commands: None,
             events: ApplicationEventBus::new(),
         }
     }
@@ -367,6 +403,18 @@ impl AppState {
     }
 
     #[must_use]
+    pub fn with_risk_queries(mut self, risk_queries: Arc<dyn RiskQueries>) -> Self {
+        self.risk_queries = Some(risk_queries);
+        self
+    }
+
+    #[must_use]
+    pub fn with_risk_commands(mut self, risk_commands: Arc<dyn RiskCommands>) -> Self {
+        self.risk_commands = Some(risk_commands);
+        self
+    }
+
+    #[must_use]
     pub fn capabilities(&self, account_id: Option<String>) -> CapabilitySet {
         CapabilitySet::without_backend_owners(
             self.provider,
@@ -378,6 +426,7 @@ impl AppState {
                 execution: self.execution.is_some(),
                 market_data: self.market_data.is_some(),
                 connections: self.connections.is_some(),
+                risk: self.risk_queries.is_some(),
             },
         )
     }
@@ -416,6 +465,18 @@ impl AppState {
         self.authentication.as_ref().ok_or_else(|| {
             ApiError::capability_unavailable("SESSION_AUTHENTICATION", "#47 follow-up")
         })
+    }
+
+    pub(crate) fn risk_queries_port(&self) -> Result<&Arc<dyn RiskQueries>, ApiError> {
+        self.risk_queries
+            .as_ref()
+            .ok_or_else(|| ApiError::capability_unavailable("RISK_QUERIES", "#21"))
+    }
+
+    pub(crate) fn risk_commands_port(&self) -> Result<&Arc<dyn RiskCommands>, ApiError> {
+        self.risk_commands
+            .as_ref()
+            .ok_or_else(|| ApiError::capability_unavailable("RISK_COMMANDS", "#21"))
     }
 }
 

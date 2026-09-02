@@ -11,7 +11,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use ring::digest;
 use tokio::sync::Mutex;
-use vox_api::application::{ConnectionLifecycleObserver, ExecutionCommands, RuntimeQueries};
+use vox_api::application::{
+    ConnectionLifecycleObserver, ExecutionCommands, RiskCommands, RiskQueries, RuntimeQueries,
+};
 use vox_api::binding::{AccountBindingResolver, BindingError};
 use vox_api::contract::capability::{
     AttachedBackends, Capability, CapabilitySet, UnavailableCapability,
@@ -19,6 +21,11 @@ use vox_api::contract::capability::{
 use vox_api::contract::execution::{
     CancelOrderRequest, CancelTarget, JournalStateDto, MutationKindDto, MutationReceiptDto,
     ReplaceOrderRequest, SubmitOrderRequest, SubmitProtectionRequest, SubmitStopOrderRequest,
+};
+use vox_api::contract::risk::{
+    ChangeRiskStateRequest, ReservationStateDto, RiskActionKindDto, RiskDecisionDto,
+    RiskLimitUsageDto, RiskOutcomeDto, RiskReasonCodeDto, RiskReasonDto, RiskReservationDto,
+    RiskStateDto, RiskStatusDto, RiskValidityDto,
 };
 use vox_api::contract::runtime::RuntimeHealthDto;
 use vox_api::contract::scope::{BrokerEnvironment, ExecutionScope, ProviderDto, TradingMode};
@@ -41,6 +48,7 @@ use vox_tinvest::{StoredTInvestExecutionPort, StoredTInvestReadPort, StoredTInve
 use crate::composition::{
     ProductionClientFactory, ProductionConnectionService, ProductionSecretStore,
 };
+use crate::production_risk::ProductionRiskAdapter;
 
 type ProductionCoordinator = RuntimeCoordinator<
     StoredTInvestReadPort<
@@ -70,6 +78,7 @@ type ProductionCoordinator = RuntimeCoordinator<
 struct RuntimeEntry {
     coordinator: Arc<ProductionCoordinator>,
     store: SqliteRuntimeStore,
+    risk: Arc<ProductionRiskAdapter>,
     public_scope: ExecutionScope,
 }
 
@@ -128,6 +137,16 @@ impl ProductionRuntimeRegistry {
         let streams = Arc::new(StoredTInvestStreamPort::new(Arc::clone(&self.factory)));
         let credentials = Arc::new(StoredCredentialResolver::new(Arc::clone(&self.connections)));
         let metrics = Arc::new(InMemoryMetrics::default());
+        let risk_store =
+            vox_risk::SqliteRiskStore::open(self.runtime_directory.join("risk.sqlite3"))
+                .map_err(risk_store_error)?;
+        let risk = Arc::new(ProductionRiskAdapter::new(
+            scope.account_id.clone(),
+            scope.broker_connection_id.clone(),
+            store.clone(),
+            risk_store,
+            Arc::clone(&self.factory),
+        ));
         let coordinator = RuntimeCoordinator::new(
             runtime_scope,
             store.clone(),
@@ -135,6 +154,7 @@ impl ProductionRuntimeRegistry {
             execution,
             streams,
             credentials,
+            risk.clone(),
             metrics,
             ReconciliationConfig::default(),
             RuntimeConfig {
@@ -145,6 +165,7 @@ impl ProductionRuntimeRegistry {
         let entry = Arc::new(RuntimeEntry {
             coordinator,
             store,
+            risk,
             public_scope: scope.clone(),
         });
         entries.insert(key, Arc::clone(&entry));
@@ -201,7 +222,12 @@ impl ProductionRuntimeRegistry {
                     "mutation receipt not found",
                 )
             })?;
-        mutation_receipt(&entry.store, &entry.public_scope, record)
+        let risk_decision = entry
+            .risk
+            .decision_for_request(logical_request_id)
+            .map_err(risk_admission_error)?
+            .map(risk_decision_dto);
+        mutation_receipt(&entry.store, &entry.public_scope, record, risk_decision)
     }
 
     pub async fn shutdown(&self) {
@@ -314,6 +340,7 @@ impl RuntimeQueries for ProductionRuntimeRegistry {
                 execution: true,
                 market_data: false,
                 connections: true,
+                risk: true,
             },
         );
         let scopes = self.scopes().await?;
@@ -395,6 +422,63 @@ impl RuntimeQueries for ProductionRuntimeRegistry {
             );
         }
         Ok(Some(set))
+    }
+}
+
+#[async_trait]
+impl RiskQueries for ProductionRuntimeRegistry {
+    async fn risk_status(&self, scope: &ExecutionScope) -> Result<RiskStatusDto, ApiError> {
+        let entry = self.entry(scope).await?;
+        risk_status_dto(&entry)
+    }
+
+    async fn active_reservations(
+        &self,
+        scope: &ExecutionScope,
+    ) -> Result<Vec<RiskReservationDto>, ApiError> {
+        let entry = self.entry(scope).await?;
+        entry
+            .risk
+            .active_reservations()
+            .map_err(risk_admission_error)?
+            .into_iter()
+            .map(|reservation| {
+                Ok(RiskReservationDto {
+                    reservation_id: reservation.reservation_id,
+                    scope: scope.clone(),
+                    instrument_id: reservation.instrument_id,
+                    logical_request_id: reservation.logical_request_id,
+                    remaining_delta_lots: reservation.remaining_delta_lots,
+                    state: reservation_state_dto(reservation.state),
+                    updated_at_unix_ms: reservation.updated_at_unix_ms,
+                })
+            })
+            .collect()
+    }
+}
+
+#[async_trait]
+impl RiskCommands for ProductionRuntimeRegistry {
+    async fn change_state(
+        &self,
+        request: ChangeRiskStateRequest,
+    ) -> Result<RiskStatusDto, ApiError> {
+        if request.reason.trim().is_empty() {
+            return Err(validation(
+                "reason",
+                "risk state change requires an audit reason",
+            ));
+        }
+        let entry = self.entry(&request.scope).await?;
+        entry
+            .risk
+            .replace_state(
+                request.expected_policy_revision,
+                risk_state(request.state),
+                &request.reason,
+            )
+            .map_err(risk_admission_error)?;
+        risk_status_dto(&entry)
     }
 }
 
@@ -695,6 +779,7 @@ fn mutation_receipt(
     store: &SqliteRuntimeStore,
     scope: &ExecutionScope,
     record: MutationRecord,
+    risk_decision: Option<RiskDecisionDto>,
 ) -> Result<MutationReceiptDto, ApiError> {
     let links = store
         .all_identity_links(&record.scope_key)
@@ -708,6 +793,7 @@ fn mutation_receipt(
         kind: MutationKindDto::from(record.kind),
         state,
         decision: MutationReceiptDto::decision_for(state),
+        risk_decision,
         correlation_id: record.correlation_id,
         broker_order_id: links.as_ref().and_then(|links| {
             links
@@ -740,6 +826,245 @@ fn validate_public_scope(
         ));
     }
     Ok(())
+}
+
+fn risk_status_dto(entry: &RuntimeEntry) -> Result<RiskStatusDto, ApiError> {
+    let policy = entry.risk.policy().map_err(risk_admission_error)?;
+    let reservations = entry
+        .risk
+        .active_reservations()
+        .map_err(risk_admission_error)?;
+    let reserved_lots = reservations.iter().try_fold(0_i128, |total, reservation| {
+        let remaining = i128::from(reservation.remaining_delta_lots)
+            .checked_abs()
+            .ok_or_else(|| {
+                ApiError::new(
+                    ErrorCategory::Internal,
+                    "RISK_ARITHMETIC_OVERFLOW",
+                    "risk reservation utilization overflow",
+                )
+            })?;
+        total.checked_add(remaining).ok_or_else(|| {
+            ApiError::new(
+                ErrorCategory::Internal,
+                "RISK_ARITHMETIC_OVERFLOW",
+                "risk reservation utilization overflow",
+            )
+        })
+    })?;
+    let reserved_notional = reservations.iter().try_fold(0_i128, |total, reservation| {
+        let remaining = reservation
+            .reserved_notional_nanos
+            .checked_abs()
+            .ok_or_else(|| {
+                ApiError::new(
+                    ErrorCategory::Internal,
+                    "RISK_ARITHMETIC_OVERFLOW",
+                    "risk reservation notional overflow",
+                )
+            })?;
+        total.checked_add(remaining).ok_or_else(|| {
+            ApiError::new(
+                ErrorCategory::Internal,
+                "RISK_ARITHMETIC_OVERFLOW",
+                "risk reservation notional overflow",
+            )
+        })
+    })?;
+    let (code, message) = match policy.state {
+        vox_risk::RiskState::Normal => (RiskReasonCodeDto::Approved, "normal risk state"),
+        vox_risk::RiskState::Warning => (RiskReasonCodeDto::Approved, "warning risk state"),
+        vox_risk::RiskState::ReduceOnly => {
+            (RiskReasonCodeDto::ReduceOnly, "new exposure is disabled")
+        }
+        vox_risk::RiskState::Halted => (RiskReasonCodeDto::Halted, "risk state is halted"),
+        vox_risk::RiskState::KillSwitch => (
+            RiskReasonCodeDto::KillSwitchActive,
+            "risk kill switch is active",
+        ),
+    };
+    Ok(RiskStatusDto {
+        scope: entry.public_scope.clone(),
+        state: risk_state_dto(policy.state),
+        policy_revision: policy.revision,
+        limits: vec![
+            RiskLimitUsageDto {
+                name: "active_reserved_lots".into(),
+                used: reserved_lots.to_string(),
+                limit: policy.max_position_abs_lots.map(|value| value.to_string()),
+                unit: "LOTS".into(),
+            },
+            RiskLimitUsageDto {
+                name: "active_reserved_notional".into(),
+                used: reserved_notional.to_string(),
+                limit: policy
+                    .max_gross_exposure_nanos
+                    .map(|value| value.to_string()),
+                unit: "NANOS".into(),
+            },
+        ],
+        reasons: vec![RiskReasonDto {
+            code,
+            message: message.into(),
+        }],
+        updated_at_unix_ms: now_unix_ms_api()?,
+    })
+}
+
+fn risk_state(value: RiskStateDto) -> vox_risk::RiskState {
+    match value {
+        RiskStateDto::Normal => vox_risk::RiskState::Normal,
+        RiskStateDto::Warning => vox_risk::RiskState::Warning,
+        RiskStateDto::ReduceOnly => vox_risk::RiskState::ReduceOnly,
+        RiskStateDto::Halted => vox_risk::RiskState::Halted,
+        RiskStateDto::KillSwitch => vox_risk::RiskState::KillSwitch,
+    }
+}
+
+fn risk_decision_dto(value: vox_risk::RiskDecision) -> RiskDecisionDto {
+    RiskDecisionDto {
+        decision_id: value.decision_id,
+        policy_revision: value.policy_revision,
+        action: match value.action {
+            vox_risk::RiskActionKind::DirectionalOrder => RiskActionKindDto::DirectionalOrder,
+            vox_risk::RiskActionKind::ReplaceDirectionalOrder => {
+                RiskActionKindDto::ReplaceDirectionalOrder
+            }
+            vox_risk::RiskActionKind::CancelOrder => RiskActionKindDto::CancelOrder,
+            vox_risk::RiskActionKind::ProtectionMaintenance => {
+                RiskActionKindDto::ProtectionMaintenance
+            }
+            vox_risk::RiskActionKind::CancelProtection => RiskActionKindDto::CancelProtection,
+        },
+        requested_delta_lots: value.requested_delta_lots,
+        approved_delta_lots: value.approved_delta_lots,
+        outcome: match value.outcome {
+            vox_risk::RiskOutcome::Approve => RiskOutcomeDto::Approve,
+            vox_risk::RiskOutcome::Resize => RiskOutcomeDto::Resize,
+            vox_risk::RiskOutcome::Reject => RiskOutcomeDto::Reject,
+            vox_risk::RiskOutcome::ReduceOnly => RiskOutcomeDto::ReduceOnly,
+            vox_risk::RiskOutcome::Halt => RiskOutcomeDto::Halt,
+        },
+        reasons: value
+            .reasons
+            .into_iter()
+            .map(|reason| RiskReasonDto {
+                code: risk_reason_code_dto(reason.code),
+                message: reason.message,
+            })
+            .collect(),
+        reservation_id: value.reservation_id,
+        validity: RiskValidityDto {
+            runtime_epoch: value.validity.runtime_epoch,
+            reconciliation_revision: value.validity.reconciliation_revision,
+            position_revision: value.validity.position_revision,
+            order_revision: value.validity.order_revision,
+            market_data_as_of_unix_ms: value.validity.market_data_as_of_unix_ms,
+            instrument_constraints_revision: value.validity.instrument_constraints_revision,
+            policy_revision: value.validity.policy_revision,
+            execution_authorization_revision: value.validity.execution_authorization_revision,
+        },
+    }
+}
+
+fn risk_reason_code_dto(value: vox_risk::RiskReasonCode) -> RiskReasonCodeDto {
+    match value {
+        vox_risk::RiskReasonCode::Approved => RiskReasonCodeDto::Approved,
+        vox_risk::RiskReasonCode::ResizedToProviderLimit => {
+            RiskReasonCodeDto::ResizedToProviderLimit
+        }
+        vox_risk::RiskReasonCode::ResizedToPolicyLimit => RiskReasonCodeDto::ResizedToPolicyLimit,
+        vox_risk::RiskReasonCode::InvalidQuantity => RiskReasonCodeDto::InvalidQuantity,
+        vox_risk::RiskReasonCode::InstrumentUnavailable => RiskReasonCodeDto::InstrumentUnavailable,
+        vox_risk::RiskReasonCode::InstrumentNotTradable => RiskReasonCodeDto::InstrumentNotTradable,
+        vox_risk::RiskReasonCode::PriceUnavailable => RiskReasonCodeDto::PriceUnavailable,
+        vox_risk::RiskReasonCode::PositionLotMismatch => RiskReasonCodeDto::PositionLotMismatch,
+        vox_risk::RiskReasonCode::CriticalInputMissing => RiskReasonCodeDto::CriticalInputMissing,
+        vox_risk::RiskReasonCode::RuntimeNotReady => RiskReasonCodeDto::RuntimeNotReady,
+        vox_risk::RiskReasonCode::ExecutionUnauthorized => RiskReasonCodeDto::ExecutionUnauthorized,
+        vox_risk::RiskReasonCode::AuthorizationRevisionChanged => {
+            RiskReasonCodeDto::AuthorizationRevisionChanged
+        }
+        vox_risk::RiskReasonCode::PolicyRevisionChanged => RiskReasonCodeDto::PolicyRevisionChanged,
+        vox_risk::RiskReasonCode::ReconciliationRevisionChanged => {
+            RiskReasonCodeDto::ReconciliationRevisionChanged
+        }
+        vox_risk::RiskReasonCode::PositionRevisionChanged => {
+            RiskReasonCodeDto::PositionRevisionChanged
+        }
+        vox_risk::RiskReasonCode::OrderRevisionChanged => RiskReasonCodeDto::OrderRevisionChanged,
+        vox_risk::RiskReasonCode::InstrumentConstraintRevisionChanged => {
+            RiskReasonCodeDto::InstrumentConstraintRevisionChanged
+        }
+        vox_risk::RiskReasonCode::MarketDataMissing => RiskReasonCodeDto::MarketDataMissing,
+        vox_risk::RiskReasonCode::MarketDataStale => RiskReasonCodeDto::MarketDataStale,
+        vox_risk::RiskReasonCode::UnknownMutationConflict => {
+            RiskReasonCodeDto::UnknownMutationConflict
+        }
+        vox_risk::RiskReasonCode::ReduceOnly => RiskReasonCodeDto::ReduceOnly,
+        vox_risk::RiskReasonCode::Halted => RiskReasonCodeDto::Halted,
+        vox_risk::RiskReasonCode::MarginNotAllowed => RiskReasonCodeDto::MarginNotAllowed,
+        vox_risk::RiskReasonCode::MarginConfirmationRequired => {
+            RiskReasonCodeDto::MarginConfirmationRequired
+        }
+        vox_risk::RiskReasonCode::MarginUtilizationExceeded => {
+            RiskReasonCodeDto::MarginUtilizationExceeded
+        }
+        vox_risk::RiskReasonCode::ProviderLimitUnavailable => {
+            RiskReasonCodeDto::ProviderLimitUnavailable
+        }
+        vox_risk::RiskReasonCode::ProviderLimitExceeded => RiskReasonCodeDto::ProviderLimitExceeded,
+        vox_risk::RiskReasonCode::MaxSingleOrderExceeded => {
+            RiskReasonCodeDto::MaxSingleOrderExceeded
+        }
+        vox_risk::RiskReasonCode::MaxPositionExceeded => RiskReasonCodeDto::MaxPositionExceeded,
+        vox_risk::RiskReasonCode::MaxGrossExposureExceeded => {
+            RiskReasonCodeDto::MaxGrossExposureExceeded
+        }
+        vox_risk::RiskReasonCode::MaxNetExposureExceeded => {
+            RiskReasonCodeDto::MaxNetExposureExceeded
+        }
+        vox_risk::RiskReasonCode::MaxInstrumentExposureExceeded => {
+            RiskReasonCodeDto::MaxInstrumentExposureExceeded
+        }
+        vox_risk::RiskReasonCode::DailyLossExceeded => RiskReasonCodeDto::DailyLossExceeded,
+        vox_risk::RiskReasonCode::ProtectionRequired => RiskReasonCodeDto::ProtectionRequired,
+        vox_risk::RiskReasonCode::KillSwitchActive => RiskReasonCodeDto::KillSwitchActive,
+        vox_risk::RiskReasonCode::PersistenceFailure => RiskReasonCodeDto::PersistenceFailure,
+    }
+}
+
+fn risk_state_dto(value: vox_risk::RiskState) -> RiskStateDto {
+    match value {
+        vox_risk::RiskState::Normal => RiskStateDto::Normal,
+        vox_risk::RiskState::Warning => RiskStateDto::Warning,
+        vox_risk::RiskState::ReduceOnly => RiskStateDto::ReduceOnly,
+        vox_risk::RiskState::Halted => RiskStateDto::Halted,
+        vox_risk::RiskState::KillSwitch => RiskStateDto::KillSwitch,
+    }
+}
+
+fn reservation_state_dto(value: vox_risk::ReservationState) -> ReservationStateDto {
+    match value {
+        vox_risk::ReservationState::Active => ReservationStateDto::Active,
+        vox_risk::ReservationState::PartiallyConsumed => ReservationStateDto::PartiallyConsumed,
+        vox_risk::ReservationState::Consumed => ReservationStateDto::Consumed,
+        vox_risk::ReservationState::Released => ReservationStateDto::Released,
+        vox_risk::ReservationState::UnknownHeld => ReservationStateDto::UnknownHeld,
+        vox_risk::ReservationState::Orphaned => ReservationStateDto::Orphaned,
+    }
+}
+
+fn now_unix_ms_api() -> Result<i64, ApiError> {
+    i64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000).map_err(
+        |_| {
+            ApiError::new(
+                ErrorCategory::Internal,
+                "SYSTEM_CLOCK_INVALID",
+                "system clock is out of range",
+            )
+        },
+    )
 }
 
 fn domain_environment(value: BrokerEnvironment) -> vox_connections::BrokerEnvironment {
@@ -799,9 +1124,42 @@ fn store_error(error: vox_runtime::StoreError) -> ApiError {
     )
 }
 
+fn risk_store_error(error: vox_risk::RiskStoreError) -> ApiError {
+    ApiError::new(
+        ErrorCategory::Internal,
+        "RISK_PERSISTENCE_FAILURE",
+        error.to_string(),
+    )
+}
+
+fn risk_admission_error(error: vox_runtime::RiskAdmissionError) -> ApiError {
+    match error {
+        vox_runtime::RiskAdmissionError::Denied { code, message } => {
+            ApiError::new(ErrorCategory::Conflict, code, message)
+        }
+        vox_runtime::RiskAdmissionError::Stale(message) => ApiError::new(
+            ErrorCategory::Stale,
+            "RISK_POLICY_REVISION_CHANGED",
+            message,
+        ),
+        vox_runtime::RiskAdmissionError::Unavailable(message) => {
+            ApiError::new(ErrorCategory::Transient, "RISK_ENGINE_UNAVAILABLE", message)
+        }
+    }
+}
+
 fn runtime_error(error: RuntimeError) -> ApiError {
     let category = match &error {
         RuntimeError::ExecutionGateClosed | RuntimeError::Safety(_) => ErrorCategory::Conflict,
+        RuntimeError::RiskAdmission(vox_runtime::RiskAdmissionError::Denied { .. }) => {
+            ErrorCategory::Conflict
+        }
+        RuntimeError::RiskAdmission(vox_runtime::RiskAdmissionError::Stale(_)) => {
+            ErrorCategory::Stale
+        }
+        RuntimeError::RiskAdmission(vox_runtime::RiskAdmissionError::Unavailable(_)) => {
+            ErrorCategory::Transient
+        }
         RuntimeError::Broker(_) => ErrorCategory::Transient,
         RuntimeError::CommandQueueFull => ErrorCategory::Transient,
         _ => ErrorCategory::Internal,

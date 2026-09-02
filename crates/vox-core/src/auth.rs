@@ -332,6 +332,9 @@ fn required_permission(
     if *method == Method::POST && path.starts_with("/api/v1/commands/") {
         return Some(manual_execution_permission);
     }
+    if *method == Method::POST && path == "/api/v1/risk/state" {
+        return Some(Permission::ChangeRiskPolicy);
+    }
     if matches!(
         path,
         "/api/v1/runtime"
@@ -345,6 +348,8 @@ fn required_permission(
             | "/api/v1/stop-orders"
             | "/api/v1/operations"
             | "/api/v1/mutations"
+            | "/api/v1/risk/status"
+            | "/api/v1/risk/reservations"
             | "/api/v1/stream"
     ) {
         return Some(Permission::ViewPortfolio);
@@ -513,4 +518,31 @@ pub enum AuthError {
     Persistence(#[from] rusqlite::Error),
     #[error("connection identity persistence failed")]
     Repository(#[from] vox_connections::RepositoryError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn risk_state_change_requires_privileged_policy_permission() {
+        assert_eq!(
+            required_permission(
+                &Method::POST,
+                "/api/v1/risk/state",
+                Permission::SubmitSandboxOrders,
+            ),
+            Some(Permission::ChangeRiskPolicy)
+        );
+    }
+
+    #[test]
+    fn risk_reads_require_portfolio_visibility() {
+        for path in ["/api/v1/risk/status", "/api/v1/risk/reservations"] {
+            assert_eq!(
+                required_permission(&Method::GET, path, Permission::SubmitSandboxOrders),
+                Some(Permission::ViewPortfolio)
+            );
+        }
+    }
 }

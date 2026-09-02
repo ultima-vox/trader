@@ -54,6 +54,78 @@ pub enum RuntimeExecutionPurpose {
     ProductionAutomated,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RiskAdmission {
+    pub decision_id: String,
+    /// Present for exposure-bearing actions. Pure cancel/protection-maintenance actions
+    /// may be admitted without creating a new capacity reservation.
+    pub reservation_id: Option<String>,
+    pub policy_revision: u64,
+    pub approved_delta_lots: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RiskDispatchOutcome {
+    Acknowledged,
+    Rejected,
+    UnknownAfterDispatch,
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum RiskAdmissionError {
+    #[error("risk admission denied ({code}): {message}")]
+    Denied { code: String, message: String },
+    #[error("risk admission is stale: {0}")]
+    Stale(String),
+    #[error("risk admission unavailable: {0}")]
+    Unavailable(String),
+}
+
+#[async_trait]
+pub trait RiskAdmissionPort: Send + Sync {
+    /// Mandatory #21 boundary. This is called before runtime persists a mutation
+    /// intent or the UNKNOWN_AFTER_DISPATCH fence. Any error fails closed.
+    async fn admit(
+        &self,
+        scope: &RuntimeScope,
+        purpose: RuntimeExecutionPurpose,
+        command: &RuntimeExecutionCommand,
+        logical_request_id: &str,
+    ) -> Result<RiskAdmission, RiskAdmissionError>;
+
+    /// Persist the #21 reservation transition only after #11 durably records broker outcome.
+    async fn record_dispatch_outcome(
+        &self,
+        _scope: &RuntimeScope,
+        _logical_request_id: &str,
+        _outcome: RiskDispatchOutcome,
+    ) -> Result<(), RiskAdmissionError> {
+        Ok(())
+    }
+
+    /// Revalidate correctness-critical facts after queueing and immediately before the
+    /// durable dispatch fence. Production adapters reject changed approval watermarks.
+    async fn validate_before_dispatch(
+        &self,
+        _scope: &RuntimeScope,
+        _purpose: RuntimeExecutionPurpose,
+        _command: &RuntimeExecutionCommand,
+        _logical_request_id: &str,
+        _admission: &RiskAdmission,
+    ) -> Result<(), RiskAdmissionError> {
+        Ok(())
+    }
+
+    /// Consume broker-authoritative #11 reconciliation without making #11 own risk state.
+    async fn reconcile(
+        &self,
+        _scope: &RuntimeScope,
+        _report: &crate::reconcile::ReconciliationReport,
+    ) -> Result<(), RiskAdmissionError> {
+        Ok(())
+    }
+}
+
 #[async_trait]
 pub trait CredentialResolverPort: Send + Sync {
     async fn resolve(&self, scope: &RuntimeScope) -> Result<CredentialResolution, BrokerPortError>;

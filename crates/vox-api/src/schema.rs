@@ -36,6 +36,11 @@ use crate::contract::market::{
     TradeDirectionDto, TradeTickDto, TradingStatusDto,
 };
 use crate::contract::money::Decimal;
+use crate::contract::risk::{
+    ChangeRiskStateRequest, ReservationStateDto, RiskActionKindDto, RiskDecisionDto,
+    RiskLimitUsageDto, RiskOutcomeDto, RiskReasonCodeDto, RiskReasonDto, RiskReservationDto,
+    RiskStateDto, RiskStatusDto, RiskValidityDto,
+};
 use crate::contract::runtime::{
     ReasonCodeDto, RuntimeHealthDto, RuntimeStateDto, SafetyConditionDto, StreamHealthDto,
     StreamKindDto, StreamStateDto, SystemHealthDto,
@@ -96,6 +101,9 @@ use crate::transport::http;
         http::candles,
         http::session,
         http::candle_intervals,
+        http::risk_status,
+        http::risk_reservations,
+        http::change_risk_state,
     ),
     components(schemas(
         ApiError, ErrorCategory, FieldError, CreateSessionRequest, AuthSessionDto,
@@ -121,6 +129,9 @@ use crate::transport::http;
         InstrumentIdentityDto, InstrumentSummaryDto, MarketFreshness, TradingStatusDto, SessionDto,
         QuoteDto, DepthLevelDto, OrderBookDto, TradeDirectionDto, TradeTickDto, CandleIntervalDto,
         CandleIntervalCapability, CandleStateDto, CandleDto, CandlesDto,
+        RiskOutcomeDto, RiskStateDto, RiskActionKindDto, RiskReasonCodeDto, RiskReasonDto,
+        RiskValidityDto, RiskDecisionDto, ReservationStateDto, RiskReservationDto,
+        RiskLimitUsageDto, RiskStatusDto, ChangeRiskStateRequest,
         ClientMessage, ServerEvent, EventPayload, Topic, SubscriptionStatus,
     )),
     tags(
@@ -131,6 +142,7 @@ use crate::transport::http;
         (name = "execution", description = "Capital-affecting commands"),
         (name = "connections", description = "Broker connections, accounts, bindings and execution authorization"),
         (name = "market", description = "Provider-neutral market data, projected over the #8 adapter layer"),
+        (name = "risk", description = "Risk state and policy mutations"),
     )
 )]
 pub struct ApiDoc;

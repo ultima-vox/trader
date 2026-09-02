@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
-use vox_domain::ProtectionLeg;
 pub use vox_domain::RuntimeExecutionCommand;
+use vox_domain::{OrderSide, ProtectionLeg};
 
 pub const EXECUTION_QUEUE_CAPACITY: usize = 256;
 pub const STREAM_QUEUE_CAPACITY: usize = 1_024;
@@ -539,6 +539,9 @@ pub struct PortfolioFact {
     pub account_id: String,
     pub total_portfolio_valuation: Option<MoneyFact>,
     pub total_currency_valuation: Option<MoneyFact>,
+    /// T-Invest `GetPortfolio.daily_yield` with provider meaning; not a custom realized split.
+    #[serde(default)]
+    pub broker_daily_yield: Option<MoneyFact>,
     pub cash_balances: BTreeMap<String, String>,
     pub broker_observed_at_unix_ms: Option<i64>,
 }
@@ -609,8 +612,36 @@ pub struct OrderFact {
     pub broker_order_id: String,
     pub logical_request_id: Option<String>,
     pub instrument_uid: String,
+    /// Provider-authoritative direction. None means the provider value was unknown and
+    /// directional exposure must fail closed rather than being guessed.
+    pub side: Option<OrderSide>,
+    pub lots_requested: i64,
+    pub lots_executed: i64,
     pub status: OrderExecutionStatus,
     pub status_cause: Option<ProviderStatusCause>,
+}
+
+impl OrderFact {
+    pub fn remaining_lots(&self) -> Result<i64, ModelError> {
+        if self.lots_requested < 0
+            || self.lots_executed < 0
+            || self.lots_executed > self.lots_requested
+        {
+            return Err(ModelError::InvalidField("order lot progress"));
+        }
+        Ok(self.lots_requested - self.lots_executed)
+    }
+
+    pub fn signed_remaining_lots(&self) -> Result<i64, ModelError> {
+        let remaining = self.remaining_lots()?;
+        match self.side {
+            Some(OrderSide::Buy) => Ok(remaining),
+            Some(OrderSide::Sell) => remaining
+                .checked_neg()
+                .ok_or(ModelError::InvalidField("order lot progress")),
+            None => Err(ModelError::InvalidField("order direction")),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -851,6 +882,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn order_fact_preserves_signed_remaining_exposure() -> Result<(), ModelError> {
+        let buy = OrderFact {
+            account_id: "account".into(),
+            broker_order_id: "order".into(),
+            logical_request_id: None,
+            instrument_uid: "instrument".into(),
+            side: Some(OrderSide::Buy),
+            lots_requested: 10,
+            lots_executed: 4,
+            status: OrderExecutionStatus::PartiallyFilled,
+            status_cause: None,
+        };
+        assert_eq!(buy.signed_remaining_lots()?, 6);
+
+        let mut sell = buy.clone();
+        sell.side = Some(OrderSide::Sell);
+        assert_eq!(sell.signed_remaining_lots()?, -6);
+
+        let mut invalid = buy;
+        invalid.lots_executed = 11;
+        assert!(invalid.signed_remaining_lots().is_err());
+        Ok(())
+    }
+
+    #[test]
     fn opaque_refs_and_evidence_reject_secret_material() -> Result<(), ModelError> {
         assert!(OpaqueRef::new("Bearer abc").is_err());
         assert!(OpaqueRef::new("token=abc").is_err());
@@ -937,6 +993,7 @@ mod tests {
                 currency: "RUB".into(),
                 amount_nanos: "25000000000".into(),
             }),
+            broker_daily_yield: None,
             cash_balances: [("RUB".into(), "20000000000".into())].into_iter().collect(),
             broker_observed_at_unix_ms: Some(1),
         };
