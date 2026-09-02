@@ -82,6 +82,24 @@ impl RiskEngine {
                 "non-directional risk action must not carry directional exposure",
             ));
         }
+        if directional && request.snapshot.instrument_lot_size <= 0 {
+            return Ok(reject(
+                policy,
+                request,
+                RiskOutcome::Reject,
+                RiskReasonCode::InstrumentUnavailable,
+                "instrument lot contract is unavailable",
+            ));
+        }
+        if directional && !request.snapshot.instrument_tradable {
+            return Ok(reject(
+                policy,
+                request,
+                RiskOutcome::Reject,
+                RiskReasonCode::InstrumentNotTradable,
+                "broker instrument constraints forbid this order",
+            ));
+        }
 
         if request.snapshot.validity.policy_revision != policy.revision {
             tracing::info!(
@@ -101,7 +119,14 @@ impl RiskEngine {
             ));
         }
 
-        if !request.snapshot.runtime_ready {
+        let cleanup_action = matches!(
+            request.action,
+            RiskActionKind::CancelOrder
+                | RiskActionKind::ProtectionMaintenance
+                | RiskActionKind::CancelProtection
+        );
+
+        if !request.snapshot.runtime_ready && !cleanup_action {
             tracing::info!(
                 risk.request_id = %request.request_id,
                 risk.account_id = %request.account_id,
@@ -133,7 +158,7 @@ impl RiskEngine {
                 "Vox execution authorization is disabled",
             ));
         }
-        if request.snapshot.unresolved_unknown_conflict {
+        if request.snapshot.unresolved_unknown_conflict && !cleanup_action {
             tracing::info!(
                 risk.request_id = %request.request_id,
                 risk.account_id = %request.account_id,
@@ -162,14 +187,10 @@ impl RiskEngine {
             .ok_or(RiskEngineError::ArithmeticOverflow)?;
         let increasing_lots = increasing_portion(base_position, request.requested_delta_lots)?;
 
-        let cleanup_action = matches!(
-            request.action,
-            RiskActionKind::CancelOrder
-                | RiskActionKind::ProtectionMaintenance
-                | RiskActionKind::CancelProtection
-        );
         match policy.state {
-            RiskState::KillSwitch => {
+            RiskState::KillSwitch
+                if !(request.emergency_reduction && increasing_lots == 0) && !cleanup_action =>
+            {
                 tracing::info!(
                     risk.request_id = %request.request_id,
                     risk.account_id = %request.account_id,
@@ -223,7 +244,8 @@ impl RiskEngine {
             RiskState::Normal
             | RiskState::Warning
             | RiskState::ReduceOnly
-            | RiskState::Halted => {}
+            | RiskState::Halted
+            | RiskState::KillSwitch => {}
         }
 
         if !directional {
@@ -295,26 +317,77 @@ impl RiskEngine {
             ));
         }
 
-        if let Some(max_loss) = policy.max_daily_loss_nanos
-            && let Some(day_pnl) = request.snapshot.broker_daily_pnl_nanos
-            && day_pnl < -positive_limit(max_loss, "max_daily_loss_nanos")?
+        if let Some(max_utilization_ppm) = policy.max_margin_utilization_ppm
             && increasing_lots > 0
         {
-            tracing::info!(
-                risk.request_id = %request.request_id,
-                risk.account_id = %request.account_id,
-                risk.outcome = "reduce_only",
-                risk.reason_code = ?RiskReasonCode::DailyLossExceeded,
-                risk.broker_daily_pnl_nanos = day_pnl,
-                "risk decision: reduce_only - daily loss limit exceeded",
-            );
-            return Ok(reject(
-                policy,
-                request,
-                RiskOutcome::ReduceOnly,
-                RiskReasonCode::DailyLossExceeded,
-                "broker day P&L breached the configured loss limit",
-            ));
+            if max_utilization_ppm <= 0 {
+                return Err(RiskEngineError::InvalidPolicy(
+                    "max_margin_utilization_ppm must be positive",
+                ));
+            }
+            let Some(margin) = request.snapshot.margin.as_ref() else {
+                return Ok(reject(
+                    policy,
+                    request,
+                    RiskOutcome::Reject,
+                    RiskReasonCode::CriticalInputMissing,
+                    "broker margin facts are required by policy but unavailable",
+                ));
+            };
+            if margin.liquid_portfolio_nanos <= 0 || margin.corrected_margin_nanos < 0 {
+                return Ok(reject(
+                    policy,
+                    request,
+                    RiskOutcome::Reject,
+                    RiskReasonCode::CriticalInputMissing,
+                    "broker margin facts cannot form a valid utilization ratio",
+                ));
+            }
+            let utilization_ppm = margin
+                .corrected_margin_nanos
+                .checked_mul(1_000_000)
+                .and_then(|value| value.checked_div(margin.liquid_portfolio_nanos))
+                .ok_or(RiskEngineError::ArithmeticOverflow)?;
+            if utilization_ppm > i128::from(max_utilization_ppm) {
+                return Ok(reject(
+                    policy,
+                    request,
+                    RiskOutcome::Reject,
+                    RiskReasonCode::MarginUtilizationExceeded,
+                    "broker corrected-margin utilization exceeds policy",
+                ));
+            }
+        }
+
+        if let Some(max_loss) = policy.max_daily_loss_nanos
+            && increasing_lots > 0
+        {
+            let Some(day_pnl) = request.snapshot.broker_daily_pnl_nanos else {
+                return Ok(reject(
+                    policy,
+                    request,
+                    RiskOutcome::Reject,
+                    RiskReasonCode::CriticalInputMissing,
+                    "broker day P&L is required by policy but unavailable",
+                ));
+            };
+            if day_pnl < -positive_limit(max_loss, "max_daily_loss_nanos")? {
+                tracing::info!(
+                    risk.request_id = %request.request_id,
+                    risk.account_id = %request.account_id,
+                    risk.outcome = "reduce_only",
+                    risk.reason_code = ?RiskReasonCode::DailyLossExceeded,
+                    risk.broker_daily_pnl_nanos = day_pnl,
+                    "risk decision: reduce_only - daily loss limit exceeded",
+                );
+                return Ok(reject(
+                    policy,
+                    request,
+                    RiskOutcome::ReduceOnly,
+                    RiskReasonCode::DailyLossExceeded,
+                    "broker day P&L breached the configured loss limit",
+                ));
+            }
         }
 
         if let Some(max_position) = policy.max_position_abs_lots
@@ -338,15 +411,22 @@ impl RiskEngine {
             ));
         }
 
-        if let Some(max_gross) = policy.max_gross_exposure_nanos {
-            let projected = request
-                .snapshot
-                .gross_exposure_nanos
+        if let Some(max_gross) = policy.max_gross_exposure_nanos
+            && increasing_lots > 0
+        {
+            let Some(gross_exposure_nanos) = request.snapshot.gross_exposure_nanos else {
+                return Ok(reject(
+                    policy,
+                    request,
+                    RiskOutcome::Reject,
+                    RiskReasonCode::CriticalInputMissing,
+                    "gross exposure is required by policy but unavailable",
+                ));
+            };
+            let projected = gross_exposure_nanos
                 .checked_add(checked_abs(request.requested_notional_nanos)?)
                 .ok_or(RiskEngineError::ArithmeticOverflow)?;
-            if projected > positive_limit(max_gross, "max_gross_exposure_nanos")?
-                && increasing_lots > 0
-            {
+            if projected > positive_limit(max_gross, "max_gross_exposure_nanos")? {
                 tracing::info!(
                     risk.request_id = %request.request_id,
                     risk.account_id = %request.account_id,
@@ -364,15 +444,22 @@ impl RiskEngine {
             }
         }
 
-        if let Some(max_net) = policy.max_net_exposure_abs_nanos {
-            let projected = request
-                .snapshot
-                .net_exposure_nanos
+        if let Some(max_net) = policy.max_net_exposure_abs_nanos
+            && increasing_lots > 0
+        {
+            let Some(net_exposure_nanos) = request.snapshot.net_exposure_nanos else {
+                return Ok(reject(
+                    policy,
+                    request,
+                    RiskOutcome::Reject,
+                    RiskReasonCode::CriticalInputMissing,
+                    "net exposure is required by policy but unavailable",
+                ));
+            };
+            let projected = net_exposure_nanos
                 .checked_add(request.requested_notional_nanos)
                 .ok_or(RiskEngineError::ArithmeticOverflow)?;
-            if checked_abs(projected)? > positive_limit(max_net, "max_net_exposure_abs_nanos")?
-                && increasing_lots > 0
-            {
+            if checked_abs(projected)? > positive_limit(max_net, "max_net_exposure_abs_nanos")? {
                 tracing::info!(
                     risk.request_id = %request.request_id,
                     risk.account_id = %request.account_id,
@@ -390,15 +477,23 @@ impl RiskEngine {
             }
         }
 
-        if let Some(max_instrument) = policy.max_instrument_exposure_nanos {
-            let projected = request
-                .snapshot
-                .instrument_exposure_nanos
+        if let Some(max_instrument) = policy.max_instrument_exposure_nanos
+            && increasing_lots > 0
+        {
+            let Some(instrument_exposure_nanos) = request.snapshot.instrument_exposure_nanos else {
+                return Ok(reject(
+                    policy,
+                    request,
+                    RiskOutcome::Reject,
+                    RiskReasonCode::CriticalInputMissing,
+                    "instrument exposure is required by policy but unavailable",
+                ));
+            };
+            let projected = instrument_exposure_nanos
                 .checked_add(request.requested_notional_nanos)
                 .ok_or(RiskEngineError::ArithmeticOverflow)?;
             if checked_abs(projected)?
                 > positive_limit(max_instrument, "max_instrument_exposure_nanos")?
-                && increasing_lots > 0
             {
                 tracing::info!(
                     risk.request_id = %request.request_id,
@@ -701,7 +796,8 @@ pub enum RiskEngineError {
 mod tests {
     use super::*;
     use crate::model::{
-        BrokerLotLimits, BuyLotLimit, RiskSnapshot, RiskSource, RiskValidityContext, SellLotLimit,
+        BrokerLotLimits, BrokerMarginFacts, BuyLotLimit, RiskSnapshot, RiskSource,
+        RiskValidityContext, SellLotLimit,
     };
 
     fn request(base: i64, delta: i64) -> RiskRequest {
@@ -723,14 +819,16 @@ mod tests {
             snapshot: RiskSnapshot {
                 runtime_ready: true,
                 execution_authorized: true,
+                instrument_tradable: true,
+                instrument_lot_size: 1,
                 unresolved_unknown_conflict: false,
                 current_position_lots: base,
                 open_order_delta_lots: 0,
                 unresolved_unknown_delta_lots: 0,
                 active_reservation_delta_lots: 0,
-                gross_exposure_nanos: 0,
-                net_exposure_nanos: 0,
-                instrument_exposure_nanos: 0,
+                gross_exposure_nanos: Some(0),
+                net_exposure_nanos: Some(0),
+                instrument_exposure_nanos: Some(0),
                 broker_daily_pnl_nanos: None,
                 broker_lot_limits: Some(BrokerLotLimits {
                     buy_own: Some(BuyLotLimit {
@@ -771,6 +869,7 @@ mod tests {
             max_gross_exposure_nanos: None,
             max_net_exposure_abs_nanos: None,
             max_instrument_exposure_nanos: None,
+            max_margin_utilization_ppm: None,
             max_daily_loss_nanos: None,
             protection_required_for_new_exposure: false,
         }
@@ -843,6 +942,67 @@ mod tests {
         let decision = RiskEngine::evaluate(&p, &r).expect("risk");
         assert_eq!(decision.outcome, RiskOutcome::Approve);
         assert!(decision.permits_dispatch());
+    }
+
+    #[test]
+    fn kill_switch_allows_cleanup_when_runtime_is_not_ready_and_unknown_exists() {
+        let mut p = policy();
+        p.state = RiskState::KillSwitch;
+        let mut r = request(10, 0);
+        r.action = RiskActionKind::CancelOrder;
+        r.snapshot.runtime_ready = false;
+        r.snapshot.unresolved_unknown_conflict = true;
+        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
+        assert_eq!(decision.outcome, RiskOutcome::Approve);
+    }
+
+    #[test]
+    fn configured_exposure_limit_fails_closed_when_exposure_fact_is_missing() {
+        let mut p = policy();
+        p.max_gross_exposure_nanos = Some(100_000_000_000);
+        let mut r = request(0, 10);
+        r.snapshot.gross_exposure_nanos = None;
+        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
+        assert_eq!(decision.outcome, RiskOutcome::Reject);
+        assert_eq!(
+            decision.reasons[0].code,
+            RiskReasonCode::CriticalInputMissing
+        );
+    }
+
+    #[test]
+    fn configured_daily_loss_fails_closed_when_broker_day_pnl_is_missing() {
+        let mut p = policy();
+        p.max_daily_loss_nanos = Some(10_000_000_000);
+        let decision = RiskEngine::evaluate(&p, &request(0, 10)).expect("risk");
+        assert_eq!(decision.outcome, RiskOutcome::Reject);
+        assert_eq!(
+            decision.reasons[0].code,
+            RiskReasonCode::CriticalInputMissing
+        );
+    }
+
+    #[test]
+    fn corrected_margin_utilization_uses_broker_facts_and_blocks_new_exposure() {
+        let mut p = policy();
+        p.max_margin_utilization_ppm = Some(500_000);
+        let mut r = request(0, 10);
+        r.snapshot.margin = Some(BrokerMarginFacts {
+            liquid_portfolio_nanos: 100_000_000_000,
+            starting_margin_nanos: 40_000_000_000,
+            minimal_margin_nanos: 20_000_000_000,
+            corrected_margin_nanos: 60_000_000_000,
+            funds_sufficiency_ppm: Some(1_500_000),
+            amount_of_missing_funds_nanos: 0,
+            guarantee_for_futures_nanos: 0,
+            broker_as_of_unix_ms: 10_000,
+        });
+        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
+        assert_eq!(decision.outcome, RiskOutcome::Reject);
+        assert_eq!(
+            decision.reasons[0].code,
+            RiskReasonCode::MarginUtilizationExceeded
+        );
     }
 
     #[test]

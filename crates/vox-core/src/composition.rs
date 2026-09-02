@@ -170,7 +170,9 @@ impl ApplicationComposition {
             runtime.clone(),
             connection_admin,
             Arc::new(auth.clone()),
-        );
+        )
+        .with_risk_queries(runtime.clone())
+        .with_risk_commands(runtime.clone());
         let router = vox_api::router(state)
             .layer(DefaultBodyLimit::max(128 * 1024))
             .layer(middleware::from_fn_with_state(

@@ -375,6 +375,7 @@ mod tests {
                     currency: "RUB".into(),
                     amount_nanos: "25000000002".into(),
                 }),
+                broker_daily_yield: None,
                 cash_balances: BTreeMap::new(),
                 broker_observed_at_unix_ms: Some(1),
             },

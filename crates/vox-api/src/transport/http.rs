@@ -32,9 +32,7 @@ use crate::contract::market::{
     CandleIntervalCapability, CandleIntervalDto, CandlesDto, InstrumentSummaryDto, OrderBookDto,
     QuoteDto, SessionDto, TradeTickDto,
 };
-use crate::contract::risk::{
-    ChangeRiskStateRequest, RiskReservationDto, RiskStatusDto,
-};
+use crate::contract::risk::{ChangeRiskStateRequest, RiskReservationDto, RiskStatusDto};
 use crate::contract::runtime::{RuntimeHealthDto, SystemHealthDto};
 use crate::contract::scope::{BrokerEnvironment, ExecutionScope, ProviderDto, TradingMode};
 use crate::error::{ApiError, ErrorCategory, FieldError};
@@ -618,7 +616,10 @@ pub async fn risk_reservations(
 ) -> Result<Json<Vec<RiskReservationDto>>, ApiError> {
     let scope = query.into_scope()?;
     Ok(Json(
-        state.risk_queries_port()?.active_reservations(&scope).await?,
+        state
+            .risk_queries_port()?
+            .active_reservations(&scope)
+            .await?,
     ))
 }
 
@@ -636,7 +637,9 @@ pub async fn change_risk_state(
     State(state): State<AppState>,
     Json(request): Json<ChangeRiskStateRequest>,
 ) -> Result<Json<RiskStatusDto>, ApiError> {
-    Ok(Json(state.risk_commands_port()?.change_state(request).await?))
+    Ok(Json(
+        state.risk_commands_port()?.change_state(request).await?,
+    ))
 }
 
 /// Submit a regular order. The scope in the body is the frozen target of the command.

@@ -553,6 +553,7 @@ mod tests {
                 account_id: broker_account_id.into(),
                 total_portfolio_valuation: None,
                 total_currency_valuation: None,
+                broker_daily_yield: None,
                 cash_balances: BTreeMap::new(),
                 broker_observed_at_unix_ms: Some(1),
             }),

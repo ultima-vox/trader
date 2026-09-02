@@ -138,6 +138,14 @@ export type ChangeExecutionAuthorizationRequest = {
   expected_authorization_revision: number;
 };
 
+export type ChangeRiskStateRequest = {
+  scope: ExecutionScope;
+  state: RiskStateDto;
+  /** Optimistic concurrency: stale operator state cannot overwrite a newer control action. */
+  expected_policy_revision: number;
+  reason: string;
+};
+
 /** What a client may send. */
 export type ClientMessage = {
   /** Client-generated id, echoed on every event of this subscription. */
@@ -368,6 +376,7 @@ export type MutationReceiptDto = {
   state: JournalStateDto;
   /** What the backend says the client may do next. */
   decision: MutationDecisionDto;
+  risk_decision?: null | RiskDecisionDto;
   correlation_id: string;
   /** Set only once the broker has answered. */
   broker_order_id?: string | null;
@@ -538,6 +547,71 @@ export type ReplaceOrderRequest = {
   price_convention: PriceConventionDto;
   /** Explicit broker margin acknowledgement. Never inferred by server. */
   confirm_margin_trade: boolean;
+};
+
+export type ReservationStateDto = "ACTIVE" | "PARTIALLY_CONSUMED" | "CONSUMED" | "RELEASED" | "UNKNOWN_HELD" | "ORPHANED";
+
+export type RiskActionKindDto = "DIRECTIONAL_ORDER" | "REPLACE_DIRECTIONAL_ORDER" | "CANCEL_ORDER" | "PROTECTION_MAINTENANCE" | "CANCEL_PROTECTION";
+
+export type RiskDecisionDto = {
+  decision_id: string;
+  policy_revision: number;
+  action: RiskActionKindDto;
+  requested_delta_lots: number;
+  approved_delta_lots: number;
+  outcome: RiskOutcomeDto;
+  reasons: Array<RiskReasonDto>;
+  reservation_id?: string | null;
+  validity: RiskValidityDto;
+};
+
+export type RiskLimitUsageDto = {
+  name: string;
+  /** Exact decimal string in the unit named by `unit`; never a binary float. */
+  used: string;
+  limit?: string | null;
+  unit: string;
+};
+
+export type RiskOutcomeDto = "APPROVE" | "RESIZE" | "REJECT" | "REDUCE_ONLY" | "HALT";
+
+export type RiskReasonCodeDto = "APPROVED" | "RESIZED_TO_PROVIDER_LIMIT" | "RESIZED_TO_POLICY_LIMIT" | "INVALID_QUANTITY" | "INSTRUMENT_UNAVAILABLE" | "INSTRUMENT_NOT_TRADABLE" | "PRICE_UNAVAILABLE" | "POSITION_LOT_MISMATCH" | "CRITICAL_INPUT_MISSING" | "RUNTIME_NOT_READY" | "EXECUTION_UNAUTHORIZED" | "AUTHORIZATION_REVISION_CHANGED" | "POLICY_REVISION_CHANGED" | "RECONCILIATION_REVISION_CHANGED" | "POSITION_REVISION_CHANGED" | "ORDER_REVISION_CHANGED" | "INSTRUMENT_CONSTRAINT_REVISION_CHANGED" | "MARKET_DATA_MISSING" | "MARKET_DATA_STALE" | "UNKNOWN_MUTATION_CONFLICT" | "REDUCE_ONLY" | "HALTED" | "MARGIN_NOT_ALLOWED" | "MARGIN_CONFIRMATION_REQUIRED" | "MARGIN_UTILIZATION_EXCEEDED" | "PROVIDER_LIMIT_UNAVAILABLE" | "PROVIDER_LIMIT_EXCEEDED" | "MAX_SINGLE_ORDER_EXCEEDED" | "MAX_POSITION_EXCEEDED" | "MAX_GROSS_EXPOSURE_EXCEEDED" | "MAX_NET_EXPOSURE_EXCEEDED" | "MAX_INSTRUMENT_EXPOSURE_EXCEEDED" | "DAILY_LOSS_EXCEEDED" | "PROTECTION_REQUIRED" | "KILL_SWITCH_ACTIVE" | "PERSISTENCE_FAILURE";
+
+export type RiskReasonDto = {
+  code: RiskReasonCodeDto;
+  message: string;
+};
+
+export type RiskReservationDto = {
+  reservation_id: string;
+  scope: ExecutionScope;
+  instrument_id: string;
+  logical_request_id: string;
+  remaining_delta_lots: number;
+  state: ReservationStateDto;
+  updated_at_unix_ms: number;
+};
+
+export type RiskStateDto = "NORMAL" | "WARNING" | "REDUCE_ONLY" | "HALTED" | "KILL_SWITCH";
+
+export type RiskStatusDto = {
+  scope: ExecutionScope;
+  state: RiskStateDto;
+  policy_revision: number;
+  limits: Array<RiskLimitUsageDto>;
+  reasons: Array<RiskReasonDto>;
+  updated_at_unix_ms: number;
+};
+
+export type RiskValidityDto = {
+  runtime_epoch: number;
+  reconciliation_revision: number;
+  position_revision: number;
+  order_revision: number;
+  market_data_as_of_unix_ms?: number | null;
+  instrument_constraints_revision: number;
+  policy_revision: number;
+  execution_authorization_revision: number;
 };
 
 export type RotateCredentialRequest = {

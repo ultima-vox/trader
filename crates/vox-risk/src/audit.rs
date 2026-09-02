@@ -64,6 +64,7 @@ pub struct LimitsDelta {
     pub max_gross_exposure_nanos_changed: bool,
     pub max_net_exposure_abs_nanos_changed: bool,
     pub max_instrument_exposure_nanos_changed: bool,
+    pub max_margin_utilization_ppm_changed: bool,
     pub max_daily_loss_nanos_changed: bool,
     pub max_market_data_age_ms_changed: bool,
     pub allow_margin_changed: bool,
@@ -78,6 +79,7 @@ impl LimitsDelta {
             || self.max_gross_exposure_nanos_changed
             || self.max_net_exposure_abs_nanos_changed
             || self.max_instrument_exposure_nanos_changed
+            || self.max_margin_utilization_ppm_changed
             || self.max_daily_loss_nanos_changed
             || self.max_market_data_age_ms_changed
             || self.allow_margin_changed
@@ -134,6 +136,7 @@ impl PolicyAuditEvent {
             limits.gross = self.limits_changed.max_gross_exposure_nanos_changed,
             limits.net = self.limits_changed.max_net_exposure_abs_nanos_changed,
             limits.instrument = self.limits_changed.max_instrument_exposure_nanos_changed,
+            limits.margin_utilization = self.limits_changed.max_margin_utilization_ppm_changed,
             limits.daily_loss = self.limits_changed.max_daily_loss_nanos_changed,
             limits.market_data_age = self.limits_changed.max_market_data_age_ms_changed,
             limits.margin = self.limits_changed.allow_margin_changed,
@@ -164,7 +167,9 @@ impl PolicyAuditEvent {
             (RiskState::Halted, RiskState::ReduceOnly) => StateTransition::HaltedToReduceOnly,
             (RiskState::Halted, RiskState::Normal) => StateTransition::HaltedToNormal,
             (_, RiskState::KillSwitch) => StateTransition::ToKillSwitch,
-            (RiskState::KillSwitch, RiskState::ReduceOnly) => StateTransition::KillSwitchToReduceOnly,
+            (RiskState::KillSwitch, RiskState::ReduceOnly) => {
+                StateTransition::KillSwitchToReduceOnly
+            }
             (RiskState::KillSwitch, RiskState::Normal) => StateTransition::KillSwitchToNormal,
             (RiskState::KillSwitch, RiskState::Halted) => StateTransition::KillSwitchToHalted,
             _ => StateTransition::Other,
@@ -186,6 +191,8 @@ impl PolicyAuditEvent {
                 != new.max_net_exposure_abs_nanos,
             max_instrument_exposure_nanos_changed: old_policy.max_instrument_exposure_nanos
                 != new.max_instrument_exposure_nanos,
+            max_margin_utilization_ppm_changed: old_policy.max_margin_utilization_ppm
+                != new.max_margin_utilization_ppm,
             max_daily_loss_nanos_changed: old_policy.max_daily_loss_nanos
                 != new.max_daily_loss_nanos,
             max_market_data_age_ms_changed: old_policy.max_market_data_age_ms
@@ -213,6 +220,7 @@ mod tests {
             max_gross_exposure_nanos: None,
             max_net_exposure_abs_nanos: None,
             max_instrument_exposure_nanos: None,
+            max_margin_utilization_ppm: None,
             max_daily_loss_nanos: None,
             protection_required_for_new_exposure: false,
         }
@@ -231,12 +239,7 @@ mod tests {
     fn state_change_to_warning_detected() {
         let old = base_policy(1, RiskState::Normal);
         let new = base_policy(2, RiskState::Warning);
-        let event = PolicyAuditEvent::new(
-            Some(&old),
-            &new,
-            Some(old.state),
-            200,
-        );
+        let event = PolicyAuditEvent::new(Some(&old), &new, Some(old.state), 200);
         assert_eq!(event.state_transition, StateTransition::NormalToWarning);
         assert_eq!(event.old_state, Some(RiskState::Normal));
         assert_eq!(event.new_state, RiskState::Warning);
@@ -247,12 +250,7 @@ mod tests {
         let old = base_policy(1, RiskState::Normal);
         let mut new = base_policy(2, RiskState::Normal);
         new.max_single_order_lots = Some(40);
-        let event = PolicyAuditEvent::new(
-            Some(&old),
-            &new,
-            Some(old.state),
-            300,
-        );
+        let event = PolicyAuditEvent::new(Some(&old), &new, Some(old.state), 300);
         assert_eq!(event.state_transition, StateTransition::ConfigOnly);
         assert!(event.limits_changed.max_single_order_lots_changed);
     }
@@ -261,12 +259,7 @@ mod tests {
     fn halt_from_normal_detected() {
         let old = base_policy(1, RiskState::Normal);
         let new = base_policy(2, RiskState::Halted);
-        let event = PolicyAuditEvent::new(
-            Some(&old),
-            &new,
-            Some(old.state),
-            400,
-        );
+        let event = PolicyAuditEvent::new(Some(&old), &new, Some(old.state), 400);
         assert_eq!(event.state_transition, StateTransition::NormalToHalted);
     }
 
@@ -277,12 +270,7 @@ mod tests {
         new.max_single_order_lots = Some(30);
         new.max_position_abs_lots = Some(80);
         new.allow_margin = true;
-        let event = PolicyAuditEvent::new(
-            Some(&old),
-            &new,
-            Some(old.state),
-            500,
-        );
+        let event = PolicyAuditEvent::new(Some(&old), &new, Some(old.state), 500);
         assert!(event.limits_changed.max_single_order_lots_changed);
         assert!(event.limits_changed.max_position_abs_lots_changed);
         assert!(event.limits_changed.allow_margin_changed);

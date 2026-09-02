@@ -46,6 +46,7 @@ impl FakeSnapshot {
                 account_id: account_id.into(),
                 total_portfolio_valuation: None,
                 total_currency_valuation: None,
+                broker_daily_yield: None,
                 cash_balances: BTreeMap::new(),
                 broker_observed_at_unix_ms: Some(1),
             },
@@ -293,16 +294,29 @@ impl RiskAdmissionPort for FakeRiskAdmission {
     ) -> Result<RiskAdmission, RiskAdmissionError> {
         let approved_delta_lots = match command {
             RuntimeExecutionCommand::RegularOrder(command)
-            | RuntimeExecutionCommand::PostOrderAsync(command) => command.quantity_lots,
+            | RuntimeExecutionCommand::PostOrderAsync(command) => match command.side {
+                OrderSide::Buy => command.quantity_lots,
+                OrderSide::Sell => -command.quantity_lots,
+            },
             RuntimeExecutionCommand::ReplaceOrder(command) => command.quantity_lots,
             RuntimeExecutionCommand::PostStopOrder(command)
-            | RuntimeExecutionCommand::ProtectionLeg(command) => command.quantity_lots,
+            | RuntimeExecutionCommand::ProtectionLeg(command) => {
+                let _ = command;
+                0
+            }
             RuntimeExecutionCommand::CancelOrder(_)
-            | RuntimeExecutionCommand::CancelStopOrder(_) => 1,
+            | RuntimeExecutionCommand::CancelStopOrder(_) => 0,
         };
+        let reservation_id = matches!(
+            command,
+            RuntimeExecutionCommand::RegularOrder(_)
+                | RuntimeExecutionCommand::PostOrderAsync(_)
+                | RuntimeExecutionCommand::ReplaceOrder(_)
+        )
+        .then(|| format!("test-reservation:{logical_request_id}"));
         Ok(RiskAdmission {
             decision_id: format!("test-risk:{logical_request_id}"),
-            reservation_id: Some(format!("test-reservation:{logical_request_id}")),
+            reservation_id,
             policy_revision: 1,
             approved_delta_lots,
         })

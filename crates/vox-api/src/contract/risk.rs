@@ -25,6 +25,7 @@ pub enum RiskStateDto {
     Warning,
     ReduceOnly,
     Halted,
+    KillSwitch,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
@@ -44,6 +45,11 @@ pub enum RiskReasonCodeDto {
     ResizedToProviderLimit,
     ResizedToPolicyLimit,
     InvalidQuantity,
+    InstrumentUnavailable,
+    InstrumentNotTradable,
+    PriceUnavailable,
+    PositionLotMismatch,
+    CriticalInputMissing,
     RuntimeNotReady,
     ExecutionUnauthorized,
     AuthorizationRevisionChanged,
@@ -59,6 +65,7 @@ pub enum RiskReasonCodeDto {
     Halted,
     MarginNotAllowed,
     MarginConfirmationRequired,
+    MarginUtilizationExceeded,
     ProviderLimitUnavailable,
     ProviderLimitExceeded,
     MaxSingleOrderExceeded,
@@ -68,6 +75,7 @@ pub enum RiskReasonCodeDto {
     MaxInstrumentExposureExceeded,
     DailyLossExceeded,
     ProtectionRequired,
+    KillSwitchActive,
     PersistenceFailure,
 }
 

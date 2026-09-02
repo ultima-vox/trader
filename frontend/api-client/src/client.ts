@@ -224,6 +224,21 @@ export class VoxClient {
     return this.request("GET", "/api/v1/reconciliation", query);
   }
 
+  /** Active risk reservations for one execution scope. */
+  riskReservations(query: { account_id: string; broker_connection_id: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<Array<T.RiskReservationDto>> {
+    return this.request("GET", "/api/v1/risk/reservations", query);
+  }
+
+  /** Change the risk state for one execution scope. */
+  postRiskState(body: T.ChangeRiskStateRequest): Promise<T.RiskStatusDto> {
+    return this.request("POST", "/api/v1/risk/state", undefined, body);
+  }
+
+  /** Current risk status for one execution scope. */
+  riskStatus(query: { account_id: string; broker_connection_id: string; environment: T.BrokerEnvironment; provider: T.ProviderDto }): Promise<T.RiskStatusDto> {
+    return this.request("GET", "/api/v1/risk/status", query);
+  }
+
   /** Runtime state, readiness and stream health. */
   runtime(): Promise<T.RuntimeHealthDto> {
     return this.request("GET", "/api/v1/runtime", undefined);

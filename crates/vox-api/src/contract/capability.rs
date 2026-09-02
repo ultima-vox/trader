@@ -154,7 +154,9 @@ impl CapabilitySet {
         } else {
             unavailable.push(UnavailableCapability {
                 capability: Capability::RiskVerdict,
-                reason: "no risk engine contract exists; new_exposure_allowed is the only safety fact".to_owned(),
+                reason:
+                    "no risk engine contract exists; new_exposure_allowed is the only safety fact"
+                        .to_owned(),
                 owner: "#21".to_owned(),
             });
         }

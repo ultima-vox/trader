@@ -64,6 +64,13 @@ pub struct RiskAdmission {
     pub approved_delta_lots: i64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RiskDispatchOutcome {
+    Acknowledged,
+    Rejected,
+    UnknownAfterDispatch,
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum RiskAdmissionError {
     #[error("risk admission denied ({code}): {message}")]
@@ -85,6 +92,38 @@ pub trait RiskAdmissionPort: Send + Sync {
         command: &RuntimeExecutionCommand,
         logical_request_id: &str,
     ) -> Result<RiskAdmission, RiskAdmissionError>;
+
+    /// Persist the #21 reservation transition only after #11 durably records broker outcome.
+    async fn record_dispatch_outcome(
+        &self,
+        _scope: &RuntimeScope,
+        _logical_request_id: &str,
+        _outcome: RiskDispatchOutcome,
+    ) -> Result<(), RiskAdmissionError> {
+        Ok(())
+    }
+
+    /// Revalidate correctness-critical facts after queueing and immediately before the
+    /// durable dispatch fence. Production adapters reject changed approval watermarks.
+    async fn validate_before_dispatch(
+        &self,
+        _scope: &RuntimeScope,
+        _purpose: RuntimeExecutionPurpose,
+        _command: &RuntimeExecutionCommand,
+        _logical_request_id: &str,
+        _admission: &RiskAdmission,
+    ) -> Result<(), RiskAdmissionError> {
+        Ok(())
+    }
+
+    /// Consume broker-authoritative #11 reconciliation without making #11 own risk state.
+    async fn reconcile(
+        &self,
+        _scope: &RuntimeScope,
+        _report: &crate::reconcile::ReconciliationReport,
+    ) -> Result<(), RiskAdmissionError> {
+        Ok(())
+    }
 }
 
 #[async_trait]

@@ -23,6 +23,18 @@ pub struct CanonicalMarginAttributes {
     pub guarantee_for_futures: Option<CanonicalMoney>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CanonicalRiskInstrument {
+    pub uid: String,
+    pub lot_size: i64,
+    pub api_trade_available: bool,
+    pub buy_available: bool,
+    pub sell_available: bool,
+    pub limit_order_available: bool,
+    pub market_order_available: bool,
+    pub best_price_order_available: bool,
+}
+
 impl TryFrom<v1::GetMarginAttributesResponse> for CanonicalMarginAttributes {
     type Error = RiskReadError;
 
@@ -76,6 +88,51 @@ impl TInvestRiskReadAdapter {
             .await?
             .body;
         response.try_into()
+    }
+
+    pub async fn instrument_constraints(
+        &self,
+        instrument_uid: &str,
+    ) -> Result<CanonicalRiskInstrument, RiskReadError> {
+        if instrument_uid.trim().is_empty() {
+            return Err(RiskReadError::InvalidInstrument);
+        }
+        let response = self
+            .client
+            .get_instrument_by(v1::InstrumentRequest {
+                id_type: v1::InstrumentIdType::Uid as i32,
+                class_code: None,
+                id: instrument_uid.to_owned(),
+            })
+            .await?
+            .body
+            .instrument
+            .ok_or(RiskReadError::InstrumentMissing)?;
+        if response.uid != instrument_uid || response.lot <= 0 {
+            return Err(RiskReadError::InvalidInstrument);
+        }
+        let trading_status = self
+            .client
+            .get_trading_status(v1::GetTradingStatusRequest {
+                instrument_id: Some(instrument_uid.to_owned()),
+                ..Default::default()
+            })
+            .await?
+            .body;
+        if trading_status.instrument_uid != instrument_uid {
+            return Err(RiskReadError::InvalidInstrument);
+        }
+        Ok(CanonicalRiskInstrument {
+            uid: response.uid,
+            lot_size: i64::from(response.lot),
+            api_trade_available: response.api_trade_available_flag
+                && trading_status.api_trade_available_flag,
+            buy_available: response.buy_available_flag,
+            sell_available: response.sell_available_flag,
+            limit_order_available: trading_status.limit_order_available_flag,
+            market_order_available: trading_status.market_order_available_flag,
+            best_price_order_available: trading_status.bestprice_order_available_flag,
+        })
     }
 
     pub async fn max_lots(
@@ -148,6 +205,10 @@ pub enum RiskReadError {
     InvalidEconomics,
     #[error("risk read quantity must be positive")]
     InvalidQuantity,
+    #[error("risk instrument is missing")]
+    InstrumentMissing,
+    #[error("risk instrument contract is invalid")]
+    InvalidInstrument,
 }
 
 #[cfg(test)]

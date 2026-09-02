@@ -13,6 +13,7 @@ use vox_domain::{
 };
 
 use super::money::Decimal;
+use super::risk::RiskDecisionDto;
 use super::scope::ExecutionScope;
 use crate::error::{ApiError, FieldError};
 
@@ -418,6 +419,9 @@ pub struct MutationReceiptDto {
     pub state: JournalStateDto,
     /// What the backend says the client may do next.
     pub decision: MutationDecisionDto,
+    /// Canonical #21 verdict which authorized this command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_decision: Option<RiskDecisionDto>,
     pub correlation_id: String,
     /// Set only once the broker has answered.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -450,6 +454,7 @@ impl MutationReceiptDto {
             kind,
             state: JournalStateDto::UnknownAfterDispatch,
             decision: MutationDecisionDto::Reconcile,
+            risk_decision: None,
             correlation_id: correlation_id.into(),
             broker_order_id: None,
             broker_stop_order_id: None,

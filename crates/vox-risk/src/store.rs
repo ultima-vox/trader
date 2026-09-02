@@ -4,7 +4,7 @@ use std::time::Instant;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
 
-use crate::model::{ReservationState, RiskDecision, RiskReservation, RiskSource};
+use crate::model::{ReservationState, RiskDecision, RiskPolicySet, RiskReservation, RiskSource};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ReservationCapacity {
@@ -19,8 +19,27 @@ pub struct PersistedRiskApproval {
 }
 
 pub trait RiskStore: Clone + Send + Sync + 'static {
+    fn policy(&self, account_id: &str) -> Result<Option<RiskPolicySet>, RiskStoreError>;
+    fn put_policy(
+        &self,
+        account_id: &str,
+        expected_revision: Option<u64>,
+        policy: &RiskPolicySet,
+        reason: &str,
+        now_unix_ms: i64,
+    ) -> Result<RiskPolicySet, RiskStoreError>;
     fn put_decision(&self, decision: &RiskDecision) -> Result<(), RiskStoreError>;
     fn decision(&self, decision_id: &str) -> Result<Option<RiskDecision>, RiskStoreError>;
+    fn decision_for_request(
+        &self,
+        account_id: &str,
+        logical_request_id: &str,
+    ) -> Result<Option<RiskDecision>, RiskStoreError>;
+    fn approval_for_request(
+        &self,
+        account_id: &str,
+        logical_request_id: &str,
+    ) -> Result<Option<PersistedRiskApproval>, RiskStoreError>;
     fn persist_approval_atomic(
         &self,
         decision: &RiskDecision,
@@ -42,6 +61,8 @@ pub trait RiskStore: Clone + Send + Sync + 'static {
         account_id: &str,
         instrument_id: &str,
     ) -> Result<i64, RiskStoreError>;
+    fn active_reservations(&self, account_id: &str)
+    -> Result<Vec<RiskReservation>, RiskStoreError>;
     fn update_reservation(
         &self,
         reservation_id: &str,
@@ -76,6 +97,77 @@ impl SqliteRiskStore {
 }
 
 impl RiskStore for SqliteRiskStore {
+    fn policy(&self, account_id: &str) -> Result<Option<RiskPolicySet>, RiskStoreError> {
+        self.connection()?
+            .query_row(
+                "SELECT payload FROM risk_policies WHERE account_id = ?1",
+                [account_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|payload| serde_json::from_str(&payload).map_err(Into::into))
+            .transpose()
+    }
+
+    fn put_policy(
+        &self,
+        account_id: &str,
+        expected_revision: Option<u64>,
+        policy: &RiskPolicySet,
+        reason: &str,
+        now_unix_ms: i64,
+    ) -> Result<RiskPolicySet, RiskStoreError> {
+        if account_id.trim().is_empty() || reason.trim().is_empty() || policy.revision == 0 {
+            return Err(RiskStoreError::InvalidPolicyMutation);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = transaction
+            .query_row(
+                "SELECT revision, payload FROM risk_policies WHERE account_id = ?1",
+                [account_id],
+                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        match (expected_revision, current.as_ref()) {
+            (None, None) => {}
+            (Some(expected), Some((actual, _))) if expected == *actual => {}
+            _ => return Err(RiskStoreError::PolicyRevisionConflict),
+        }
+        if let Some((actual, _)) = current.as_ref()
+            && policy.revision <= *actual
+        {
+            return Err(RiskStoreError::PolicyRevisionConflict);
+        }
+        let payload = serde_json::to_string(policy)?;
+        transaction.execute(
+            "INSERT INTO risk_policies(account_id, revision, payload, updated_at_unix_ms)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(account_id) DO UPDATE SET
+               revision = excluded.revision,
+               payload = excluded.payload,
+               updated_at_unix_ms = excluded.updated_at_unix_ms",
+            params![account_id, policy.revision, payload, now_unix_ms],
+        )?;
+        transaction.execute(
+            "INSERT INTO risk_policy_audit(
+                event_id, account_id, old_revision, new_revision, reason, payload,
+                observed_at_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                format!("risk-policy-audit:{}", uuid::Uuid::new_v4()),
+                account_id,
+                current.as_ref().map(|(revision, _)| *revision),
+                policy.revision,
+                reason,
+                serde_json::to_string(policy)?,
+                now_unix_ms,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(policy.clone())
+    }
+
     fn put_decision(&self, decision: &RiskDecision) -> Result<(), RiskStoreError> {
         let start = Instant::now();
         let payload = serde_json::to_string(decision)?;
@@ -104,6 +196,39 @@ impl RiskStore for SqliteRiskStore {
 
     fn decision(&self, decision_id: &str) -> Result<Option<RiskDecision>, RiskStoreError> {
         decision_by_id_connection(&self.connection()?, decision_id)
+    }
+
+    fn decision_for_request(
+        &self,
+        account_id: &str,
+        logical_request_id: &str,
+    ) -> Result<Option<RiskDecision>, RiskStoreError> {
+        decision_for_request_connection(&self.connection()?, account_id, logical_request_id)
+    }
+
+    fn approval_for_request(
+        &self,
+        account_id: &str,
+        logical_request_id: &str,
+    ) -> Result<Option<PersistedRiskApproval>, RiskStoreError> {
+        let connection = self.connection()?;
+        let reservation =
+            reservation_for_request_connection(&connection, account_id, logical_request_id)?;
+        let decision =
+            decision_for_request_connection(&connection, account_id, logical_request_id)?;
+        match (decision, reservation) {
+            (None, None) => Ok(None),
+            (Some(decision), Some(reservation)) => {
+                validate_approval_link(&decision, &reservation)?;
+                Ok(Some(PersistedRiskApproval {
+                    decision,
+                    reservation,
+                }))
+            }
+            _ => Err(RiskStoreError::ApprovalInvariantViolation(
+                "risk request has incomplete persisted approval",
+            )),
+        }
     }
 
     fn persist_approval_atomic(
@@ -266,6 +391,27 @@ impl RiskStore for SqliteRiskStore {
                 params![account_id, instrument_id],
                 |row| row.get(0),
             )
+            .map_err(Into::into)
+    }
+
+    fn active_reservations(
+        &self,
+        account_id: &str,
+    ) -> Result<Vec<RiskReservation>, RiskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT reservation_id, account_id, instrument_id, strategy_id, source,
+                    logical_request_id, reserved_delta_lots, remaining_delta_lots,
+                    reserved_notional_nanos, state, created_at_unix_ms, updated_at_unix_ms,
+                    expires_at_unix_ms
+             FROM risk_reservations
+             WHERE account_id = ?1
+               AND state IN ('ACTIVE','PARTIALLY_CONSUMED','UNKNOWN_HELD','ORPHANED')
+             ORDER BY created_at_unix_ms, reservation_id",
+        )?;
+        statement
+            .query_map([account_id], read_reservation)?
+            .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
 
@@ -650,6 +796,25 @@ CREATE TABLE IF NOT EXISTS risk_reservations (
 );
 CREATE INDEX IF NOT EXISTS idx_risk_reservations_active
     ON risk_reservations(account_id, instrument_id, state);
+
+CREATE TABLE IF NOT EXISTS risk_policies (
+    account_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    updated_at_unix_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS risk_policy_audit (
+    event_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    old_revision INTEGER,
+    new_revision INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    observed_at_unix_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_risk_policy_audit_account
+    ON risk_policy_audit(account_id, observed_at_unix_ms);
 ";
 
 #[derive(Debug, Error)]
@@ -672,6 +837,10 @@ pub enum RiskStoreError {
     ApprovalInvariantViolation(&'static str),
     #[error("stored risk numeric value is invalid: {0}")]
     StoredNumeric(String),
+    #[error("risk policy revision changed")]
+    PolicyRevisionConflict,
+    #[error("risk policy mutation is invalid")]
+    InvalidPolicyMutation,
 }
 
 #[cfg(test)]
@@ -850,6 +1019,34 @@ mod tests {
             store.persist_approval_atomic(&replay_decision, &replay_reservation, capacity)?;
 
         assert_eq!(first, replay);
+        assert_eq!(
+            store.approval_for_request("account-1", "req-replay")?,
+            Some(first)
+        );
+        let _ = std::fs::remove_file(path);
+        Ok(())
+    }
+
+    #[test]
+    fn policy_update_requires_exact_revision_and_round_trips() -> Result<(), RiskStoreError> {
+        let path = std::env::temp_dir().join(format!("vox-risk-{}.sqlite3", uuid::Uuid::new_v4()));
+        let store = SqliteRiskStore::open(&path)?;
+        let mut first = RiskPolicySet::fail_closed(1);
+        first.state = crate::model::RiskState::Halted;
+        assert_eq!(
+            store.put_policy("account-1", None, &first, "initial halt", 1)?,
+            first
+        );
+
+        let mut second = first.clone();
+        second.revision = 2;
+        second.state = crate::model::RiskState::ReduceOnly;
+        assert!(matches!(
+            store.put_policy("account-1", Some(9), &second, "stale write", 2),
+            Err(RiskStoreError::PolicyRevisionConflict)
+        ));
+        store.put_policy("account-1", Some(1), &second, "operator recovery", 2)?;
+        assert_eq!(store.policy("account-1")?, Some(second));
         let _ = std::fs::remove_file(path);
         Ok(())
     }

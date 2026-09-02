@@ -25,6 +25,7 @@ vox-domain = { path = "../vox-domain" }
 vox-nautilus = { path = "../vox-nautilus" }
 vox-tinvest = { path = "../vox-tinvest" }
 vox-runtime = { path = "../vox-runtime" }
+vox-risk = { path = "../vox-risk" }
 
 [lints]
 workspace = true

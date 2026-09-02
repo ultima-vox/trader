@@ -467,17 +467,13 @@ impl AppState {
         })
     }
 
-    pub(crate) fn risk_queries_port(
-        &self,
-    ) -> Result<&Arc<dyn RiskQueries>, ApiError> {
+    pub(crate) fn risk_queries_port(&self) -> Result<&Arc<dyn RiskQueries>, ApiError> {
         self.risk_queries
             .as_ref()
             .ok_or_else(|| ApiError::capability_unavailable("RISK_QUERIES", "#21"))
     }
 
-    pub(crate) fn risk_commands_port(
-        &self,
-    ) -> Result<&Arc<dyn RiskCommands>, ApiError> {
+    pub(crate) fn risk_commands_port(&self) -> Result<&Arc<dyn RiskCommands>, ApiError> {
         self.risk_commands
             .as_ref()
             .ok_or_else(|| ApiError::capability_unavailable("RISK_COMMANDS", "#21"))

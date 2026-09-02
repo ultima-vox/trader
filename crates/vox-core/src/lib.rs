@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod composition;
+pub mod production_risk;
 pub mod production_runtime;
 
 use std::env;

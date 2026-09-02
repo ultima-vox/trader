@@ -37,7 +37,9 @@ use crate::contract::market::{
 };
 use crate::contract::money::Decimal;
 use crate::contract::risk::{
-    ChangeRiskStateRequest, RiskReasonDto, RiskReservationDto, RiskStatusDto,
+    ChangeRiskStateRequest, ReservationStateDto, RiskActionKindDto, RiskDecisionDto,
+    RiskLimitUsageDto, RiskOutcomeDto, RiskReasonCodeDto, RiskReasonDto, RiskReservationDto,
+    RiskStateDto, RiskStatusDto, RiskValidityDto,
 };
 use crate::contract::runtime::{
     ReasonCodeDto, RuntimeHealthDto, RuntimeStateDto, SafetyConditionDto, StreamHealthDto,
@@ -127,7 +129,9 @@ use crate::transport::http;
         InstrumentIdentityDto, InstrumentSummaryDto, MarketFreshness, TradingStatusDto, SessionDto,
         QuoteDto, DepthLevelDto, OrderBookDto, TradeDirectionDto, TradeTickDto, CandleIntervalDto,
         CandleIntervalCapability, CandleStateDto, CandleDto, CandlesDto,
-        RiskReasonDto, RiskReservationDto, RiskStatusDto, ChangeRiskStateRequest,
+        RiskOutcomeDto, RiskStateDto, RiskActionKindDto, RiskReasonCodeDto, RiskReasonDto,
+        RiskValidityDto, RiskDecisionDto, ReservationStateDto, RiskReservationDto,
+        RiskLimitUsageDto, RiskStatusDto, ChangeRiskStateRequest,
         ClientMessage, ServerEvent, EventPayload, Topic, SubscriptionStatus,
     )),
     tags(

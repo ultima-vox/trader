@@ -77,6 +77,7 @@ impl BrokerReadPort for TInvestRuntimeReadAdapter {
                 .unwrap_or_else(|| scope.broker_account_id.clone()),
             total_portfolio_valuation: portfolio.total_amount_portfolio.map(money_fact),
             total_currency_valuation: portfolio.total_amount_currencies.map(money_fact),
+            broker_daily_yield: portfolio.daily_yield.map(money_fact),
             cash_balances: BTreeMap::new(),
             broker_observed_at_unix_ms: None,
         })

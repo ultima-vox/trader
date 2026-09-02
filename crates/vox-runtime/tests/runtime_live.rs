@@ -104,6 +104,7 @@ impl BrokerReadPort for SandboxReads {
                 .unwrap_or_else(|| scope.broker_account_id.clone()),
             total_portfolio_valuation,
             total_currency_valuation,
+            broker_daily_yield: portfolio.daily_yield.map(money_fact),
             cash_balances: BTreeMap::new(),
             broker_observed_at_unix_ms: None,
         })

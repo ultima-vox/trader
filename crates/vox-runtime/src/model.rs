@@ -539,6 +539,9 @@ pub struct PortfolioFact {
     pub account_id: String,
     pub total_portfolio_valuation: Option<MoneyFact>,
     pub total_currency_valuation: Option<MoneyFact>,
+    /// T-Invest `GetPortfolio.daily_yield` with provider meaning; not a custom realized split.
+    #[serde(default)]
+    pub broker_daily_yield: Option<MoneyFact>,
     pub cash_balances: BTreeMap<String, String>,
     pub broker_observed_at_unix_ms: Option<i64>,
 }
@@ -990,6 +993,7 @@ mod tests {
                 currency: "RUB".into(),
                 amount_nanos: "25000000000".into(),
             }),
+            broker_daily_yield: None,
             cash_balances: [("RUB".into(), "20000000000".into())].into_iter().collect(),
             broker_observed_at_unix_ms: Some(1),
         };
