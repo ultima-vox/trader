@@ -574,6 +574,7 @@ fn config(
             cookie_secure: false,
         },
         tinvest_enabled: true,
+        frontend_directory: None,
     }
 }
 

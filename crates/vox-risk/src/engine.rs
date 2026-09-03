@@ -694,11 +694,19 @@ fn validate_protection(
                 "max_unprotected_duration_ms cannot be negative",
             ));
         }
-        let entered_at = protection.position_entered_at_unix_ms.ok_or_else(|| {
-            RiskEngineError::InvalidPolicy(
-                "max_unprotected_duration_ms requires a position entry watermark",
-            )
-        })?;
+        let entered_at = match protection.position_entered_at_unix_ms {
+            Some(t) => t,
+            None => {
+                // Unknown position entry time with a duration cap fails closed.
+                return Ok(Some(reject(
+                    policy,
+                    request,
+                    RiskOutcome::Reject,
+                    RiskReasonCode::ProtectionRequired,
+                    "max-unprotected-duration requires position entry watermark",
+                )));
+            }
+        };
         let uncovered_lots = protection.uncovered_abs_lots();
         let age = request.now_unix_ms.saturating_sub(entered_at);
         if uncovered_lots > 0 && age > max_duration {
@@ -721,8 +729,29 @@ fn validate_protection(
         }
     }
 
-    // Protection is acceptable when there is a correlated non-terminal plan that still
-    // permits new exposure, or when the position already enjoys full active-stop
+    // Terminal plan: reject new exposure regardless of broker coverage.
+    // Prevents "false protected state" when a protection leg was cancelled/replaced
+    // but the broker stop is still active — the plan is dead, so new exposure must wait.
+    if protection.plan_state.is_some_and(|s| s.terminal()) {
+        tracing::info!(
+            risk.request_id = %request.request_id,
+            risk.account_id = %request.account_id,
+            risk.outcome = "reject",
+            risk.reason_code = ?RiskReasonCode::ProtectionRequired,
+            risk.plan_state = ?protection.plan_state,
+            "risk decision: reject - protection plan is terminal",
+        );
+        return Ok(Some(reject(
+            policy,
+            request,
+            RiskOutcome::Reject,
+            RiskReasonCode::ProtectionRequired,
+            "protection plan is in a terminal state (cancelled/failed/stale)",
+        )));
+    }
+
+    // Plan is acceptable when there is a correlated non-terminal plan that still
+    // permits additional exposure, or when the position already enjoys full active-stop
     // coverage even without a correlated plan row.
     let plan_acceptable = protection
         .plan_state
@@ -866,8 +895,8 @@ pub enum RiskEngineError {
 mod tests {
     use super::*;
     use crate::model::{
-        BrokerLotLimits, BrokerMarginFacts, BuyLotLimit, ProtectionPlanState,
-        RiskProtectionStatus, RiskSnapshot, RiskSource, RiskValidityContext, SellLotLimit,
+        BrokerLotLimits, BrokerMarginFacts, BuyLotLimit, ProtectionPlanState, RiskProtectionStatus,
+        RiskSnapshot, RiskSource, RiskValidityContext, SellLotLimit,
     };
 
     fn request(base: i64, delta: i64) -> RiskRequest {

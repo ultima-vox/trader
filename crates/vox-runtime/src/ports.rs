@@ -103,6 +103,28 @@ pub trait RiskAdmissionPort: Send + Sync {
         Ok(())
     }
 
+    /// Transition a protection plan from PLANNED to SUBMITTED when a protection leg
+    /// is dispatched to the broker. Called immediately after successful dispatch.
+    async fn transition_protection_plan_on_dispatch(
+        &self,
+        _scope: &RuntimeScope,
+        _logical_request_id: &str,
+        _now_unix_ms: i64,
+    ) -> Result<(), RiskAdmissionError> {
+        Ok(())
+    }
+
+    /// Transition a protection plan from PLANNED to FAILED when the broker rejects
+    /// the protection leg. Called immediately after rejection.
+    async fn transition_protection_plan_on_reject(
+        &self,
+        _scope: &RuntimeScope,
+        _logical_request_id: &str,
+        _now_unix_ms: i64,
+    ) -> Result<(), RiskAdmissionError> {
+        Ok(())
+    }
+
     /// Revalidate correctness-critical facts after queueing and immediately before the
     /// durable dispatch fence. Production adapters reject changed approval watermarks.
     async fn validate_before_dispatch(

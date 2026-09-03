@@ -76,10 +76,19 @@ pub trait RiskStore: Clone + Send + Sync + 'static {
     ) -> Result<RiskReservation, RiskStoreError>;
 
     // --- Protection-required lifecycle (#21) ------------------------------------
-    fn put_protection_plan(
+    /// Create a new protection plan row and persist it. Returns the persisted plan.
+    #[allow(clippy::too_many_arguments)]
+    fn create_protection_plan(
         &self,
-        plan: &RiskProtectionPlanRow,
-    ) -> Result<(), RiskStoreError>;
+        account_id: impl Into<String>,
+        instrument_id: impl Into<String>,
+        strategy_id: Option<String>,
+        reservation_id: impl Into<String>,
+        protected_delta_lots: i64,
+        canonical_plan_id: Option<String>,
+        now_unix_ms: i64,
+    ) -> Result<RiskProtectionPlanRow, RiskStoreError>;
+    fn put_protection_plan(&self, plan: &RiskProtectionPlanRow) -> Result<(), RiskStoreError>;
     fn protection_plan(
         &self,
         plan_id: &str,
@@ -94,6 +103,25 @@ pub trait RiskStore: Clone + Send + Sync + 'static {
         plan_id: &str,
         expected: &[ProtectionPlanState],
         new_state: ProtectionPlanState,
+        now_unix_ms: i64,
+    ) -> Result<RiskProtectionPlanRow, RiskStoreError>;
+    /// Reconcile protection plans against broker stop facts.
+    /// Transitions plans to STALE when coverage no longer reconciles,
+    /// to CANCELLED when all stops are cancelled, and to ACTIVE/FULL_COVERAGE
+    /// when broker evidence confirms.
+    fn reconcile_protection_plans(
+        &self,
+        account_id: &str,
+        instrument_id: &str,
+        active_stop_lots: i64,
+        position_lots: i64,
+        now_unix_ms: i64,
+    ) -> Result<Vec<RiskProtectionPlanRow>, RiskStoreError>;
+    /// Transition a protection plan to FAILED when the broker rejects the leg.
+    fn transition_protection_plan_on_reject(
+        &self,
+        account_id: &str,
+        logical_request_id: &str,
         now_unix_ms: i64,
     ) -> Result<RiskProtectionPlanRow, RiskStoreError>;
 }
@@ -485,20 +513,42 @@ impl RiskStore for SqliteRiskStore {
         Ok(updated)
     }
 
-    fn put_protection_plan(
+    fn create_protection_plan(
         &self,
-        plan: &RiskProtectionPlanRow,
-    ) -> Result<(), RiskStoreError> {
+        account_id: impl Into<String>,
+        instrument_id: impl Into<String>,
+        strategy_id: Option<String>,
+        reservation_id: impl Into<String>,
+        protected_delta_lots: i64,
+        canonical_plan_id: Option<String>,
+        now_unix_ms: i64,
+    ) -> Result<RiskProtectionPlanRow, RiskStoreError> {
+        let plan = RiskProtectionPlanRow::new(
+            account_id,
+            instrument_id,
+            strategy_id,
+            reservation_id,
+            protected_delta_lots,
+            canonical_plan_id,
+            now_unix_ms,
+        );
+        self.put_protection_plan(&plan)?;
+        Ok(plan)
+    }
+
+    fn put_protection_plan(&self, plan: &RiskProtectionPlanRow) -> Result<(), RiskStoreError> {
         let connection = self.connection()?;
         connection.execute(
             "INSERT INTO risk_protection_plans (
                  plan_id, account_id, instrument_id, strategy_id, reservation_id,
-                 protected_delta_lots, state, created_at_unix_ms, updated_at_unix_ms
+                 protected_delta_lots, canonical_plan_id, state,
+                 created_at_unix_ms, updated_at_unix_ms
              ) VALUES (
-                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
              )
              ON CONFLICT(plan_id) DO UPDATE SET
                  protected_delta_lots = excluded.protected_delta_lots,
+                 canonical_plan_id = excluded.canonical_plan_id,
                  state = excluded.state,
                  updated_at_unix_ms = excluded.updated_at_unix_ms",
             params![
@@ -508,6 +558,7 @@ impl RiskStore for SqliteRiskStore {
                 plan.strategy_id,
                 plan.reservation_id,
                 plan.protected_delta_lots,
+                plan.canonical_plan_id,
                 plan_state_name(plan.state),
                 plan.created_at_unix_ms,
                 plan.updated_at_unix_ms,
@@ -531,7 +582,8 @@ impl RiskStore for SqliteRiskStore {
         self.connection()?
             .query_row(
                 "SELECT plan_id, account_id, instrument_id, strategy_id, reservation_id,
-                        protected_delta_lots, state, created_at_unix_ms, updated_at_unix_ms
+                        protected_delta_lots, canonical_plan_id, state,
+                        created_at_unix_ms, updated_at_unix_ms
                  FROM risk_protection_plans
                  WHERE plan_id = ?1",
                 [plan_id],
@@ -549,7 +601,8 @@ impl RiskStore for SqliteRiskStore {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "SELECT plan_id, account_id, instrument_id, strategy_id, reservation_id,
-                    protected_delta_lots, state, created_at_unix_ms, updated_at_unix_ms
+                    protected_delta_lots, canonical_plan_id, state,
+                    created_at_unix_ms, updated_at_unix_ms
              FROM risk_protection_plans
              WHERE account_id = ?1 AND instrument_id = ?2
              ORDER BY created_at_unix_ms",
@@ -572,8 +625,8 @@ impl RiskStore for SqliteRiskStore {
         let start = Instant::now();
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current = plan_by_id(&transaction, plan_id)?
-            .ok_or(RiskStoreError::ReservationNotFound)?;
+        let current =
+            plan_by_id(&transaction, plan_id)?.ok_or(RiskStoreError::ReservationNotFound)?;
         if !expected.contains(&current.state) {
             return Err(RiskStoreError::InvalidTransition);
         }
@@ -583,8 +636,8 @@ impl RiskStore for SqliteRiskStore {
              WHERE plan_id = ?1",
             params![plan_id, plan_state_name(new_state), now_unix_ms],
         )?;
-        let updated = plan_by_id(&transaction, plan_id)?
-            .ok_or(RiskStoreError::ReservationNotFound)?;
+        let updated =
+            plan_by_id(&transaction, plan_id)?.ok_or(RiskStoreError::ReservationNotFound)?;
         transaction.commit()?;
         tracing::info!(
             persistence.event = "protection_plan_state_transition",
@@ -597,6 +650,89 @@ impl RiskStore for SqliteRiskStore {
             new_state,
         );
         Ok(updated)
+    }
+
+    fn reconcile_protection_plans(
+        &self,
+        account_id: &str,
+        instrument_id: &str,
+        active_stop_lots: i64,
+        position_lots: i64,
+        now_unix_ms: i64,
+    ) -> Result<Vec<RiskProtectionPlanRow>, RiskStoreError> {
+        let plans = self.protection_plans_for_instrument(account_id, instrument_id)?;
+        let mut updated = Vec::new();
+
+        for plan in plans {
+            // Skip terminal plans — they are already resolved.
+            if plan.state.terminal() {
+                continue;
+            }
+
+            // Compute coverage from broker facts.
+            let covered = (active_stop_lots.unsigned_abs() as i128)
+                .min(position_lots.unsigned_abs() as i128) as i64;
+            let is_fully_covered =
+                covered >= position_lots.unsigned_abs() as i64 && position_lots != 0;
+            let has_any_coverage = covered > 0;
+
+            // Determine target state from broker evidence.
+            let target = if is_fully_covered {
+                ProtectionPlanState::FullCoverage
+            } else if has_any_coverage {
+                ProtectionPlanState::PartialCoverage
+            } else {
+                // No broker stop coverage — the plan is stale.
+                // This handles: stop cancelled, stop expired, crash between
+                // dispatch and outcome (Submitted → Stale).
+                ProtectionPlanState::Stale
+            };
+
+            // Only transition if the target state differs.
+            if plan.state != target {
+                let transitioned = self.transition_protection_plan(
+                    &plan.plan_id,
+                    &[plan.state],
+                    target,
+                    now_unix_ms,
+                )?;
+                updated.push(transitioned);
+            } else {
+                updated.push(plan);
+            }
+        }
+
+        Ok(updated)
+    }
+
+    fn transition_protection_plan_on_reject(
+        &self,
+        account_id: &str,
+        logical_request_id: &str,
+        now_unix_ms: i64,
+    ) -> Result<RiskProtectionPlanRow, RiskStoreError> {
+        // Find the reservation for this logical request.
+        let reservation = reservation_for_request_connection(
+            &self.connection()?,
+            account_id,
+            logical_request_id,
+        )?
+        .ok_or(RiskStoreError::ReservationNotFound)?;
+
+        // Find the protection plan linked to this reservation.
+        let plans = self.protection_plans_for_instrument(account_id, &reservation.instrument_id)?;
+        let plan = plans
+            .into_iter()
+            .find(|p| p.reservation_id == reservation.reservation_id)
+            .ok_or(RiskStoreError::ReservationNotFound)?;
+
+        // Transition from Planned to Failed.
+        self.transition_protection_plan(
+            &plan.plan_id,
+            &[ProtectionPlanState::Planned],
+            ProtectionPlanState::Failed,
+            now_unix_ms,
+        )
     }
 }
 
@@ -869,7 +1005,8 @@ fn plan_by_id(
     connection
         .query_row(
             "SELECT plan_id, account_id, instrument_id, strategy_id, reservation_id,
-                    protected_delta_lots, state, created_at_unix_ms, updated_at_unix_ms
+                    protected_delta_lots, canonical_plan_id, state,
+                    created_at_unix_ms, updated_at_unix_ms
              FROM risk_protection_plans WHERE plan_id = ?1",
             [plan_id],
             plan_from_row,
@@ -879,7 +1016,7 @@ fn plan_by_id(
 }
 
 fn plan_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RiskProtectionPlanRow> {
-    let state = parse_plan_state(row.get::<_, String>(6)?).map_err(text_conversion_error)?;
+    let state = parse_plan_state(row.get::<_, String>(7)?).map_err(text_conversion_error)?;
     Ok(RiskProtectionPlanRow {
         plan_id: row.get(0)?,
         account_id: row.get(1)?,
@@ -887,9 +1024,10 @@ fn plan_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RiskProtectionPlan
         strategy_id: row.get(3)?,
         reservation_id: row.get(4)?,
         protected_delta_lots: row.get(5)?,
+        canonical_plan_id: row.get::<_, Option<String>>(6)?,
         state,
-        created_at_unix_ms: row.get(7)?,
-        updated_at_unix_ms: row.get(8)?,
+        created_at_unix_ms: row.get(8)?,
+        updated_at_unix_ms: row.get(9)?,
     })
 }
 
@@ -1020,6 +1158,7 @@ CREATE TABLE IF NOT EXISTS risk_protection_plans (
     strategy_id TEXT,
     reservation_id TEXT NOT NULL,
     protected_delta_lots INTEGER NOT NULL,
+    canonical_plan_id TEXT,
     state TEXT NOT NULL,
     created_at_unix_ms INTEGER NOT NULL,
     updated_at_unix_ms INTEGER NOT NULL
@@ -1264,8 +1403,8 @@ mod tests {
     }
 
     #[test]
-    fn protection_plan_round_trips_and_transition_obeys_expected_states(
-    ) -> Result<(), RiskStoreError> {
+    fn protection_plan_round_trips_and_transition_obeys_expected_states()
+    -> Result<(), RiskStoreError> {
         let path = std::env::temp_dir().join(format!("vox-risk-{}.sqlite3", uuid::Uuid::new_v4()));
         let store = SqliteRiskStore::open(&path)?;
         let plan = RiskProtectionPlanRow {
@@ -1275,6 +1414,7 @@ mod tests {
             strategy_id: None,
             reservation_id: RiskReservation::new_id(),
             protected_delta_lots: 10,
+            canonical_plan_id: None,
             state: ProtectionPlanState::Planned,
             created_at_unix_ms: 1,
             updated_at_unix_ms: 1,

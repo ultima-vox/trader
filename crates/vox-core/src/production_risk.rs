@@ -6,10 +6,10 @@ use tokio::sync::{Mutex, RwLock, Semaphore};
 use vox_connections::{ConnectionId, ExecutionPurpose};
 use vox_domain::{OrderSide, RegularOrderType, RuntimeExecutionCommand};
 use vox_risk::{
-    BrokerLotLimits, BrokerMarginFacts, BuyLotLimit, ReservationCapacity, ReservationState,
-    RiskActionKind, RiskEngine, RiskPolicySet, RiskReasonCode, RiskRequest, RiskReservation,
-    RiskReservationReconciler, RiskSnapshot, RiskSource, RiskState, RiskStore, RiskValidityContext,
-    SellLotLimit, SqliteRiskStore,
+    BrokerLotLimits, BrokerMarginFacts, BuyLotLimit, ProtectionPlanState, ReservationCapacity,
+    ReservationState, RiskActionKind, RiskEngine, RiskPolicySet, RiskReasonCode, RiskRequest,
+    RiskReservation, RiskReservationReconciler, RiskSnapshot, RiskSource, RiskState, RiskStore,
+    RiskValidityContext, SellLotLimit, SqliteRiskStore,
 };
 use vox_runtime::{
     ReconciliationReport, RiskAdmission, RiskAdmissionError, RiskAdmissionPort,
@@ -96,9 +96,7 @@ impl ProductionRiskAdapter {
         let active_stop_lots = report
             .active_stops
             .iter()
-            .filter(|stop| {
-                stop.instrument_uid == instrument_id && stop.status.active()
-            })
+            .filter(|stop| stop.instrument_uid == instrument_id && stop.status.active())
             .map(|stop| stop.quantity_lots.unwrap_or(0))
             .sum::<i64>();
 
@@ -615,6 +613,42 @@ impl RiskAdmissionPort for ProductionRiskAdapter {
             (decision, None)
         };
 
+        // Create a protection plan when policy mandates protection for new exposure.
+        // The plan starts in PLANNED state and is advanced to SUBMITTED once the
+        // runtime dispatches the protection leg to the broker.
+        if policy.protection_required_for_new_exposure
+            && matches!(
+                persisted.0.action,
+                RiskActionKind::DirectionalOrder | RiskActionKind::ReplaceDirectionalOrder
+            )
+            && persisted.0.approved_delta_lots != 0
+            && let Some(ref reservation) = persisted.1
+        {
+            let plan = self
+                .risk_store
+                .create_protection_plan(
+                    &self.canonical_account_id,
+                    &reservation.instrument_id,
+                    reservation.strategy_id.clone(),
+                    &reservation.reservation_id,
+                    persisted.0.approved_delta_lots,
+                    None, // canonical_plan_id wired when runtime dispatches protection leg
+                    now_unix_ms()?,
+                )
+                .map_err(|error| {
+                    RiskAdmissionError::Unavailable(format!(
+                        "protection plan creation failed: {error}"
+                    ))
+                })?;
+            tracing::info!(
+                risk.plan_id = %plan.plan_id,
+                risk.reservation_id = %reservation.reservation_id,
+                risk.instrument_id = %reservation.instrument_id,
+                persistence.event = "protection_plan_created",
+                "protection plan created for approved exposure",
+            );
+        }
+
         Ok(RiskAdmission {
             decision_id: persisted.0.decision_id,
             reservation_id: persisted.1.map(|reservation| reservation.reservation_id),
@@ -813,6 +847,143 @@ impl RiskAdmissionPort for ProductionRiskAdapter {
                     .map_err(|error| RiskAdmissionError::Unavailable(error.to_string()))?;
             }
         }
+
+        // Reconcile protection plans against broker stop facts.
+        // This restores correlation after restart and transitions plans based
+        // on broker-authoritative stop evidence (active / cancelled / expired).
+        for position in &report.positions {
+            let active_stop_lots: i64 = report
+                .active_stops
+                .iter()
+                .filter(|stop| {
+                    stop.instrument_uid == position.instrument_uid && stop.status.active()
+                })
+                .map(|stop| stop.quantity_lots.unwrap_or(0))
+                .sum();
+
+            self.risk_store
+                .reconcile_protection_plans(
+                    &self.canonical_account_id,
+                    &position.instrument_uid,
+                    active_stop_lots,
+                    position.quantity_units,
+                    report.completed_at_unix_ms,
+                )
+                .map_err(|error| {
+                    RiskAdmissionError::Unavailable(format!(
+                        "protection plan reconciliation failed: {error}"
+                    ))
+                })?;
+        }
+
+        Ok(())
+    }
+
+    async fn transition_protection_plan_on_dispatch(
+        &self,
+        _scope: &RuntimeScope,
+        logical_request_id: &str,
+        now_unix_ms: i64,
+    ) -> Result<(), RiskAdmissionError> {
+        // Find the protection plan linked to this logical request via its reservation.
+        let reservation = self
+            .risk_store
+            .reservation_for_request(&self.canonical_account_id, logical_request_id)
+            .map_err(store_unavailable)?
+            .ok_or_else(|| {
+                RiskAdmissionError::Unavailable(
+                    "no reservation found for protection plan transition".into(),
+                )
+            })?;
+
+        // Find the protection plan linked to this reservation.
+        let plans = self
+            .risk_store
+            .protection_plans_for_instrument(&self.canonical_account_id, &reservation.instrument_id)
+            .map_err(store_unavailable)?;
+
+        let plan = plans
+            .iter()
+            .find(|p| p.reservation_id == reservation.reservation_id)
+            .ok_or_else(|| {
+                RiskAdmissionError::Unavailable("no protection plan found for reservation".into())
+            })?;
+
+        // Transition from Planned to Submitted.
+        self.risk_store
+            .transition_protection_plan(
+                &plan.plan_id,
+                &[ProtectionPlanState::Planned],
+                ProtectionPlanState::Submitted,
+                now_unix_ms,
+            )
+            .map_err(|error| match error {
+                vox_risk::RiskStoreError::InvalidTransition => RiskAdmissionError::Unavailable(
+                    "protection plan is not in Planned state".into(),
+                ),
+                other => store_unavailable(other),
+            })?;
+
+        tracing::info!(
+            risk.plan_id = %plan.plan_id,
+            risk.reservation_id = %reservation.reservation_id,
+            persistence.event = "protection_plan_submitted",
+            "protection plan transitioned to SUBMITTED",
+        );
+        Ok(())
+    }
+
+    async fn transition_protection_plan_on_reject(
+        &self,
+        _scope: &RuntimeScope,
+        logical_request_id: &str,
+        now_unix_ms: i64,
+    ) -> Result<(), RiskAdmissionError> {
+        // Find the protection plan linked to this logical request via its reservation.
+        let reservation = self
+            .risk_store
+            .reservation_for_request(&self.canonical_account_id, logical_request_id)
+            .map_err(store_unavailable)?
+            .ok_or_else(|| {
+                RiskAdmissionError::Unavailable(
+                    "no reservation found for protection plan reject transition".into(),
+                )
+            })?;
+
+        // Find the protection plan linked to this reservation.
+        let plans = self
+            .risk_store
+            .protection_plans_for_instrument(&self.canonical_account_id, &reservation.instrument_id)
+            .map_err(store_unavailable)?;
+
+        let plan = plans
+            .into_iter()
+            .find(|p| p.reservation_id == reservation.reservation_id)
+            .ok_or_else(|| {
+                RiskAdmissionError::Unavailable("no protection plan found for reservation".into())
+            })?;
+
+        // Transition from Planned to Failed.
+        self.risk_store
+            .transition_protection_plan(
+                &plan.plan_id,
+                &[ProtectionPlanState::Planned],
+                ProtectionPlanState::Failed,
+                now_unix_ms,
+            )
+            .map_err(|error| match error {
+                vox_risk::RiskStoreError::InvalidTransition => RiskAdmissionError::Unavailable(
+                    "protection plan is not in Planned state".into(),
+                ),
+                other => store_unavailable(other),
+            })?;
+
+        tracing::info!(
+            risk.plan_id = %plan.plan_id,
+            risk.reservation_id = %reservation.reservation_id,
+            persistence.event = "protection_plan_failed",
+            "protection plan transitioned to FAILED",
+        );
         Ok(())
     }
 }

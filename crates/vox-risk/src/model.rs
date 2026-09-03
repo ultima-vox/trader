@@ -392,10 +392,7 @@ impl ProtectionPlanState {
 
     #[must_use]
     pub const fn terminal(&self) -> bool {
-        matches!(
-            self,
-            Self::Cancelled | Self::Failed | Self::Stale
-        )
+        matches!(self, Self::Cancelled | Self::Failed | Self::Stale)
     }
 }
 
@@ -509,6 +506,11 @@ pub struct GlobalRiskStateRow {
 /// A plan binds an approved exposure (via its reservation) to the #10 protection
 /// legs that cover it. Lifecycle state is advanced only by broker-authoritative
 /// stop/fill evidence, never by local intent.
+///
+/// `canonical_plan_id` links this risk-layer plan to the #10 canonical protection
+/// plan (the runtime-level ProtectionPlan) so that restart/reconciliation can
+/// restore the correlation between risk decisions, reservations, and broker-native
+/// stop orders.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RiskProtectionPlanRow {
     pub plan_id: String,
@@ -520,6 +522,9 @@ pub struct RiskProtectionPlanRow {
     /// Signed lot quantity the plan is responsible for protecting.
     pub protected_delta_lots: i64,
     pub state: ProtectionPlanState,
+    /// Correlation to the #10 canonical protection plan (runtime ProtectionPlan).
+    /// Allows restart/reconciliation to restore the risk-to-broker linkage.
+    pub canonical_plan_id: Option<String>,
     pub created_at_unix_ms: i64,
     pub updated_at_unix_ms: i64,
 }
@@ -528,5 +533,31 @@ impl RiskProtectionPlanRow {
     #[must_use]
     pub fn new_id() -> String {
         format!("risk-protection-plan:{}", Uuid::new_v4())
+    }
+
+    /// Create a new protection plan row in the Planned state.
+    #[must_use]
+    pub fn new(
+        account_id: impl Into<String>,
+        instrument_id: impl Into<String>,
+        strategy_id: Option<String>,
+        reservation_id: impl Into<String>,
+        protected_delta_lots: i64,
+        canonical_plan_id: Option<String>,
+        now_unix_ms: i64,
+    ) -> Self {
+        let id = Self::new_id();
+        Self {
+            plan_id: id.clone(),
+            account_id: account_id.into(),
+            instrument_id: instrument_id.into(),
+            strategy_id,
+            reservation_id: reservation_id.into(),
+            protected_delta_lots,
+            state: ProtectionPlanState::Planned,
+            canonical_plan_id,
+            created_at_unix_ms: now_unix_ms,
+            updated_at_unix_ms: now_unix_ms,
+        }
     }
 }

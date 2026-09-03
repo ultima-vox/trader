@@ -424,6 +424,8 @@ mod tests {
                 instrument_uid: "instrument-one".into(),
                 status: StopExecutionStatus::UnknownProviderStatus(88_888),
                 status_cause: None,
+                quantity_lots: None,
+                direction: None,
             },
         )?;
         assert_eq!(
