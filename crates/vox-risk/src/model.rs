@@ -148,6 +148,48 @@ pub struct RiskValidityContext {
     pub execution_authorization_revision: u64,
 }
 
+/// Broker-supported protection coverage for a position, supplied as authoritative
+/// evidence in the risk snapshot. This replaces the previous boolean stub with a
+/// typed, evidenced view so protection-required policy can distinguish full coverage,
+/// partial coverage and unprotected exposure.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RiskProtectionStatus {
+    /// Signed lots currently covered by an active broker-native stop order.
+    pub active_stop_lots: i64,
+    /// Signed current position lots that require protection coverage.
+    pub position_lots: i64,
+    /// Wall-clock time the current position entered, used to enforce
+    /// max-unprotected-duration. `None` degrades to "unknown age" and fails closed
+    /// when a policy sets a maximum unprotected duration.
+    pub position_entered_at_unix_ms: Option<i64>,
+    /// Durable protection-plan correlation with the underlying #10 protection plan/leg.
+    pub plan_id: Option<String>,
+    /// Current lifecycle state of the correlated protection plan, when one exists.
+    pub plan_state: Option<ProtectionPlanState>,
+}
+
+impl RiskProtectionStatus {
+    /// Absolute number of position lots that are not yet covered by an active stop.
+    #[must_use]
+    pub fn uncovered_abs_lots(&self) -> i64 {
+        let position = self.position_lots.unsigned_abs() as i128;
+        let covered = (self.active_stop_lots.unsigned_abs() as i128).min(position);
+        (position - covered) as i64
+    }
+
+    /// `true` when every position lot is covered by an active stop (full coverage).
+    #[must_use]
+    pub fn full_coverage(&self) -> bool {
+        self.position_lots != 0 && self.uncovered_abs_lots() == 0
+    }
+
+    /// `true` when the position has partial (non-zero but not full) stop coverage.
+    #[must_use]
+    pub fn partial_coverage(&self) -> bool {
+        self.position_lots != 0 && self.active_stop_lots != 0 && !self.full_coverage()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RiskSnapshot {
     pub runtime_ready: bool,
@@ -165,6 +207,8 @@ pub struct RiskSnapshot {
     pub broker_daily_pnl_nanos: Option<i128>,
     pub broker_lot_limits: Option<BrokerLotLimits>,
     pub margin: Option<BrokerMarginFacts>,
+    /// Broker-authoritative protection coverage for the requesting instrument.
+    pub protection: RiskProtectionStatus,
     pub validity: RiskValidityContext,
 }
 
@@ -182,7 +226,6 @@ pub struct RiskRequest {
     pub requested_notional_nanos: i128,
     pub is_market_order: bool,
     pub confirm_margin_trade: bool,
-    pub protection_established_or_planned: bool,
     pub emergency_reduction: bool,
     pub now_unix_ms: i64,
     pub snapshot: RiskSnapshot,
@@ -204,6 +247,12 @@ pub struct RiskPolicySet {
     pub max_margin_utilization_ppm: Option<i64>,
     pub max_daily_loss_nanos: Option<i128>,
     pub protection_required_for_new_exposure: bool,
+    /// Maximum wall-clock duration a position may remain without full protection
+    /// coverage before protection-required policy blocks new exposure. `None` disables
+    /// the duration cap. A set value in a policy that requires protection fails closed
+    /// whenever the position entry time is unknown.
+    #[serde(default)]
+    pub max_unprotected_duration_ms: Option<i64>,
 }
 
 impl RiskPolicySet {
@@ -223,6 +272,7 @@ impl RiskPolicySet {
             max_margin_utilization_ppm: None,
             max_daily_loss_nanos: None,
             protection_required_for_new_exposure: false,
+            max_unprotected_duration_ms: None,
         }
     }
 }
@@ -300,6 +350,62 @@ impl RiskReservation {
     }
 }
 
+/// Durable lifecycle state of a protection plan correlated to an approved risk
+/// decision and its reservation. Lifecycle is driven by broker-authoritative stop
+/// evidence and fill facts, never by local intent alone.
+///
+/// - `PLANNED`: an approved exposure intends to be protected; plan created but no
+///   stop leg submitted to the broker yet.
+/// - `SUBMITTED`: a protection leg command was dispatched; outcome not yet confirmed.
+/// - `ACTIVE`: at least one broker-native stop leg is active.
+/// - `PARTIAL_COVERAGE`: only part of the protected position is covered by an active stop.
+/// - `FULL_COVERAGE`: every protected lot is covered by an active stop.
+/// - `CANCELLED`: protection legs were cancelled/replaced without leaving coverage.
+/// - `FAILED`: establishment failed (broker reject / capability / pre-dispatch).
+/// - `STALE`: coverage no longer reconciles to the current position (e.g. expired).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ProtectionPlanState {
+    Planned,
+    Submitted,
+    Active,
+    PartialCoverage,
+    FullCoverage,
+    Cancelled,
+    Failed,
+    Stale,
+}
+
+impl ProtectionPlanState {
+    /// `true` when the plan currently allows additional exposure on the instrument.
+    ///
+    /// Only full coverage (or an active plan that fully protects the entered position)
+    /// satisfies protection-required policy. Partial, planned, submitted and failed
+    /// states do not permit new exposure unless the plan itself is being maintained.
+    #[must_use]
+    pub const fn permits_additional_exposure(&self) -> bool {
+        matches!(
+            self,
+            Self::Active | Self::FullCoverage | Self::PartialCoverage
+        )
+    }
+
+    #[must_use]
+    pub const fn terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Cancelled | Self::Failed | Self::Stale
+        )
+    }
+}
+
+impl Default for ProtectionPlanState {
+    #[inline]
+    fn default() -> Self {
+        Self::Planned
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Persistence models (risk policy, account/strategy/global risk state)
 // ---------------------------------------------------------------------------
@@ -320,6 +426,7 @@ pub struct RiskPolicyRow {
     pub max_margin_utilization_ppm: Option<i64>,
     pub max_daily_loss_nanos: Option<i128>,
     pub protection_required_for_new_exposure: bool,
+    pub max_unprotected_duration_ms: Option<i64>,
     pub updated_at_unix_ms: i64,
 }
 
@@ -340,6 +447,7 @@ impl RiskPolicyRow {
             max_margin_utilization_ppm: policy.max_margin_utilization_ppm,
             max_daily_loss_nanos: policy.max_daily_loss_nanos,
             protection_required_for_new_exposure: policy.protection_required_for_new_exposure,
+            max_unprotected_duration_ms: policy.max_unprotected_duration_ms,
             updated_at_unix_ms: now_unix_ms,
         }
     }
@@ -360,6 +468,7 @@ impl RiskPolicyRow {
             max_margin_utilization_ppm: self.max_margin_utilization_ppm,
             max_daily_loss_nanos: self.max_daily_loss_nanos,
             protection_required_for_new_exposure: self.protection_required_for_new_exposure,
+            max_unprotected_duration_ms: self.max_unprotected_duration_ms,
         }
     }
 }
@@ -393,4 +502,31 @@ pub struct StrategyRiskStateRow {
 pub struct GlobalRiskStateRow {
     pub kill_switch: bool,
     pub updated_at_unix_ms: i64,
+}
+
+/// Durable protection plan correlated to an approved risk decision and reservation.
+///
+/// A plan binds an approved exposure (via its reservation) to the #10 protection
+/// legs that cover it. Lifecycle state is advanced only by broker-authoritative
+/// stop/fill evidence, never by local intent.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RiskProtectionPlanRow {
+    pub plan_id: String,
+    pub account_id: String,
+    pub instrument_id: String,
+    pub strategy_id: Option<String>,
+    /// The reservation whose approved exposure this plan protects.
+    pub reservation_id: String,
+    /// Signed lot quantity the plan is responsible for protecting.
+    pub protected_delta_lots: i64,
+    pub state: ProtectionPlanState,
+    pub created_at_unix_ms: i64,
+    pub updated_at_unix_ms: i64,
+}
+
+impl RiskProtectionPlanRow {
+    #[must_use]
+    pub fn new_id() -> String {
+        format!("risk-protection-plan:{}", Uuid::new_v4())
+    }
 }

@@ -77,6 +77,57 @@ impl ProductionRiskAdapter {
             .map_err(store_unavailable)
     }
 
+    /// Builds broker-authoritative protection evidence for the requesting instrument,
+    /// correlated to the durable #10 protection plan when one exists. Coverage is
+    /// derived from broker stop facts (`report.active_stops`) and current position lots,
+    /// never from local intent.
+    async fn protection_status(
+        &self,
+        report: &ReconciliationReport,
+        instrument_id: &str,
+    ) -> Result<vox_risk::RiskProtectionStatus, RiskAdmissionError> {
+        let position_lots = report
+            .positions
+            .iter()
+            .find(|position| position.instrument_uid == instrument_id)
+            .map(|position| position.quantity_units)
+            .unwrap_or(0);
+
+        let active_stop_lots = report
+            .active_stops
+            .iter()
+            .filter(|stop| {
+                stop.instrument_uid == instrument_id && stop.status.active()
+            })
+            .map(|stop| stop.quantity_lots.unwrap_or(0))
+            .sum::<i64>();
+
+        let position_entered_at_unix_ms = report
+            .positions
+            .iter()
+            .find(|position| position.instrument_uid == instrument_id)
+            .and_then(|position| position.broker_observed_at_unix_ms);
+
+        let plans = self
+            .risk_store
+            .protection_plans_for_instrument(&self.canonical_account_id, instrument_id)
+            .map_err(store_unavailable)?;
+        let (plan_id, plan_state) = plans
+            .iter()
+            .filter(|plan| !plan.state.terminal())
+            .max_by_key(|plan| plan.created_at_unix_ms)
+            .map(|plan| (Some(plan.plan_id.clone()), Some(plan.state)))
+            .unwrap_or((None, None));
+
+        Ok(vox_risk::RiskProtectionStatus {
+            active_stop_lots,
+            position_lots,
+            position_entered_at_unix_ms,
+            plan_id,
+            plan_state,
+        })
+    }
+
     pub fn replace_state(
         &self,
         expected_revision: u64,
@@ -354,11 +405,13 @@ impl ProductionRiskAdapter {
 
         let revision = u64::try_from(cached.report.snapshot_observed_at_unix_ms.max(0))
             .map_err(|_| RiskAdmissionError::Unavailable("snapshot revision invalid".into()))?;
+        let instrument_id = description.instrument_id.clone();
+        let instrument_id_clone = instrument_id.clone();
         Ok(RiskRequest {
             request_id: logical_request_id.to_owned(),
             account_id: self.canonical_account_id.clone(),
             broker_connection_id: self.broker_connection_id.clone(),
-            instrument_id: description.instrument_id,
+            instrument_id: instrument_id_clone,
             strategy_id: None,
             source: match purpose {
                 RuntimeExecutionPurpose::ProductionAutomated => RiskSource::Strategy,
@@ -370,10 +423,6 @@ impl ProductionRiskAdapter {
             requested_notional_nanos,
             is_market_order: matches!(description.order_type, Some(RegularOrderType::Market)),
             confirm_margin_trade: description.confirm_margin_trade,
-            protection_established_or_planned: !matches!(
-                description.action,
-                RiskActionKind::DirectionalOrder | RiskActionKind::ReplaceDirectionalOrder
-            ),
             emergency_reduction: false,
             now_unix_ms: now,
             snapshot: RiskSnapshot {
@@ -420,6 +469,9 @@ impl ProductionRiskAdapter {
                 } else {
                     None
                 },
+                protection: self
+                    .protection_status(&cached.report, &instrument_id)
+                    .await?,
                 validity: RiskValidityContext {
                     runtime_epoch: cached.report.runtime_epoch,
                     reconciliation_revision: revision,
@@ -976,6 +1028,7 @@ fn initial_policy() -> RiskPolicySet {
         max_margin_utilization_ppm: None,
         max_daily_loss_nanos: None,
         protection_required_for_new_exposure: false,
+        max_unprotected_duration_ms: None,
     }
 }
 

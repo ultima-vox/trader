@@ -4,6 +4,7 @@ pub mod auth;
 pub mod composition;
 pub mod production_risk;
 pub mod production_runtime;
+pub mod server;
 
 use std::env;
 use std::fmt;

@@ -651,6 +651,12 @@ pub struct StopFact {
     pub instrument_uid: String,
     pub status: StopExecutionStatus,
     pub status_cause: Option<ProviderStatusCause>,
+    /// Protected quantity in lots, broker-authoritative, when the provider reports it.
+    pub quantity_lots: Option<i64>,
+    /// Provider `OrderDirection` constant (BUY=1 protective buy-to-cover a short /
+    /// SELL=2 protective sell-to-close a long). Used to match the protection leg to the
+    /// exposed position side. `0` is the provider UNSPECIFIED sentinel.
+    pub direction: Option<i32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

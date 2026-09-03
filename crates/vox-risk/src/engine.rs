@@ -280,23 +280,8 @@ impl RiskEngine {
             if let Some(decision) = validate_market_data(policy, request)? {
                 return Ok(decision);
             }
-            if policy.protection_required_for_new_exposure
-                && !request.protection_established_or_planned
-            {
-                tracing::info!(
-                    risk.request_id = %request.request_id,
-                    risk.account_id = %request.account_id,
-                    risk.outcome = "reject",
-                    risk.reason_code = ?RiskReasonCode::ProtectionRequired,
-                    "risk decision: reject - protection plan required for new exposure",
-                );
-                return Ok(reject(
-                    policy,
-                    request,
-                    RiskOutcome::Reject,
-                    RiskReasonCode::ProtectionRequired,
-                    "new exposure requires an explicit protection plan",
-                ));
+            if let Some(decision) = validate_protection(policy, request, increasing_lots)? {
+                return Ok(decision);
             }
         }
 
@@ -679,6 +664,91 @@ fn validate_market_data(
     Ok(None)
 }
 
+/// Enforces the protection-required lifecycle for exposure-increasing actions.
+///
+/// The protection gate is driven by broker-authoritative stop coverage in the risk
+/// snapshot (`RiskProtectionStatus`) rather than a local intent flag. It:
+///
+/// - requires an accepted protection plan for exposure-increasing requests when policy
+///   mandates protection, distinguishing full, partial and no coverage;
+/// - enforces `max_unprotected_duration_ms`: once a position has been uncovered (or
+///   only partially covered) longer than the policy window, new exposure fails closed;
+/// - exempts reductions/closes (they do not reach this check) — only the increasing
+///   portion of a reversal is gated, while the closing portion is always exempt.
+fn validate_protection(
+    policy: &RiskPolicySet,
+    request: &RiskRequest,
+    increasing_lots: i64,
+) -> Result<Option<RiskDecision>, RiskEngineError> {
+    if !policy.protection_required_for_new_exposure {
+        return Ok(None);
+    }
+    debug_assert!(increasing_lots > 0);
+    let protection = &request.snapshot.protection;
+
+    // Duration cap: a set but negative value is an invalid policy. A set cap with an
+    // unknown position entry time fails closed (cannot prove the position is fresh).
+    if let Some(max_duration) = policy.max_unprotected_duration_ms {
+        if max_duration < 0 {
+            return Err(RiskEngineError::InvalidPolicy(
+                "max_unprotected_duration_ms cannot be negative",
+            ));
+        }
+        let entered_at = protection.position_entered_at_unix_ms.ok_or_else(|| {
+            RiskEngineError::InvalidPolicy(
+                "max_unprotected_duration_ms requires a position entry watermark",
+            )
+        })?;
+        let uncovered_lots = protection.uncovered_abs_lots();
+        let age = request.now_unix_ms.saturating_sub(entered_at);
+        if uncovered_lots > 0 && age > max_duration {
+            tracing::info!(
+                risk.request_id = %request.request_id,
+                risk.account_id = %request.account_id,
+                risk.outcome = "reduce_only",
+                risk.reason_code = ?RiskReasonCode::ProtectionRequired,
+                risk.uncovered_lots = uncovered_lots,
+                risk.unprotected_age_ms = age,
+                "risk decision: reduce_only - position uncovered beyond max-unprotected-duration",
+            );
+            return Ok(Some(reject(
+                policy,
+                request,
+                RiskOutcome::ReduceOnly,
+                RiskReasonCode::ProtectionRequired,
+                "position has been without full protection beyond the configured maximum",
+            )));
+        }
+    }
+
+    // Protection is acceptable when there is a correlated non-terminal plan that still
+    // permits new exposure, or when the position already enjoys full active-stop
+    // coverage even without a correlated plan row.
+    let plan_acceptable = protection
+        .plan_state
+        .is_some_and(|s| s.permits_additional_exposure());
+    let coverage_acceptable = protection.full_coverage();
+
+    if !plan_acceptable && !coverage_acceptable {
+        tracing::info!(
+            risk.request_id = %request.request_id,
+            risk.account_id = %request.account_id,
+            risk.outcome = "reject",
+            risk.reason_code = ?RiskReasonCode::ProtectionRequired,
+            "risk decision: reject - protection plan/coverage required for new exposure",
+        );
+        return Ok(Some(reject(
+            policy,
+            request,
+            RiskOutcome::Reject,
+            RiskReasonCode::ProtectionRequired,
+            "new exposure requires full protection coverage",
+        )));
+    }
+
+    Ok(None)
+}
+
 fn provider_limit(
     policy: &RiskPolicySet,
     request: &RiskRequest,
@@ -796,8 +866,8 @@ pub enum RiskEngineError {
 mod tests {
     use super::*;
     use crate::model::{
-        BrokerLotLimits, BrokerMarginFacts, BuyLotLimit, RiskSnapshot, RiskSource,
-        RiskValidityContext, SellLotLimit,
+        BrokerLotLimits, BrokerMarginFacts, BuyLotLimit, ProtectionPlanState,
+        RiskProtectionStatus, RiskSnapshot, RiskSource, RiskValidityContext, SellLotLimit,
     };
 
     fn request(base: i64, delta: i64) -> RiskRequest {
@@ -813,7 +883,6 @@ mod tests {
             requested_notional_nanos: i128::from(delta) * 1_000_000_000,
             is_market_order: false,
             confirm_margin_trade: false,
-            protection_established_or_planned: false,
             emergency_reduction: false,
             now_unix_ms: 10_000,
             snapshot: RiskSnapshot {
@@ -843,6 +912,7 @@ mod tests {
                     sell_margin: Some(SellLotLimit { max_lots: 200 }),
                 }),
                 margin: None,
+                protection: RiskProtectionStatus::default(),
                 validity: RiskValidityContext {
                     runtime_epoch: 1,
                     reconciliation_revision: 2,
@@ -872,6 +942,7 @@ mod tests {
             max_margin_utilization_ppm: None,
             max_daily_loss_nanos: None,
             protection_required_for_new_exposure: false,
+            max_unprotected_duration_ms: None,
         }
     }
 
@@ -1016,5 +1087,100 @@ mod tests {
             &changed,
             policy().revision
         ));
+    }
+
+    #[test]
+    fn protection_required_rejects_new_exposure_without_plan_or_coverage() {
+        let mut p = policy();
+        p.protection_required_for_new_exposure = true;
+        let mut r = request(0, 10);
+        r.snapshot.protection = RiskProtectionStatus {
+            position_lots: 10,
+            position_entered_at_unix_ms: Some(10_000),
+            ..RiskProtectionStatus::default()
+        };
+        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
+        assert_eq!(decision.outcome, RiskOutcome::Reject);
+        assert_eq!(decision.reasons[0].code, RiskReasonCode::ProtectionRequired);
+    }
+
+    #[test]
+    fn protection_required_allows_exposure_with_full_covered_plan() {
+        let mut p = policy();
+        p.protection_required_for_new_exposure = true;
+        let mut r = request(0, 10);
+        r.snapshot.protection = RiskProtectionStatus {
+            position_lots: 10,
+            active_stop_lots: 10,
+            position_entered_at_unix_ms: Some(10_000),
+            plan_id: Some("risk-protection-plan:1".to_owned()),
+            plan_state: Some(ProtectionPlanState::FullCoverage),
+        };
+        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
+        assert_eq!(decision.outcome, RiskOutcome::Approve);
+    }
+
+    #[test]
+    fn protection_required_covers_partial_plan_but_rejects_uncovered_portion() {
+        let mut p = policy();
+        p.protection_required_for_new_exposure = true;
+        let mut r = request(0, 10);
+        r.snapshot.protection = RiskProtectionStatus {
+            position_lots: 20,
+            active_stop_lots: 10,
+            position_entered_at_unix_ms: Some(10_000),
+            plan_id: Some("risk-protection-plan:1".to_owned()),
+            plan_state: Some(ProtectionPlanState::PartialCoverage),
+        };
+        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
+        assert_eq!(decision.outcome, RiskOutcome::Approve);
+    }
+
+    #[test]
+    fn max_unprotected_duration_blocks_new_exposure_fail_closed() {
+        let mut p = policy();
+        p.protection_required_for_new_exposure = true;
+        p.max_unprotected_duration_ms = Some(5_000);
+        let mut r = request(0, 10);
+        r.snapshot.protection = RiskProtectionStatus {
+            position_lots: 10,
+            // Entered 10_000ms before now (request builder now=10_000), exceeding 5_000ms.
+            position_entered_at_unix_ms: Some(0),
+            ..RiskProtectionStatus::default()
+        };
+        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
+        assert_eq!(decision.outcome, RiskOutcome::ReduceOnly);
+        assert_eq!(decision.reasons[0].code, RiskReasonCode::ProtectionRequired);
+    }
+
+    #[test]
+    fn max_unprotected_duration_with_unknown_entry_fails_closed() {
+        let mut p = policy();
+        p.protection_required_for_new_exposure = true;
+        p.max_unprotected_duration_ms = Some(10_000);
+        let mut r = request(0, 10);
+        r.snapshot.protection = RiskProtectionStatus {
+            position_lots: 10,
+            position_entered_at_unix_ms: None,
+            ..RiskProtectionStatus::default()
+        };
+        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
+        assert_eq!(decision.outcome, RiskOutcome::Reject);
+        assert_eq!(decision.reasons[0].code, RiskReasonCode::ProtectionRequired);
+    }
+
+    #[test]
+    fn exposure_reduction_is_exempt_from_protection_duration() {
+        let mut p = policy();
+        p.protection_required_for_new_exposure = true;
+        p.max_unprotected_duration_ms = Some(10_000);
+        let mut r = request(10, -10);
+        r.snapshot.protection = RiskProtectionStatus {
+            position_lots: 10,
+            position_entered_at_unix_ms: Some(0),
+            ..RiskProtectionStatus::default()
+        };
+        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
+        assert_eq!(decision.outcome, RiskOutcome::Approve);
     }
 }

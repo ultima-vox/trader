@@ -7,6 +7,7 @@ use anyhow::{Context, anyhow};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
+use tower_http::services::{ServeDir, ServeFile};
 use vox_api::binding::{AccountBinding, AccountBindingResolver, BindingError};
 use vox_api::contract::scope::{BrokerEnvironment as ApiBrokerEnvironment, ProviderDto};
 use vox_api::{AccountReadAdapter, AppState, ConnectionAdministrationAdapter};
@@ -38,6 +39,7 @@ pub struct ServerConfig {
     pub platform_database_path: PathBuf,
     pub secret_database_path: PathBuf,
     pub runtime_database_directory: PathBuf,
+    pub frontend_directory: Option<PathBuf>,
     pub key_provider: StaticKeyProvider,
     pub bootstrap: SessionBootstrap,
     pub tinvest_enabled: bool,
@@ -64,6 +66,7 @@ impl ServerConfig {
             .parse::<i64>()
             .context("parse VOX_BOOTSTRAP_EXPIRES_UNIX_MS")?;
         let tinvest_enabled = optional_bool("VOX_TINVEST_ENABLED", true)?;
+        let frontend_directory = optional_env_path("VOX_FRONTEND_DIR")?;
         let cookie_secure = optional_bool("VOX_SESSION_COOKIE_SECURE", true)?;
         if !cookie_secure && !bind.ip().is_loopback() {
             return Err(anyhow!(
@@ -85,6 +88,7 @@ impl ServerConfig {
                 expires_at_unix_ms,
                 cookie_secure,
             },
+            frontend_directory,
             tinvest_enabled,
         })
     }
@@ -173,12 +177,13 @@ impl ApplicationComposition {
         )
         .with_risk_queries(runtime.clone())
         .with_risk_commands(runtime.clone());
-        let router = vox_api::router(state)
+        let api = vox_api::router(state)
             .layer(DefaultBodyLimit::max(128 * 1024))
             .layer(middleware::from_fn_with_state(
                 auth,
                 authenticated_actor_middleware,
             ));
+        let router = with_static_bundle(api, config.frontend_directory.as_deref());
 
         Ok(Self {
             router,
@@ -286,6 +291,15 @@ fn env_path(name: &'static str, default: &'static str) -> anyhow::Result<PathBuf
     Ok(PathBuf::from(value))
 }
 
+fn optional_env_path(name: &'static str) -> anyhow::Result<Option<PathBuf>> {
+    match std::env::var(name) {
+        Ok(value) if !value.trim().is_empty() => Ok(Some(PathBuf::from(value))),
+        Ok(_) => Ok(None),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(anyhow!("{name} must be valid Unicode")),
+    }
+}
+
 fn optional_bool(name: &'static str, default: bool) -> anyhow::Result<bool> {
     match std::env::var(name) {
         Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
@@ -311,4 +325,26 @@ fn prepare_parent(path: &Path) -> anyhow::Result<()> {
 fn now_unix_ms() -> anyhow::Result<i64> {
     i64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)
         .context("system time outside supported millisecond range")
+}
+
+/// Serves the built frontend from the same origin as the API.
+///
+/// Vox Trader keeps the operator on one canonical origin: `cargo run -p vox-core` serves both
+/// REST/WebSocket under `/api/v1` and the built SPA (`index.html` + `assets/`). API routes keep
+/// precedence and their JSON error semantics; only non-API paths fall through to static files.
+/// When no built frontend directory is configured, the API-only router is returned unchanged.
+fn with_static_bundle(api: Router, frontend_directory: Option<&Path>) -> Router {
+    let Some(directory) = frontend_directory else {
+        return api;
+    };
+    if !directory.is_dir() {
+        return api;
+    }
+    let index = ServeFile::new(directory.join("index.html"));
+    let assets = ServeDir::new(directory.join("assets"));
+    Router::new()
+        .merge(api)
+        .route_service("/", index.clone())
+        .route_service("/index.html", index)
+        .nest_service("/assets", assets)
 }

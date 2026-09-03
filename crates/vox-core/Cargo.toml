@@ -19,6 +19,7 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 time.workspace = true
 thiserror.workspace = true
+tower-http = { workspace = true, features = ["fs"] }
 vox-api = { path = "../vox-api" }
 vox-connections = { path = "../vox-connections" }
 vox-domain = { path = "../vox-domain" }

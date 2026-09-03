@@ -59,6 +59,9 @@ pub struct ReconciliationReport {
     pub portfolio: crate::model::PortfolioFact,
     pub positions: Vec<crate::model::PositionFact>,
     pub active_orders: Vec<crate::model::OrderFact>,
+    /// Broker-authoritative stop orders observed during reconciliation. Exposed to the
+    /// risk layer so protection-required policy can reason from real stop coverage.
+    pub active_stops: Vec<crate::model::StopFact>,
     pub snapshot_observed_at_unix_ms: i64,
 }
 
@@ -314,6 +317,7 @@ where
             portfolio: snapshot.portfolio,
             positions: snapshot.positions,
             active_orders: snapshot.active_orders,
+            active_stops: snapshot.stop_orders,
             snapshot_observed_at_unix_ms: snapshot.observed_at_unix_ms,
         })
     }

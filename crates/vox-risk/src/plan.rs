@@ -153,8 +153,8 @@ pub enum RiskApprovedExecutionPlanError {
 mod tests {
     use super::*;
     use crate::model::{
-        BrokerLotLimits, RiskActionKind, RiskOutcome, RiskReason, RiskReasonCode, RiskSnapshot,
-        RiskSource,
+        BrokerLotLimits, RiskActionKind, RiskOutcome, RiskProtectionStatus, RiskReason,
+        RiskReasonCode, RiskSnapshot, RiskSource,
     };
 
     fn validity() -> RiskValidityContext {
@@ -183,7 +183,6 @@ mod tests {
             requested_notional_nanos: 10,
             is_market_order: false,
             confirm_margin_trade: false,
-            protection_established_or_planned: false,
             emergency_reduction: false,
             now_unix_ms: 10,
             snapshot: RiskSnapshot {
@@ -202,6 +201,7 @@ mod tests {
                 broker_daily_pnl_nanos: None,
                 broker_lot_limits: Some(BrokerLotLimits::default()),
                 margin: None,
+                protection: RiskProtectionStatus::default(),
                 validity: validity(),
             },
         }

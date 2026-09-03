@@ -223,6 +223,7 @@ mod tests {
             max_margin_utilization_ppm: None,
             max_daily_loss_nanos: None,
             protection_required_for_new_exposure: false,
+            max_unprotected_duration_ms: None,
         }
     }
 

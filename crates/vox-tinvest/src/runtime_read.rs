@@ -194,6 +194,8 @@ impl BrokerReadPort for TInvestRuntimeReadAdapter {
                     instrument_uid: stop.instrument_uid.unwrap_or_default(),
                     status: stop_status(stop.status),
                     status_cause: None,
+                    quantity_lots: Some(stop.lots_requested),
+                    direction: (stop.direction != 0).then_some(stop.direction),
                 })
             })
             .collect()
