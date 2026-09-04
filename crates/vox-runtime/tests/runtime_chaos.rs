@@ -865,6 +865,8 @@ async fn manual_order_and_orphan_stop_are_preserved_and_halt_runtime()
         instrument_uid: "instrument-1".into(),
         status: StopExecutionStatus::Active,
         status_cause: None,
+        quantity_lots: None,
+        direction: None,
     });
     let harness = Harness::new(snapshot, [], true)?;
     let report = harness.coordinator.start().await?;
@@ -1306,6 +1308,8 @@ async fn restart_with_vox_owned_open_order_and_stop_converges_without_mutation()
         instrument_uid: "instrument-1".into(),
         status: StopExecutionStatus::Active,
         status_cause: None,
+        quantity_lots: None,
+        direction: None,
     });
     let store = SqliteRuntimeStore::open(&path)?;
     let execution = Arc::new(FakeExecution::new([]));
@@ -1372,6 +1376,8 @@ async fn protection_legs_resolve_independently_and_partial_plan_stays_halted()
         instrument_uid: "instrument-1".into(),
         status: StopExecutionStatus::Active,
         status_cause: None,
+        quantity_lots: None,
+        direction: None,
     });
     let store = SqliteRuntimeStore::open(&path)?;
     let coordinator = RuntimeCoordinator::new(
@@ -1643,6 +1649,8 @@ async fn ambiguous_post_stop_restart_never_fuzzy_matches_or_replays()
         instrument_uid: "instrument-1".into(),
         status: StopExecutionStatus::Active,
         status_cause: None,
+        quantity_lots: None,
+        direction: None,
     });
     let store = SqliteRuntimeStore::open(&path)?;
     let execution = Arc::new(FakeExecution::new([]));
@@ -1798,6 +1806,7 @@ fn protection_command(client_request_id: &str, leg: ProtectionLeg) -> Protection
         expire_at_nanos: None,
         confirm_margin_trade: false,
         leg,
+        entry_reservation_id: None,
     }
 }
 

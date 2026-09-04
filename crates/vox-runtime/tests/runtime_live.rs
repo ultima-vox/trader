@@ -200,6 +200,8 @@ impl BrokerReadPort for SandboxReads {
                     instrument_uid: stop.instrument_uid.unwrap_or_default(),
                     status: stop_status(stop.status),
                     status_cause: None,
+                    quantity_lots: None,
+                    direction: None,
                 })
             })
             .collect()
@@ -1727,6 +1729,7 @@ fn live_fixed_stop_command(
             trigger_price,
             limit_price: None,
         }),
+        entry_reservation_id: None,
     })
 }
 

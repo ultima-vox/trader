@@ -557,6 +557,32 @@ where
                     RiskDispatchOutcome::Acknowledged,
                 )
                 .await?;
+                // Transition protection plan from PLANNED to SUBMITTED.
+                // Pass entry_reservation_id and canonical_plan_id (client_request_id).
+                if let RuntimeExecutionCommand::ProtectionLeg(ref leg_cmd) = command
+                    && let Ok(now) = now_unix_ms()
+                {
+                    let entry_reservation_id =
+                        leg_cmd.entry_reservation_id.as_deref().unwrap_or("");
+                    let canonical_plan_id = Some(leg_cmd.client_request_id.clone());
+                    if let Err(error) = self
+                        .risk_admission
+                        .transition_protection_plan_on_dispatch(
+                            &self.scope,
+                            entry_reservation_id,
+                            canonical_plan_id,
+                            now,
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            error = %error,
+                            entry_reservation_id = %entry_reservation_id,
+                            canonical_plan_id = %leg_cmd.client_request_id,
+                            "protection plan SUBMITTED transition failed (non-fatal)",
+                        );
+                    }
+                }
                 Ok(receipt(record))
             }
             Ok(ExecutionResult::Rejected {
@@ -575,6 +601,28 @@ where
                     RiskDispatchOutcome::Rejected,
                 )
                 .await?;
+                // If a protection leg was rejected, transition plan to FAILED.
+                if let RuntimeExecutionCommand::ProtectionLeg(ref leg_cmd) = command
+                    && let Ok(now) = now_unix_ms()
+                {
+                    let entry_reservation_id =
+                        leg_cmd.entry_reservation_id.as_deref().unwrap_or("");
+                    if let Err(error) = self
+                        .risk_admission
+                        .transition_protection_plan_on_reject(
+                            &self.scope,
+                            entry_reservation_id,
+                            now,
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            error = %error,
+                            entry_reservation_id = %entry_reservation_id,
+                            "protection plan FAILED transition failed (non-fatal)",
+                        );
+                    }
+                }
                 Ok(receipt(record))
             }
             Ok(ExecutionResult::UnknownAfterDispatch {
@@ -615,6 +663,28 @@ where
                     "mutation transport failed after durable dispatch fence",
                 )
                 .await?;
+                // If a protection leg failed to dispatch, transition plan to FAILED.
+                if let RuntimeExecutionCommand::ProtectionLeg(ref leg_cmd) = command
+                    && let Ok(now) = now_unix_ms()
+                {
+                    let entry_reservation_id =
+                        leg_cmd.entry_reservation_id.as_deref().unwrap_or("");
+                    if let Err(risk_error) = self
+                        .risk_admission
+                        .transition_protection_plan_on_reject(
+                            &self.scope,
+                            entry_reservation_id,
+                            now,
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            error = %risk_error,
+                            entry_reservation_id = %entry_reservation_id,
+                            "protection plan FAILED transition failed (non-fatal)",
+                        );
+                    }
+                }
                 if let Err(risk_error) = self
                     .risk_admission
                     .record_dispatch_outcome(

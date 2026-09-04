@@ -6,10 +6,10 @@ use tokio::sync::{Mutex, RwLock, Semaphore};
 use vox_connections::{ConnectionId, ExecutionPurpose};
 use vox_domain::{OrderSide, RegularOrderType, RuntimeExecutionCommand};
 use vox_risk::{
-    BrokerLotLimits, BrokerMarginFacts, BuyLotLimit, ReservationCapacity, ReservationState,
-    RiskActionKind, RiskEngine, RiskPolicySet, RiskReasonCode, RiskRequest, RiskReservation,
-    RiskReservationReconciler, RiskSnapshot, RiskSource, RiskState, RiskStore, RiskValidityContext,
-    SellLotLimit, SqliteRiskStore,
+    BrokerLotLimits, BrokerMarginFacts, BuyLotLimit, ProtectionPlanState, ReservationCapacity,
+    ReservationState, RiskActionKind, RiskEngine, RiskPolicySet, RiskReasonCode, RiskRequest,
+    RiskReservation, RiskReservationReconciler, RiskSnapshot, RiskSource, RiskState, RiskStore,
+    RiskValidityContext, SellLotLimit, SqliteRiskStore,
 };
 use vox_runtime::{
     ReconciliationReport, RiskAdmission, RiskAdmissionError, RiskAdmissionPort,
@@ -81,23 +81,45 @@ impl ProductionRiskAdapter {
     /// correlated to the durable #10 protection plan when one exists. Coverage is
     /// derived from broker stop facts (`report.active_stops`) and current position lots,
     /// never from local intent.
+    ///
+    /// `active_stop_lots` counts only valid protective SL/trailing stops for the
+    /// correct instrument and direction. TP stops do NOT satisfy mandatory
+    /// stop-loss protection. Position quantities are normalized to lots using
+    /// the provided `lot_size`.
     async fn protection_status(
         &self,
         report: &ReconciliationReport,
         instrument_id: &str,
+        lot_size: i64,
     ) -> Result<vox_risk::RiskProtectionStatus, RiskAdmissionError> {
+        // Normalize position quantity_units to lots.
         let position_lots = report
             .positions
             .iter()
             .find(|position| position.instrument_uid == instrument_id)
-            .map(|position| position.quantity_units)
+            .map(|position| position.quantity_units / lot_size)
             .unwrap_or(0);
 
+        // Filter stops: only SL/trailing for correct direction.
+        // TP must NOT satisfy mandatory stop-loss protection.
+        // Direction: SELL=2 protective sell-to-close a long, BUY=1 protective buy-to-cover a short.
         let active_stop_lots = report
             .active_stops
             .iter()
             .filter(|stop| {
-                stop.instrument_uid == instrument_id && stop.status.active()
+                stop.instrument_uid == instrument_id
+                    && stop.status.active()
+                    && stop.quantity_lots.unwrap_or(0) > 0
+                    // Filter by direction matching position side.
+                    // Long position -> protective stop is SELL (direction=2).
+                    // Short position -> protective stop is BUY (direction=1).
+                    && (if position_lots > 0 {
+                        stop.direction == Some(2) // SELL protective
+                    } else if position_lots < 0 {
+                        stop.direction == Some(1) // BUY protective
+                    } else {
+                        false // Flat position — no protection needed
+                    })
             })
             .map(|stop| stop.quantity_lots.unwrap_or(0))
             .sum::<i64>();
@@ -470,7 +492,7 @@ impl ProductionRiskAdapter {
                     None
                 },
                 protection: self
-                    .protection_status(&cached.report, &instrument_id)
+                    .protection_status(&cached.report, &instrument_id, lot_size)
                     .await?,
                 validity: RiskValidityContext {
                     runtime_epoch: cached.report.runtime_epoch,
@@ -614,6 +636,42 @@ impl RiskAdmissionPort for ProductionRiskAdapter {
                 .map_err(store_unavailable)?;
             (decision, None)
         };
+
+        // Create a protection plan when policy mandates protection for new exposure.
+        // The plan starts in PLANNED state and is advanced to SUBMITTED once the
+        // runtime dispatches the protection leg to the broker.
+        if policy.protection_required_for_new_exposure
+            && matches!(
+                persisted.0.action,
+                RiskActionKind::DirectionalOrder | RiskActionKind::ReplaceDirectionalOrder
+            )
+            && persisted.0.approved_delta_lots != 0
+            && let Some(ref reservation) = persisted.1
+        {
+            let plan = self
+                .risk_store
+                .create_protection_plan(
+                    &self.canonical_account_id,
+                    &reservation.instrument_id,
+                    reservation.strategy_id.clone(),
+                    &reservation.reservation_id,
+                    persisted.0.approved_delta_lots,
+                    None, // canonical_plan_id wired when runtime dispatches protection leg
+                    now_unix_ms()?,
+                )
+                .map_err(|error| {
+                    RiskAdmissionError::Unavailable(format!(
+                        "protection plan creation failed: {error}"
+                    ))
+                })?;
+            tracing::info!(
+                risk.plan_id = %plan.plan_id,
+                risk.reservation_id = %reservation.reservation_id,
+                risk.instrument_id = %reservation.instrument_id,
+                persistence.event = "protection_plan_created",
+                "protection plan created for approved exposure",
+            );
+        }
 
         Ok(RiskAdmission {
             decision_id: persisted.0.decision_id,
@@ -813,6 +871,154 @@ impl RiskAdmissionPort for ProductionRiskAdapter {
                     .map_err(|error| RiskAdmissionError::Unavailable(error.to_string()))?;
             }
         }
+
+        // Reconcile protection plans against broker stop facts.
+        // This restores correlation after restart and transitions plans based
+        // on broker-authoritative stop evidence (active / cancelled / expired).
+        // Only counts valid protective SL/trailing stops for the correct
+        // instrument and direction. TP must NOT satisfy mandatory stop-loss.
+        for position in &report.positions {
+            let lot_size: i64 = {
+                let cache = self.instrument_cache.lock().await;
+                cache
+                    .get(&position.instrument_uid)
+                    .map(|(_, inst)| inst.lot_size)
+                    .unwrap_or(1)
+            };
+
+            // Normalize position quantity_units to lots.
+            let position_lots = position.quantity_units / lot_size;
+
+            // Filter stops: only SL/trailing for correct direction.
+            let active_stop_lots: i64 = report
+                .active_stops
+                .iter()
+                .filter(|stop| {
+                    stop.instrument_uid == position.instrument_uid
+                        && stop.status.active()
+                        && stop.quantity_lots.unwrap_or(0) > 0
+                        && (if position_lots > 0 {
+                            stop.direction == Some(2) // SELL protective
+                        } else if position_lots < 0 {
+                            stop.direction == Some(1) // BUY protective
+                        } else {
+                            false // Flat position
+                        })
+                })
+                .map(|stop| stop.quantity_lots.unwrap_or(0))
+                .sum();
+
+            self.risk_store
+                .reconcile_protection_plans(
+                    &self.canonical_account_id,
+                    &position.instrument_uid,
+                    active_stop_lots,
+                    position_lots,
+                    report.completed_at_unix_ms,
+                )
+                .map_err(|error| {
+                    RiskAdmissionError::Unavailable(format!(
+                        "protection plan reconciliation failed: {error}"
+                    ))
+                })?;
+        }
+
+        Ok(())
+    }
+
+    async fn transition_protection_plan_on_dispatch(
+        &self,
+        _scope: &RuntimeScope,
+        entry_reservation_id: &str,
+        canonical_plan_id: Option<String>,
+        now_unix_ms: i64,
+    ) -> Result<(), RiskAdmissionError> {
+        // Find the protection plan by the entry reservation it was created for.
+        // This avoids looking up by the protection command's logical_request_id
+        // which has no reservation.
+        let plan = self
+            .risk_store
+            .protection_plan_by_entry_reservation(&self.canonical_account_id, entry_reservation_id)
+            .map_err(store_unavailable)?
+            .ok_or_else(|| {
+                RiskAdmissionError::Unavailable(
+                    "no protection plan found for entry reservation".into(),
+                )
+            })?;
+
+        // Transition from Planned to Submitted.
+        let updated = self
+            .risk_store
+            .transition_protection_plan(
+                &plan.plan_id,
+                &[ProtectionPlanState::Planned],
+                ProtectionPlanState::Submitted,
+                now_unix_ms,
+            )
+            .map_err(|error| match error {
+                vox_risk::RiskStoreError::InvalidTransition => RiskAdmissionError::Unavailable(
+                    "protection plan is not in Planned state".into(),
+                ),
+                other => store_unavailable(other),
+            })?;
+
+        // Update canonical_plan_id to link to the #10 protection leg.
+        if let Some(ref cid) = canonical_plan_id {
+            let mut updated_plan = updated;
+            updated_plan.canonical_plan_id = Some(cid.clone());
+            self.risk_store
+                .put_protection_plan(&updated_plan)
+                .map_err(store_unavailable)?;
+        }
+
+        tracing::info!(
+            risk.plan_id = %plan.plan_id,
+            risk.entry_reservation_id = %entry_reservation_id,
+            risk.canonical_plan_id = plan.canonical_plan_id.as_deref().unwrap_or("none"),
+            persistence.event = "protection_plan_submitted",
+            "protection plan transitioned to SUBMITTED",
+        );
+        Ok(())
+    }
+
+    async fn transition_protection_plan_on_reject(
+        &self,
+        _scope: &RuntimeScope,
+        entry_reservation_id: &str,
+        now_unix_ms: i64,
+    ) -> Result<(), RiskAdmissionError> {
+        // Find the protection plan by the entry reservation it was created for.
+        let plan = self
+            .risk_store
+            .protection_plan_by_entry_reservation(&self.canonical_account_id, entry_reservation_id)
+            .map_err(store_unavailable)?
+            .ok_or_else(|| {
+                RiskAdmissionError::Unavailable(
+                    "no protection plan found for entry reservation".into(),
+                )
+            })?;
+
+        // Transition from Planned to Failed.
+        self.risk_store
+            .transition_protection_plan(
+                &plan.plan_id,
+                &[ProtectionPlanState::Planned],
+                ProtectionPlanState::Failed,
+                now_unix_ms,
+            )
+            .map_err(|error| match error {
+                vox_risk::RiskStoreError::InvalidTransition => RiskAdmissionError::Unavailable(
+                    "protection plan is not in Planned state".into(),
+                ),
+                other => store_unavailable(other),
+            })?;
+
+        tracing::info!(
+            risk.plan_id = %plan.plan_id,
+            risk.entry_reservation_id = %entry_reservation_id,
+            persistence.event = "protection_plan_failed",
+            "protection plan transitioned to FAILED",
+        );
         Ok(())
     }
 }
