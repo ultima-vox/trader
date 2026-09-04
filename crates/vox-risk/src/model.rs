@@ -507,9 +507,13 @@ pub struct GlobalRiskStateRow {
 /// legs that cover it. Lifecycle state is advanced only by broker-authoritative
 /// stop/fill evidence, never by local intent.
 ///
+/// `entry_reservation_id` is the #21 reservation whose approved exposure this plan
+/// protects. It is the durable link used to locate this plan from the risk layer
+/// without relying on the protection command's logical_request_id.
+///
 /// `canonical_plan_id` links this risk-layer plan to the #10 canonical protection
-/// plan (the runtime-level ProtectionPlan) so that restart/reconciliation can
-/// restore the correlation between risk decisions, reservations, and broker-native
+/// plan (the runtime ProtectionPlan client_request_id) so that restart/reconciliation
+/// can restore the correlation between risk decisions, reservations, and broker-native
 /// stop orders.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RiskProtectionPlanRow {
@@ -517,13 +521,13 @@ pub struct RiskProtectionPlanRow {
     pub account_id: String,
     pub instrument_id: String,
     pub strategy_id: Option<String>,
-    /// The reservation whose approved exposure this plan protects.
-    pub reservation_id: String,
+    /// The #21 entry reservation whose approved exposure this plan protects.
+    pub entry_reservation_id: String,
     /// Signed lot quantity the plan is responsible for protecting.
     pub protected_delta_lots: i64,
     pub state: ProtectionPlanState,
-    /// Correlation to the #10 canonical protection plan (runtime ProtectionPlan).
-    /// Allows restart/reconciliation to restore the risk-to-broker linkage.
+    /// Correlation to the #10 canonical protection plan (runtime ProtectionPlan
+    /// client_request_id). Set when the actual #10 protection leg is dispatched.
     pub canonical_plan_id: Option<String>,
     pub created_at_unix_ms: i64,
     pub updated_at_unix_ms: i64,
@@ -541,7 +545,7 @@ impl RiskProtectionPlanRow {
         account_id: impl Into<String>,
         instrument_id: impl Into<String>,
         strategy_id: Option<String>,
-        reservation_id: impl Into<String>,
+        entry_reservation_id: impl Into<String>,
         protected_delta_lots: i64,
         canonical_plan_id: Option<String>,
         now_unix_ms: i64,
@@ -552,7 +556,7 @@ impl RiskProtectionPlanRow {
             account_id: account_id.into(),
             instrument_id: instrument_id.into(),
             strategy_id,
-            reservation_id: reservation_id.into(),
+            entry_reservation_id: entry_reservation_id.into(),
             protected_delta_lots,
             state: ProtectionPlanState::Planned,
             canonical_plan_id,

@@ -406,6 +406,13 @@ pub struct SubmitProtectionRequest {
     pub price_convention: PriceConventionDto,
     pub confirm_margin_trade: bool,
     pub plan: ProtectionPlanDto,
+    /// The #21 entry reservation whose approved exposure this protection covers.
+    /// Required when protection_required_for_new_exposure is true.
+    /// Allows the risk layer to correlate the protection command to the entry
+    /// reservation/decision without looking up by the protection command's own
+    /// logical_request_id (which has no reservation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_reservation_id: Option<String>,
 }
 
 /// The receipt of a capital-affecting command.

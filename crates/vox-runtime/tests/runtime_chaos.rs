@@ -1806,6 +1806,7 @@ fn protection_command(client_request_id: &str, leg: ProtectionLeg) -> Protection
         expire_at_nanos: None,
         confirm_margin_trade: false,
         leg,
+        entry_reservation_id: None,
     }
 }
 

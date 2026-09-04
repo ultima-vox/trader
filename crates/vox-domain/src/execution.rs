@@ -123,6 +123,12 @@ pub struct ProtectionLegCommand {
     pub expire_at_nanos: Option<i32>,
     pub confirm_margin_trade: bool,
     pub leg: ProtectionLeg,
+    /// The #21 entry reservation whose approved exposure this protection covers.
+    /// Required when protection_required_for_new_exposure is true.
+    /// Enables the risk layer to correlate the protection command to the entry
+    /// reservation/decision without looking up by the protection command's own
+    /// logical_request_id (which has no reservation).
+    pub entry_reservation_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

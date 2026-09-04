@@ -1729,6 +1729,7 @@ fn live_fixed_stop_command(
             trigger_price,
             limit_price: None,
         }),
+        entry_reservation_id: None,
     })
 }
 

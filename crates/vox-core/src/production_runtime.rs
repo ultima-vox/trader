@@ -624,6 +624,7 @@ impl ExecutionCommands for ProductionRuntimeRegistry {
                 trigger_price: trigger,
                 limit_price: limit,
             }),
+            entry_reservation_id: None,
         });
         entry
             .coordinator
@@ -689,6 +690,7 @@ impl ExecutionCommands for ProductionRuntimeRegistry {
             expire_at_nanos: None,
             confirm_margin_trade: request.confirm_margin_trade,
             leg,
+            entry_reservation_id: request.entry_reservation_id.clone(),
         });
         entry
             .coordinator
