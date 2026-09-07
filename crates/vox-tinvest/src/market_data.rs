@@ -11,6 +11,7 @@ use uuid::Uuid;
 use vox_domain::{FixedPoint, FixedPointError};
 
 use crate::generated::v1;
+use crate::grpc::{GrpcError, TInvestGrpcClient};
 
 pub const MARKET_DATA_SERVICE_METHODS: [&str; 9] = [
     "GetCandles",
@@ -30,6 +31,260 @@ pub const MAX_SUBSCRIPTION_REQUESTS_PER_MINUTE: u32 = 100;
 pub const MIN_PING_DELAY_MS: i64 = 5_000;
 pub const MAX_PING_DELAY_MS: i64 = 180_000;
 pub const DEFAULT_PING_DELAY_MS: i64 = 120_000;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CanonicalMarketInstrument {
+    pub uid: String,
+    pub figi: Option<String>,
+    pub ticker: String,
+    pub class_code: String,
+    pub name: String,
+    pub instrument_type: String,
+    pub lot_size: i64,
+    pub min_price_increment: FixedPoint,
+    pub currency: String,
+    pub tradable: bool,
+}
+
+impl TryFrom<v1::Instrument> for CanonicalMarketInstrument {
+    type Error = MarketDataError;
+
+    fn try_from(value: v1::Instrument) -> Result<Self, Self::Error> {
+        if value.uid.is_empty() {
+            return Err(MarketDataError::Missing("instrument.uid"));
+        }
+        if value.lot <= 0 {
+            return Err(MarketDataError::NonPositive {
+                field: "instrument.lot",
+            });
+        }
+        Ok(Self {
+            uid: value.uid,
+            figi: (!value.figi.is_empty()).then_some(value.figi),
+            ticker: value.ticker,
+            class_code: value.class_code,
+            name: value.name,
+            instrument_type: value.instrument_type,
+            lot_size: i64::from(value.lot),
+            min_price_increment: quotation(
+                value.min_price_increment,
+                "instrument.min_price_increment",
+            )?,
+            currency: value.currency,
+            tradable: value.api_trade_available_flag,
+        })
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum MarketDataQueryError {
+    #[error(transparent)]
+    Transport(#[from] GrpcError),
+    #[error(transparent)]
+    Canonical(#[from] MarketDataError),
+    #[error("T-Invest returned no {0}")]
+    Missing(&'static str),
+}
+
+/// Credential-scoped #8 acquisition adapter. Provider requests and protobufs stop here;
+/// consumers receive canonical market facts only.
+pub struct TInvestMarketDataAdapter<'a> {
+    client: &'a TInvestGrpcClient,
+}
+
+impl<'a> TInvestMarketDataAdapter<'a> {
+    #[must_use]
+    pub const fn new(client: &'a TInvestGrpcClient) -> Self {
+        Self { client }
+    }
+
+    pub async fn search_instruments(
+        &self,
+        query: &str,
+        limit: u16,
+    ) -> Result<Vec<CanonicalMarketInstrument>, MarketDataQueryError> {
+        let found = self
+            .client
+            .find_instrument(v1::FindInstrumentRequest {
+                query: query.to_owned(),
+                instrument_kind: None,
+                api_trade_available_flag: Some(true),
+            })
+            .await?
+            .body;
+        let mut result = Vec::new();
+        for short in found.instruments.into_iter().take(usize::from(limit)) {
+            result.push(self.instrument(&short.uid).await?);
+        }
+        Ok(result)
+    }
+
+    pub async fn instrument(
+        &self,
+        instrument_uid: &str,
+    ) -> Result<CanonicalMarketInstrument, MarketDataQueryError> {
+        let value = self
+            .client
+            .get_instrument_by(v1::InstrumentRequest {
+                id_type: v1::InstrumentIdType::Uid as i32,
+                class_code: None,
+                id: instrument_uid.to_owned(),
+            })
+            .await?
+            .body
+            .instrument
+            .ok_or(MarketDataQueryError::Missing("instrument"))?;
+        Ok(CanonicalMarketInstrument::try_from(value)?)
+    }
+
+    pub async fn last_price(
+        &self,
+        instrument_uid: &str,
+    ) -> Result<CanonicalLastPrice, MarketDataQueryError> {
+        let value = self
+            .client
+            .get_last_prices(v1::GetLastPricesRequest {
+                instrument_id: vec![instrument_uid.to_owned()],
+                ..Default::default()
+            })
+            .await?
+            .body
+            .last_prices
+            .into_iter()
+            .find(|value| value.instrument_uid == instrument_uid)
+            .ok_or(MarketDataQueryError::Missing("last price"))?;
+        Ok(CanonicalLastPrice::try_from(value)?)
+    }
+
+    pub async fn order_book(
+        &self,
+        instrument_uid: &str,
+        depth: u16,
+    ) -> Result<CanonicalUnaryOrderBook, MarketDataQueryError> {
+        let value = self
+            .client
+            .get_order_book(v1::GetOrderBookRequest {
+                depth: i32::from(provider_order_book_depth(depth)),
+                instrument_id: Some(instrument_uid.to_owned()),
+                ..Default::default()
+            })
+            .await?
+            .body;
+        Ok(CanonicalUnaryOrderBook::try_from(value)?)
+    }
+
+    pub async fn last_trades(
+        &self,
+        instrument_uid: &str,
+        limit: u16,
+    ) -> Result<Vec<CanonicalTrade>, MarketDataQueryError> {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let response = self
+            .client
+            .get_last_trades(v1::GetLastTradesRequest {
+                from: Some(Timestamp {
+                    seconds: now.saturating_sub(3_600),
+                    nanos: 0,
+                }),
+                to: Some(Timestamp {
+                    seconds: now,
+                    nanos: 0,
+                }),
+                instrument_id: Some(instrument_uid.to_owned()),
+                trade_source: v1::TradeSourceType::TradeSourceAll as i32,
+                ..Default::default()
+            })
+            .await?
+            .body;
+        let mut trades = response
+            .trades
+            .into_iter()
+            .map(CanonicalTrade::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        trades.sort_by_key(|trade| trade.event_time_ns);
+        let keep_from = trades.len().saturating_sub(usize::from(limit));
+        Ok(trades.split_off(keep_from))
+    }
+
+    pub async fn candles(
+        &self,
+        instrument_uid: &str,
+        interval: i32,
+        from_unix_ms: i64,
+        to_unix_ms: i64,
+    ) -> Result<Vec<CanonicalCandle>, MarketDataQueryError> {
+        let from_seconds = from_unix_ms.div_euclid(1_000);
+        let to_seconds =
+            to_unix_ms.div_euclid(1_000) + i64::from(to_unix_ms.rem_euclid(1_000) != 0);
+        let windows = plan_candle_history(from_seconds, to_seconds, interval)?;
+        let mut chunks = Vec::with_capacity(windows.len());
+        for window in windows {
+            chunks.push(
+                self.client
+                    .get_candles(v1::GetCandlesRequest {
+                        from: Some(Timestamp {
+                            seconds: window.from_seconds,
+                            nanos: 0,
+                        }),
+                        to: Some(Timestamp {
+                            seconds: window.to_seconds,
+                            nanos: 0,
+                        }),
+                        interval,
+                        instrument_id: Some(instrument_uid.to_owned()),
+                        candle_source_type: Some(
+                            v1::get_candles_request::CandleSource::Exchange as i32,
+                        ),
+                        limit: None,
+                        ..Default::default()
+                    })
+                    .await?
+                    .body
+                    .candles,
+            );
+        }
+        let values = merge_historic_candles(chunks)?;
+        values
+            .into_iter()
+            .map(|value| CanonicalCandle::from_historic(value, instrument_uid.to_owned(), interval))
+            .filter_map(|result| match result {
+                Ok(candle) => {
+                    let event_ms =
+                        i64::try_from(candle.event_time_ns / 1_000_000).unwrap_or(i64::MAX);
+                    (event_ms >= from_unix_ms && event_ms < to_unix_ms).then_some(Ok(candle))
+                }
+                Err(error) => Some(Err(error)),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub async fn trading_status(
+        &self,
+        instrument_uid: &str,
+    ) -> Result<CanonicalTradingStatusFact, MarketDataQueryError> {
+        let value = self
+            .client
+            .get_trading_status(v1::GetTradingStatusRequest {
+                instrument_id: Some(instrument_uid.to_owned()),
+                ..Default::default()
+            })
+            .await?
+            .body;
+        Ok(CanonicalTradingStatusFact::try_from(value)?)
+    }
+}
+
+const fn provider_order_book_depth(requested: u16) -> u16 {
+    match requested {
+        0 | 1 => 1,
+        2..=10 => 10,
+        11..=20 => 20,
+        21..=30 => 30,
+        31..=40 => 40,
+        _ => 50,
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CanonicalCandle {

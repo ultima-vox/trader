@@ -11,25 +11,43 @@ use std::time::Duration;
 use async_trait::async_trait;
 use ring::digest;
 use tokio::sync::Mutex;
+use vox_api::SnapshotMarketProjection;
 use vox_api::application::{
-    ConnectionLifecycleObserver, ExecutionCommands, RiskCommands, RiskQueries, RuntimeQueries,
+    AccountQueries, ConnectionLifecycleObserver, ExecutionCommands, MarketDataQueries,
+    RiskCommands, RiskQueries, RuntimeQueries,
 };
 use vox_api::binding::{AccountBindingResolver, BindingError};
+use vox_api::contract::account::{
+    BrokerAccountDto, OperationsPageDto, OrderDto, PortfolioDto, PositionDto, ReconciliationDto,
+    StopOrderDto,
+};
 use vox_api::contract::capability::{
     AttachedBackends, Capability, CapabilitySet, UnavailableCapability,
 };
 use vox_api::contract::execution::{
     CancelOrderRequest, CancelTarget, JournalStateDto, MutationKindDto, MutationReceiptDto,
-    ReplaceOrderRequest, SubmitOrderRequest, SubmitProtectionRequest, SubmitStopOrderRequest,
+    OrderTypeDto, ReplaceOrderRequest, SubmitOrderRequest, SubmitProtectionRequest,
+    SubmitStopOrderRequest,
 };
+use vox_api::contract::instrument::InstrumentIdentityDto;
+use vox_api::contract::market::{
+    CandleIntervalDto, CandlesDto, InstrumentSummaryDto, MarketFreshness, OrderBookDto, QuoteDto,
+    SessionDto, TradeTickDto,
+};
+use vox_api::contract::money::Decimal;
 use vox_api::contract::risk::{
     ChangeRiskStateRequest, ReservationStateDto, RiskActionKindDto, RiskDecisionDto,
     RiskLimitUsageDto, RiskOutcomeDto, RiskReasonCodeDto, RiskReasonDto, RiskReservationDto,
     RiskStateDto, RiskStatusDto, RiskValidityDto,
 };
 use vox_api::contract::runtime::RuntimeHealthDto;
+use vox_api::contract::runtime::StreamStateDto;
 use vox_api::contract::scope::{BrokerEnvironment, ExecutionScope, ProviderDto, TradingMode};
 use vox_api::error::{ApiError, ErrorCategory, FieldError};
+use vox_api::market_project::{
+    candle_from_canonical, order_book_from_levels, trade_from_canonical,
+    trading_status_from_provider, unix_ms_from_ns,
+};
 use vox_api::runtime_scope_from_binding;
 use vox_connections::{ConnectionRepository, ExecutionPurpose, SqliteConnectionRepository};
 use vox_domain::{
@@ -49,6 +67,14 @@ use crate::composition::{
     ProductionClientFactory, ProductionConnectionService, ProductionSecretStore,
 };
 use crate::production_risk::ProductionRiskAdapter;
+
+type ProductionAccountReads = vox_api::AccountReadAdapter<
+    StoredTInvestReadPort<
+        SqliteConnectionRepository,
+        ProductionSecretStore,
+        TInvestConnectionProvider,
+    >,
+>;
 
 type ProductionCoordinator = RuntimeCoordinator<
     StoredTInvestReadPort<
@@ -89,6 +115,8 @@ pub struct ProductionRuntimeRegistry {
     resolver: Arc<dyn AccountBindingResolver>,
     runtime_directory: PathBuf,
     environment: BrokerEnvironment,
+    account_reads: Arc<ProductionAccountReads>,
+    market: Arc<SnapshotMarketProjection>,
     entries: Mutex<BTreeMap<String, Arc<RuntimeEntry>>>,
 }
 
@@ -101,6 +129,7 @@ impl ProductionRuntimeRegistry {
         resolver: Arc<dyn AccountBindingResolver>,
         runtime_directory: PathBuf,
         environment: BrokerEnvironment,
+        account_reads: Arc<ProductionAccountReads>,
     ) -> Self {
         Self {
             repository,
@@ -109,6 +138,8 @@ impl ProductionRuntimeRegistry {
             resolver,
             runtime_directory,
             environment,
+            account_reads,
+            market: Arc::new(SnapshotMarketProjection::new()),
             entries: Mutex::new(BTreeMap::new()),
         }
     }
@@ -181,6 +212,25 @@ impl ProductionRuntimeRegistry {
         self.runtime_directory.join(format!("{name}.sqlite3"))
     }
 
+    async fn market_session(&self) -> Result<vox_tinvest::TInvestReadSession, ApiError> {
+        let scope = self.scopes().await?.into_iter().next().ok_or_else(|| {
+            ApiError::new(
+                ErrorCategory::Conflict,
+                "MARKET_CONNECTION_UNAVAILABLE",
+                "configure one healthy T-Invest account binding before market-data reads",
+            )
+        })?;
+        let binding = self
+            .resolver
+            .resolve(&scope.account_id, &scope.broker_connection_id)
+            .map_err(binding_error)?;
+        let connection_id = vox_connections::ConnectionId::parse(scope.broker_connection_id)
+            .map_err(model_error)?;
+        self.factory
+            .read_session(&connection_id, binding.broker_account_id())
+            .map_err(market_error)
+    }
+
     pub async fn dispatch_automated(
         &self,
         scope: &ExecutionScope,
@@ -243,6 +293,20 @@ impl ProductionRuntimeRegistry {
         }
     }
 
+    pub async fn restore_scopes(&self) -> Result<(), ApiError> {
+        for scope in self.scopes().await? {
+            if let Err(error) = self.entry(&scope).await {
+                tracing::warn!(
+                    broker_connection_id = %scope.broker_connection_id,
+                    account_id = %scope.account_id,
+                    code = %error.code,
+                    "stored runtime scope remains fail-closed until broker recovery"
+                );
+            }
+        }
+        Ok(())
+    }
+
     async fn invalidate_connection(&self, connection_id: &str) {
         let removed = {
             let mut entries = self.entries.lock().await;
@@ -258,6 +322,321 @@ impl ProductionRuntimeRegistry {
         for entry in removed {
             let _ = entry.coordinator.shutdown().await;
         }
+    }
+}
+
+#[async_trait]
+impl AccountQueries for ProductionRuntimeRegistry {
+    async fn accounts(&self, scope: &ExecutionScope) -> Result<Vec<BrokerAccountDto>, ApiError> {
+        self.account_reads.accounts(scope).await
+    }
+
+    async fn portfolio(&self, scope: &ExecutionScope) -> Result<PortfolioDto, ApiError> {
+        self.account_reads.portfolio(scope).await
+    }
+
+    async fn positions(&self, scope: &ExecutionScope) -> Result<Vec<PositionDto>, ApiError> {
+        self.account_reads.positions(scope).await
+    }
+
+    async fn orders(&self, scope: &ExecutionScope) -> Result<Vec<OrderDto>, ApiError> {
+        self.account_reads.orders(scope).await
+    }
+
+    async fn stop_orders(&self, scope: &ExecutionScope) -> Result<Vec<StopOrderDto>, ApiError> {
+        self.account_reads.stop_orders(scope).await
+    }
+
+    async fn operations(
+        &self,
+        scope: &ExecutionScope,
+        cursor: Option<&str>,
+        limit: u16,
+    ) -> Result<OperationsPageDto, ApiError> {
+        self.account_reads.operations(scope, cursor, limit).await
+    }
+
+    async fn reconciliation(&self, scope: &ExecutionScope) -> Result<ReconciliationDto, ApiError> {
+        let entry = self.entry(scope).await?;
+        entry
+            .store
+            .load_checkpoint(&entry.coordinator.scope_key())
+            .map_err(store_error)?
+            .as_ref()
+            .map(ReconciliationDto::from)
+            .ok_or_else(|| {
+                ApiError::new(
+                    ErrorCategory::NotFound,
+                    "RECONCILIATION_NOT_FOUND",
+                    "no reconciliation checkpoint exists for this scope yet",
+                )
+            })
+    }
+
+    async fn mutations(&self, scope: &ExecutionScope) -> Result<Vec<MutationReceiptDto>, ApiError> {
+        let entry = self.entry(scope).await?;
+        entry
+            .store
+            .mutations(&entry.coordinator.scope_key())
+            .map_err(store_error)?
+            .into_iter()
+            .map(|record| {
+                let risk_decision = entry
+                    .risk
+                    .decision_for_request(&record.logical_request_id)
+                    .map_err(risk_admission_error)?
+                    .map(risk_decision_dto);
+                mutation_receipt(&entry.store, scope, record, risk_decision)
+            })
+            .collect()
+    }
+}
+
+#[async_trait]
+impl MarketDataQueries for ProductionRuntimeRegistry {
+    async fn search_instruments(
+        &self,
+        provider: ProviderDto,
+        query: &str,
+        limit: u16,
+    ) -> Result<Vec<InstrumentSummaryDto>, ApiError> {
+        if provider != ProviderDto::TInvest || query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let session = self.market_session().await?;
+        let found = session
+            .market_data()
+            .search_instruments(query.trim(), limit)
+            .await
+            .map_err(market_error)?;
+        let result = found
+            .into_iter()
+            .map(|instrument| InstrumentSummaryDto {
+                identity: InstrumentIdentityDto {
+                    provider: "tinvest".into(),
+                    uid: instrument.uid,
+                    figi: instrument.figi,
+                    ticker: instrument.ticker,
+                    class_code: instrument.class_code,
+                },
+                name: instrument.name,
+                instrument_type: instrument.instrument_type,
+                lot_size: instrument.lot_size,
+                min_price_increment: Decimal::from_fixed_point(instrument.min_price_increment),
+                currency: instrument.currency,
+                tradable: instrument.tradable,
+            })
+            .collect::<Vec<_>>();
+        for instrument in &result {
+            self.market.publish_instrument(instrument.clone());
+        }
+        self.market.search_instruments(provider, query, limit).await
+    }
+
+    async fn quote(
+        &self,
+        provider: ProviderDto,
+        instrument_uid: &str,
+    ) -> Result<QuoteDto, ApiError> {
+        validate_market_provider(provider)?;
+        let session = self.market_session().await?;
+        let canonical = session
+            .market_data()
+            .last_price(instrument_uid)
+            .await
+            .map_err(market_error)?;
+        let observed_at_unix_ms = unix_ms_from_ns(canonical.event_time_ns);
+        let now = now_unix_ms_api()?;
+        let quote = QuoteDto {
+            instrument_uid: canonical.instrument_uid,
+            last: Some(Decimal::from_fixed_point(canonical.price)),
+            bid: None,
+            ask: None,
+            change_absolute: None,
+            change_percent: None,
+            day_high: None,
+            day_low: None,
+            volume_units: None,
+            freshness: MarketFreshness {
+                stream: StreamStateDto::Disconnected,
+                observed_at_unix_ms,
+                age_ms: now.saturating_sub(observed_at_unix_ms),
+            },
+        };
+        self.market.publish_quote(quote);
+        self.market.quote(provider, instrument_uid).await
+    }
+
+    async fn order_book(
+        &self,
+        provider: ProviderDto,
+        instrument_uid: &str,
+        depth: u16,
+    ) -> Result<OrderBookDto, ApiError> {
+        validate_market_provider(provider)?;
+        let session = self.market_session().await?;
+        let market = session.market_data();
+        let lot_size = market
+            .instrument(instrument_uid)
+            .await
+            .map_err(market_error)?
+            .lot_size;
+        let canonical = market
+            .order_book(instrument_uid, depth)
+            .await
+            .map_err(market_error)?;
+        let requested = usize::from(depth);
+        let bids = canonical
+            .bids
+            .iter()
+            .take(requested)
+            .map(|level| Ok((level.price, lots_to_units(level.quantity_lots, lot_size)?)))
+            .collect::<Result<Vec<_>, ApiError>>()?;
+        let asks = canonical
+            .asks
+            .iter()
+            .take(requested)
+            .map(|level| Ok((level.price, lots_to_units(level.quantity_lots, lot_size)?)))
+            .collect::<Result<Vec<_>, ApiError>>()?;
+        let observed_at_unix_ms = canonical
+            .orderbook_time_ns
+            .map(unix_ms_from_ns)
+            .unwrap_or(now_unix_ms_api()?);
+        let book = order_book_from_levels(
+            canonical.instrument_uid,
+            &bids,
+            &asks,
+            observed_at_unix_ms,
+            StreamStateDto::Disconnected,
+            true,
+        )?;
+        self.market.publish_order_book(book);
+        self.market
+            .order_book(provider, instrument_uid, depth)
+            .await
+    }
+
+    async fn trades(
+        &self,
+        provider: ProviderDto,
+        instrument_uid: &str,
+        limit: u16,
+    ) -> Result<Vec<TradeTickDto>, ApiError> {
+        validate_market_provider(provider)?;
+        let session = self.market_session().await?;
+        let market = session.market_data();
+        let lot_size = market
+            .instrument(instrument_uid)
+            .await
+            .map_err(market_error)?
+            .lot_size;
+        let trades = market
+            .last_trades(instrument_uid, limit)
+            .await
+            .map_err(market_error)?
+            .into_iter()
+            .map(|canonical| {
+                Ok(trade_from_canonical(
+                    canonical.instrument_uid,
+                    canonical.price,
+                    lots_to_units(canonical.quantity_lots, lot_size)?,
+                    canonical.direction,
+                    unix_ms_from_ns(canonical.event_time_ns),
+                ))
+            })
+            .collect::<Result<Vec<_>, ApiError>>()?;
+        self.market
+            .publish_trades(instrument_uid.to_owned(), trades);
+        self.market.trades(provider, instrument_uid, limit).await
+    }
+
+    async fn candles(
+        &self,
+        provider: ProviderDto,
+        instrument_uid: &str,
+        interval: CandleIntervalDto,
+        from_unix_ms: i64,
+        to_unix_ms: i64,
+    ) -> Result<CandlesDto, ApiError> {
+        validate_market_provider(provider)?;
+        let session = self.market_session().await?;
+        let market = session.market_data();
+        let lot_size = market
+            .instrument(instrument_uid)
+            .await
+            .map_err(market_error)?
+            .lot_size;
+        let wire_interval = interval.historic_wire();
+        let values = market
+            .candles(instrument_uid, wire_interval, from_unix_ms, to_unix_ms)
+            .await
+            .map_err(market_error)?;
+        let mut newest_event_ms = None;
+        let candles = values
+            .into_iter()
+            .map(|canonical| {
+                let opened_at_unix_ms = unix_ms_from_ns(canonical.event_time_ns);
+                newest_event_ms =
+                    Some(newest_event_ms.map_or(opened_at_unix_ms, |current: i64| {
+                        current.max(opened_at_unix_ms)
+                    }));
+                Ok(candle_from_canonical(
+                    canonical.instrument_uid,
+                    interval,
+                    opened_at_unix_ms,
+                    canonical.open,
+                    canonical.high,
+                    canonical.low,
+                    canonical.close,
+                    lots_to_units(canonical.volume_lots, lot_size)?,
+                    canonical.is_complete,
+                ))
+            })
+            .collect::<Result<Vec<_>, ApiError>>()?;
+        let now = now_unix_ms_api()?;
+        let observed_at_unix_ms = newest_event_ms.unwrap_or(now);
+        let candles = CandlesDto {
+            instrument_uid: instrument_uid.to_owned(),
+            interval,
+            candles,
+            freshness: MarketFreshness {
+                stream: StreamStateDto::Disconnected,
+                observed_at_unix_ms,
+                age_ms: now.saturating_sub(observed_at_unix_ms),
+            },
+        };
+        self.market.publish_candles(candles);
+        self.market
+            .candles(provider, instrument_uid, interval, from_unix_ms, to_unix_ms)
+            .await
+    }
+
+    async fn session(
+        &self,
+        provider: ProviderDto,
+        instrument_uid: &str,
+    ) -> Result<SessionDto, ApiError> {
+        validate_market_provider(provider)?;
+        let session = self.market_session().await?;
+        let canonical = session
+            .market_data()
+            .trading_status(instrument_uid)
+            .await
+            .map_err(market_error)?;
+        let now = now_unix_ms_api()?;
+        let status = SessionDto {
+            instrument_uid: canonical.instrument_uid,
+            status: trading_status_from_provider(canonical.status),
+            limit_orders_available: Some(canonical.limit_order_available),
+            market_orders_available: Some(canonical.market_order_available),
+            freshness: MarketFreshness {
+                stream: StreamStateDto::Disconnected,
+                observed_at_unix_ms: now,
+                age_ms: 0,
+            },
+        };
+        self.market.publish_session(status);
+        self.market.session(provider, instrument_uid).await
     }
 }
 
@@ -338,7 +717,7 @@ impl RuntimeQueries for ProductionRuntimeRegistry {
                 runtime: true,
                 accounts: true,
                 execution: true,
-                market_data: false,
+                market_data: true,
                 connections: true,
                 risk: true,
             },
@@ -509,7 +888,8 @@ impl ExecutionCommands for ProductionRuntimeRegistry {
             price_convention: request.price_convention.into(),
             side: request.side.into(),
             order_type: request.order_type.into(),
-            time_in_force: Some(request.time_in_force.into()),
+            time_in_force: matches!(request.order_type, OrderTypeDto::Limit)
+                .then_some(request.time_in_force.into()),
             confirm_margin_trade: request.confirm_margin_trade,
         });
         entry
@@ -1119,6 +1499,36 @@ fn model_error(error: impl core::fmt::Display) -> ApiError {
     )
 }
 
+fn market_error(error: impl core::fmt::Display) -> ApiError {
+    ApiError::new(
+        ErrorCategory::Transient,
+        "MARKET_DATA_UNAVAILABLE",
+        error.to_string(),
+    )
+}
+
+fn validate_market_provider(provider: ProviderDto) -> Result<(), ApiError> {
+    if provider == ProviderDto::TInvest {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            ErrorCategory::Validation,
+            "MARKET_PROVIDER_UNSUPPORTED",
+            "production runtime supports T-Invest market data only",
+        ))
+    }
+}
+
+fn lots_to_units(lots: i64, lot_size: i64) -> Result<i64, ApiError> {
+    lots.checked_mul(lot_size).ok_or_else(|| {
+        ApiError::new(
+            ErrorCategory::Internal,
+            "MARKET_QUANTITY_OVERFLOW",
+            "market-data lot quantity does not fit public unit quantity",
+        )
+    })
+}
+
 fn repository_error(_: vox_connections::RepositoryError) -> ApiError {
     ApiError::new(
         ErrorCategory::Transient,
@@ -1190,5 +1600,18 @@ fn remove_capability(set: &mut CapabilitySet, capability: Capability, reason: &s
             reason: reason.to_owned(),
             owner: owner.to_owned(),
         });
+    }
+}
+
+#[cfg(test)]
+mod market_data_tests {
+    use super::lots_to_units;
+
+    #[test]
+    fn provider_lots_are_normalized_to_instrument_units() -> Result<(), super::ApiError> {
+        assert_eq!(lots_to_units(3, 10)?, 30);
+        assert_eq!(lots_to_units(0, 10)?, 0);
+        assert!(lots_to_units(i64::MAX, 2).is_err());
+        Ok(())
     }
 }

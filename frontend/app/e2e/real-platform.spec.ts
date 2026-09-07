@@ -18,10 +18,13 @@ test("real browser and Vox boundary keep selected runtime scope atomic", async (
   await page.getByLabel("Bootstrap credential").fill(
     "frontend-e2e-bootstrap-credential-material-0001",
   );
-  await page.getByRole("button", { name: "Открыть сессию" }).click();
+  await page.getByRole("button", { name: "Open session" }).click();
   await expect(page.locator(".vox-shell")).toBeVisible();
   await expect(page.locator(".vox-account__label")).toHaveText("Alpha account");
   await expect(page.locator(".vox-runtime__label")).toHaveText("READY");
+  await page.getByLabel("Ticker or instrument name").fill("SBER");
+  await page.getByRole("button", { name: "Search broker catalogue" }).click();
+  await page.getByRole("button", { name: /SBER/ }).click();
   await expect(page.locator(".vox-ticket__action--buy")).toBeEnabled();
   await expect(page.getByText("Сбербанк", { exact: false }).first()).toBeVisible();
   await expect(page.locator("body")).not.toContainText("provider-diagnostic-uid");
@@ -41,6 +44,9 @@ test("real browser and Vox boundary keep selected runtime scope atomic", async (
   await page.getByRole("option").filter({ hasText: "Beta account" }).click();
   await expect(page.locator(".vox-account__label")).toHaveText("Beta account");
   await expect(page.locator(".vox-runtime__label")).toHaveText("HALTED");
+  await page.getByLabel("Ticker or instrument name").fill("SBER");
+  await page.getByRole("button", { name: "Search broker catalogue" }).click();
+  await page.getByRole("button", { name: /SBER/ }).click();
   await expect(page.locator(".vox-ticket__action--buy")).toBeDisabled();
   await expect(page.locator(".vox-ticket__hint")).toContainText("runtime execution authorization false");
   expect(scopedAccounts).toEqual(["account:alpha", "account:beta"]);

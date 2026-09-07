@@ -1018,8 +1018,20 @@ where
         &self,
         security: &SecurityContext,
         binding_id: &BindingId,
-    ) -> Result<(), ServiceError> {
+    ) -> Result<Option<ConnectionId>, ServiceError> {
         self.require(security, Permission::BindAccounts)?;
+        let mut connection_id = None;
+        for connection in self.repository.list_connections()? {
+            if self
+                .repository
+                .bindings(&connection.id)?
+                .into_iter()
+                .any(|binding| binding.id == *binding_id)
+            {
+                connection_id = Some(connection.id);
+                break;
+            }
+        }
         let audit = self.audit_record(
             security,
             "ACCOUNT_UNBOUND",
@@ -1029,7 +1041,7 @@ where
         )?;
         self.repository
             .delete_binding_with_audit(binding_id, &audit)?;
-        Ok(())
+        Ok(connection_id)
     }
 
     pub fn replace_role(

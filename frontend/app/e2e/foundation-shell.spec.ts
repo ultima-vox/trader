@@ -58,6 +58,21 @@ async function mockPlatform(page: Page): Promise<void> {
       },
       "/api/v1/runtime": runtime,
       "/api/v1/runtime/scoped": runtime,
+      "/api/v1/risk/status": {
+        scope: { provider: "T_INVEST", environment: "PRODUCTION", broker_connection_id: "conn-real", account_id: "account-real", trading_mode: "LIVE" },
+        state: "NORMAL", policy_revision: 1, limits: [], reasons: [], updated_at_unix_ms: 1,
+      },
+      "/api/v1/portfolio": { account_id: "account-real", balances: [] },
+      "/api/v1/positions": [],
+      "/api/v1/orders": [],
+      "/api/v1/stop-orders": [],
+      "/api/v1/mutations": [],
+      "/api/v1/reconciliation": {
+        scope_key: "account-real", reconciliation_id: "recon-1",
+        snapshot_observed_at_unix_ms: 1, completed_at_unix_ms: 1, runtime_epoch: 9,
+        accounts_complete: true, portfolio_complete: true, positions_complete: true,
+        orders_complete: true, stops_complete: true, operations_complete: true, complete: true,
+      },
       "/api/v1/capabilities": {
         provider: "T_INVEST", environment: "PRODUCTION", account_id: "account-real",
         supported: ["RUNTIME_HEALTH", "ORDER_EXECUTION", "MARKET_DATA"],
@@ -86,7 +101,7 @@ async function openPlatform(page: Page): Promise<void> {
   await mockPlatform(page);
   await page.goto("/");
   await page.getByLabel("Bootstrap credential").fill("browser-only-secret");
-  await page.getByRole("button", { name: "Открыть сессию" }).click();
+  await page.getByRole("button", { name: "Open session" }).click();
   await expect(page.locator(".vox-shell")).toBeVisible();
   await expect(page.locator("[data-widget-id='order-ticket']")).toBeVisible();
 }
@@ -130,7 +145,7 @@ test("401 leaves coherent session screen and no fake platform", async ({ page })
   }));
   await page.goto("/");
   await page.getByLabel("Bootstrap credential").fill("wrong-secret");
-  await page.getByRole("button", { name: "Открыть сессию" }).click();
+  await page.getByRole("button", { name: "Open session" }).click();
   await expect(page.getByRole("status")).toContainText("401: invalid credential");
   await expect(page.locator(".vox-shell")).toHaveCount(0);
   await expect(page.getByLabel("Bootstrap credential")).toHaveValue("");
@@ -144,7 +159,7 @@ test("403 capability denial keeps authenticated shell coherent and actions absen
   }));
   await page.goto("/");
   await page.getByLabel("Bootstrap credential").fill("browser-only-secret");
-  await page.getByRole("button", { name: "Открыть сессию" }).click();
+  await page.getByRole("button", { name: "Open session" }).click();
   await expect(page.locator(".vox-shell")).toBeVisible();
   await expect(page.getByText("403: permission denied")).toBeVisible();
   await expect(page.locator(".vox-ticket__action")).toHaveCount(0);

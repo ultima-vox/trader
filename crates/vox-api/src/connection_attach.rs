@@ -238,10 +238,12 @@ where
         let security = security_context(context)?;
         let id = parse_connection_id(connection_id)?;
         let account_id = VoxAccountId::parse(request.account_id).map_err(validation_error)?;
-        self.service
+        let binding = self
+            .service
             .bind_account(&security, &id, request.provider_account_id, account_id)
-            .map(binding_dto)
-            .map_err(api_error)
+            .map_err(api_error)?;
+        self.notify_connection_changed(&id).await;
+        Ok(binding_dto(binding))
     }
 
     async fn unbind_account(
@@ -251,9 +253,14 @@ where
     ) -> Result<(), ApiError> {
         let security = security_context(context)?;
         let binding_id = vox_connections::BindingId::parse(binding_id).map_err(validation_error)?;
-        self.service
+        let connection_id = self
+            .service
             .unbind_account(&security, &binding_id)
-            .map_err(api_error)
+            .map_err(api_error)?;
+        if let Some(connection_id) = connection_id {
+            self.notify_connection_changed(&connection_id).await;
+        }
+        Ok(())
     }
 
     async fn change_execution_authorization(
@@ -264,7 +271,8 @@ where
     ) -> Result<ExecutionAuthorizationDto, ApiError> {
         let security = security_context(context)?;
         let id = parse_connection_id(connection_id)?;
-        self.service
+        let authorization = self
+            .service
             .set_execution_authorization_cas(
                 &security,
                 &id,
@@ -272,8 +280,9 @@ where
                 authorization_mode(request.mode),
                 request.expected_authorization_revision,
             )
-            .map(authorization_dto)
-            .map_err(api_error)
+            .map_err(api_error)?;
+        self.notify_connection_changed(&id).await;
+        Ok(authorization_dto(authorization))
     }
 }
 
