@@ -163,7 +163,33 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace --all-targets --all-features
       - name: Smoke Vox Core composition
-        run: cargo run --locked -p vox-core --bin vox-core
+        run: |
+          set -euo pipefail
+          smoke_dir="$(mktemp -d "${RUNNER_TEMP}/vox-core-smoke.XXXXXX")"
+          export VOX_API_BIND=127.0.0.1:18100
+          export VOX_ENV=sandbox
+          export VOX_PLATFORM_DB="$smoke_dir/platform.sqlite3"
+          export VOX_SECRET_DB="$smoke_dir/secrets.sqlite3"
+          export VOX_RUNTIME_DB_DIR="$smoke_dir/runtime"
+          export VOX_KEK_ACTIVE_VERSION=1
+          export VOX_KEK_HEX_V1="$(openssl rand -hex 32)"
+          export VOX_BOOTSTRAP_USER_ID=user:00000000-0000-4000-8000-000000000017
+          export VOX_BOOTSTRAP_CREDENTIAL="$(openssl rand -hex 32)"
+          export VOX_BOOTSTRAP_EXPIRES_UNIX_MS="$(( ($(date +%s) + 3600) * 1000 ))"
+          export VOX_SESSION_COOKIE_SECURE=false
+          cargo build --locked -p vox-core --bin vox-server
+          "$CARGO_TARGET_DIR/debug/vox-server" >"$smoke_dir/server.log" 2>&1 &
+          server=$!
+          trap 'kill -INT "$server" 2>/dev/null || true; wait "$server" || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:18100/api/v1/system/health >/dev/null; then break; fi
+            if ! kill -0 "$server" 2>/dev/null; then
+              cat "$smoke_dir/server.log"
+              exit 1
+            fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:18100/api/v1/system/health
       - name: Remove this run's build tree
         if: always()
         run: |

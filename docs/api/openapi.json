@@ -5713,6 +5713,13 @@
           },
           "plan": {
             "$ref": "#/components/schemas/ProtectionPlanDto"
+          },
+          "entry_reservation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The #21 entry reservation whose approved exposure this protection covers.\nRequired when protection_required_for_new_exposure is true.\nAllows the risk layer to correlate the protection command to the entry\nreservation/decision without looking up by the protection command's own\nlogical_request_id (which has no reservation)."
           }
         }
       },

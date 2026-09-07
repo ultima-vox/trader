@@ -202,6 +202,7 @@ impl BrokerReadPort for SandboxReads {
                     status_cause: None,
                     quantity_lots: None,
                     direction: None,
+                    stop_order_type: (stop.stop_order_type != 0).then_some(stop.stop_order_type),
                 })
             })
             .collect()
@@ -1730,6 +1731,7 @@ fn live_fixed_stop_command(
             limit_price: None,
         }),
         entry_reservation_id: None,
+        canonical_plan_id: None,
     })
 }
 

@@ -379,15 +379,11 @@ pub enum ProtectionPlanState {
 impl ProtectionPlanState {
     /// `true` when the plan currently allows additional exposure on the instrument.
     ///
-    /// Only full coverage (or an active plan that fully protects the entered position)
-    /// satisfies protection-required policy. Partial, planned, submitted and failed
-    /// states do not permit new exposure unless the plan itself is being maintained.
+    /// Only full coverage permits new exposure. The caller must also verify current
+    /// broker coverage: a persisted lifecycle label cannot substitute for evidence.
     #[must_use]
     pub const fn permits_additional_exposure(&self) -> bool {
-        matches!(
-            self,
-            Self::Active | Self::FullCoverage | Self::PartialCoverage
-        )
+        matches!(self, Self::FullCoverage)
     }
 
     #[must_use]
@@ -564,4 +560,23 @@ impl RiskProtectionPlanRow {
             updated_at_unix_ms: now_unix_ms,
         }
     }
+}
+
+/// Durable correlation of one canonical #10 protection leg to its entry approval.
+/// Broker identity may be attached after dispatch; immutable fields cannot change.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RiskProtectionLegRow {
+    pub canonical_plan_id: String,
+    pub entry_decision_id: String,
+    pub entry_reservation_id: String,
+    pub account_id: String,
+    pub instrument_id: String,
+    pub command_id: String,
+    pub broker_stop_order_id: Option<String>,
+    pub is_stop_loss: bool,
+    pub position_lots: i64,
+    pub lot_size: i64,
+    pub state: ProtectionPlanState,
+    pub created_at_unix_ms: i64,
+    pub updated_at_unix_ms: i64,
 }

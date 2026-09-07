@@ -426,6 +426,7 @@ mod tests {
                 status_cause: None,
                 quantity_lots: None,
                 direction: None,
+                stop_order_type: None,
             },
         )?;
         assert_eq!(

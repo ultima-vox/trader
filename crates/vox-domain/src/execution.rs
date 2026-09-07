@@ -129,6 +129,10 @@ pub struct ProtectionLegCommand {
     /// reservation/decision without looking up by the protection command's own
     /// logical_request_id (which has no reservation).
     pub entry_reservation_id: Option<String>,
+    /// Canonical #10 plan identity, assigned to the entry intent and shared by all
+    /// its protection legs. Never substitute the leg's client request identity.
+    #[serde(default)]
+    pub canonical_plan_id: Option<crate::identity::ProtectionPlanId>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

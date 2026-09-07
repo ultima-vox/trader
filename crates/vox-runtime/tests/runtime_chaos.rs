@@ -867,6 +867,7 @@ async fn manual_order_and_orphan_stop_are_preserved_and_halt_runtime()
         status_cause: None,
         quantity_lots: None,
         direction: None,
+        stop_order_type: Some(3),
     });
     let harness = Harness::new(snapshot, [], true)?;
     let report = harness.coordinator.start().await?;
@@ -1310,6 +1311,7 @@ async fn restart_with_vox_owned_open_order_and_stop_converges_without_mutation()
         status_cause: None,
         quantity_lots: None,
         direction: None,
+        stop_order_type: Some(3),
     });
     let store = SqliteRuntimeStore::open(&path)?;
     let execution = Arc::new(FakeExecution::new([]));
@@ -1378,8 +1380,28 @@ async fn protection_legs_resolve_independently_and_partial_plan_stays_halted()
         status_cause: None,
         quantity_lots: None,
         direction: None,
+        stop_order_type: Some(3),
     });
     let store = SqliteRuntimeStore::open(&path)?;
+    let mut wrong_kind_snapshot = snapshot.clone();
+    wrong_kind_snapshot.stops[0].stop_order_type = Some(2);
+    let wrong_kind_coordinator = RuntimeCoordinator::new(
+        scope.clone(),
+        store.clone(),
+        Arc::new(FakeBroker::new(wrong_kind_snapshot)),
+        Arc::new(FakeExecution::new([])),
+        Arc::new(FakeStreams::default()),
+        Arc::new(FakeCredential::accepted(true)),
+        Arc::new(FakeRiskAdmission),
+        Arc::new(InMemoryMetrics::default()),
+        ReconciliationConfig::default(),
+        RuntimeConfig::default(),
+    );
+    let wrong_kind_report = wrong_kind_coordinator.start().await?;
+    assert!(wrong_kind_report.resolved_logical_request_ids.is_empty());
+    assert_eq!(wrong_kind_report.unresolved_logical_request_ids.len(), 2);
+    wrong_kind_coordinator.shutdown().await?;
+    drop(wrong_kind_coordinator);
     let coordinator = RuntimeCoordinator::new(
         scope.clone(),
         store.clone(),
@@ -1513,7 +1535,11 @@ fn seed_unknown(
             instrument_ref: None,
             quantity_lots: None,
             price_present: false,
-            protection_kind: None,
+            protection_kind: matches!(
+                kind,
+                MutationKind::PostStopOrder | MutationKind::ProtectionLeg
+            )
+            .then_some(vox_runtime::ProtectionKind::StopLoss),
         },
         format!("correlation-{id}"),
         epoch,
@@ -1651,6 +1677,7 @@ async fn ambiguous_post_stop_restart_never_fuzzy_matches_or_replays()
         status_cause: None,
         quantity_lots: None,
         direction: None,
+        stop_order_type: Some(3),
     });
     let store = SqliteRuntimeStore::open(&path)?;
     let execution = Arc::new(FakeExecution::new([]));
@@ -1807,6 +1834,7 @@ fn protection_command(client_request_id: &str, leg: ProtectionLeg) -> Protection
         confirm_margin_trade: false,
         leg,
         entry_reservation_id: None,
+        canonical_plan_id: None,
     }
 }
 

@@ -625,6 +625,7 @@ impl ExecutionCommands for ProductionRuntimeRegistry {
                 limit_price: limit,
             }),
             entry_reservation_id: None,
+            canonical_plan_id: None,
         });
         entry
             .coordinator
@@ -678,6 +679,13 @@ impl ExecutionCommands for ProductionRuntimeRegistry {
             .reference_price
             .to_fixed_point()
             .map_err(|error| validation("reference_price", &error.to_string()))?;
+        let canonical_plan_id = entry
+            .risk
+            .canonical_protection_identity(
+                request.entry_reservation_id.as_deref(),
+                &request.instrument_id,
+            )
+            .map_err(risk_admission_error)?;
         let command = RuntimeExecutionCommand::ProtectionLeg(ProtectionLegCommand {
             account_id: entry.coordinator.broker_account_id().to_owned(),
             instrument_id: request.instrument_id,
@@ -691,6 +699,7 @@ impl ExecutionCommands for ProductionRuntimeRegistry {
             confirm_margin_trade: request.confirm_margin_trade,
             leg,
             entry_reservation_id: request.entry_reservation_id.clone(),
+            canonical_plan_id,
         });
         entry
             .coordinator

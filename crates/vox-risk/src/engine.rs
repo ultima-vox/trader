@@ -694,38 +694,40 @@ fn validate_protection(
                 "max_unprotected_duration_ms cannot be negative",
             ));
         }
-        let entered_at = match protection.position_entered_at_unix_ms {
-            Some(t) => t,
-            None => {
-                // Unknown position entry time with a duration cap fails closed.
+        if protection.uncovered_abs_lots() > 0 {
+            let entered_at = match protection.position_entered_at_unix_ms {
+                Some(t) => t,
+                None => {
+                    // Unknown position entry time with a duration cap fails closed.
+                    return Ok(Some(reject(
+                        policy,
+                        request,
+                        RiskOutcome::Reject,
+                        RiskReasonCode::ProtectionRequired,
+                        "max-unprotected-duration requires position entry watermark",
+                    )));
+                }
+            };
+            let uncovered_lots = protection.uncovered_abs_lots();
+            let age = request.now_unix_ms.saturating_sub(entered_at);
+            if uncovered_lots > 0 && age > max_duration {
+                tracing::info!(
+                    risk.request_id = %request.request_id,
+                    risk.account_id = %request.account_id,
+                    risk.outcome = "reduce_only",
+                    risk.reason_code = ?RiskReasonCode::ProtectionRequired,
+                    risk.uncovered_lots = uncovered_lots,
+                    risk.unprotected_age_ms = age,
+                    "risk decision: reduce_only - position uncovered beyond max-unprotected-duration",
+                );
                 return Ok(Some(reject(
                     policy,
                     request,
-                    RiskOutcome::Reject,
+                    RiskOutcome::ReduceOnly,
                     RiskReasonCode::ProtectionRequired,
-                    "max-unprotected-duration requires position entry watermark",
+                    "position has been without full protection beyond the configured maximum",
                 )));
             }
-        };
-        let uncovered_lots = protection.uncovered_abs_lots();
-        let age = request.now_unix_ms.saturating_sub(entered_at);
-        if uncovered_lots > 0 && age > max_duration {
-            tracing::info!(
-                risk.request_id = %request.request_id,
-                risk.account_id = %request.account_id,
-                risk.outcome = "reduce_only",
-                risk.reason_code = ?RiskReasonCode::ProtectionRequired,
-                risk.uncovered_lots = uncovered_lots,
-                risk.unprotected_age_ms = age,
-                "risk decision: reduce_only - position uncovered beyond max-unprotected-duration",
-            );
-            return Ok(Some(reject(
-                policy,
-                request,
-                RiskOutcome::ReduceOnly,
-                RiskReasonCode::ProtectionRequired,
-                "position has been without full protection beyond the configured maximum",
-            )));
         }
     }
 
@@ -750,15 +752,20 @@ fn validate_protection(
         )));
     }
 
-    // Plan is acceptable when there is a correlated non-terminal plan that still
-    // permits additional exposure, or when the position already enjoys full active-stop
-    // coverage even without a correlated plan row.
+    // A persisted state never substitutes for current broker evidence. Partial or
+    // unconfirmed protection cannot authorize further exposure.
     let plan_acceptable = protection
         .plan_state
-        .is_some_and(|s| s.permits_additional_exposure());
-    let coverage_acceptable = protection.full_coverage();
+        .is_none_or(|s| s.permits_additional_exposure());
+    let coverage_acceptable = protection.full_coverage()
+        && protection.position_lots.signum() == request.requested_delta_lots.signum();
+    // The trusted adapter allocates this canonical identity for this entry before
+    // evaluation, then persists its reservation relationship before dispatch.
+    let planned_flat_entry = protection.position_lots == 0
+        && protection.plan_id.as_ref().is_some_and(|id| !id.is_empty())
+        && protection.plan_state == Some(crate::model::ProtectionPlanState::Planned);
 
-    if !plan_acceptable && !coverage_acceptable {
+    if !planned_flat_entry && (!plan_acceptable || !coverage_acceptable) {
         tracing::info!(
             risk.request_id = %request.request_id,
             risk.account_id = %request.account_id,
@@ -1150,7 +1157,7 @@ mod tests {
     }
 
     #[test]
-    fn protection_required_covers_partial_plan_but_rejects_uncovered_portion() {
+    fn protection_required_rejects_increase_with_partial_coverage() {
         let mut p = policy();
         p.protection_required_for_new_exposure = true;
         let mut r = request(0, 10);
@@ -1162,7 +1169,7 @@ mod tests {
             plan_state: Some(ProtectionPlanState::PartialCoverage),
         };
         let decision = RiskEngine::evaluate(&p, &r).expect("risk");
-        assert_eq!(decision.outcome, RiskOutcome::Approve);
+        assert_eq!(decision.outcome, RiskOutcome::Reject);
     }
 
     #[test]
@@ -1213,150 +1220,141 @@ mod tests {
         assert_eq!(decision.outcome, RiskOutcome::Approve);
     }
 
-    // -----------------------------------------------------------------------
-    // Deterministic protection lifecycle tests
-    // -----------------------------------------------------------------------
-
-    /// Entry request ID differs from protection request ID — protection plan
-    /// is located by entry reservation_id, not by protection command request ID.
     #[test]
-    fn entry_request_id_differs_from_protection_request_id() {
-        // Protection plan created for entry reservation "entry-res-1" (request "entry-req-1").
-        // Protection command has its own request ID "protection-req-1".
-        // The engine must not look up by "protection-req-1" — it finds the plan
-        // via the entry reservation_id that was stored when the plan was created.
+    fn persisted_plan_state_cannot_replace_current_broker_coverage() {
         let mut p = policy();
         p.protection_required_for_new_exposure = true;
-        // Full coverage from a plan linked to the entry reservation.
-        let mut r = request(0, 10);
+        for state in [
+            ProtectionPlanState::Planned,
+            ProtectionPlanState::Submitted,
+            ProtectionPlanState::Active,
+            ProtectionPlanState::PartialCoverage,
+            ProtectionPlanState::FullCoverage,
+            ProtectionPlanState::Cancelled,
+            ProtectionPlanState::Failed,
+            ProtectionPlanState::Stale,
+        ] {
+            let mut r = request(10, 1);
+            r.snapshot.protection = RiskProtectionStatus {
+                position_lots: 10,
+                active_stop_lots: 5,
+                position_entered_at_unix_ms: Some(10_000),
+                plan_id: Some("canonical-plan-1".to_owned()),
+                plan_state: Some(state),
+            };
+            let decision = RiskEngine::evaluate(&p, &r).expect("risk");
+            assert_eq!(decision.outcome, RiskOutcome::Reject, "{state:?}");
+            assert_eq!(decision.reasons[0].code, RiskReasonCode::ProtectionRequired);
+        }
+    }
+
+    #[test]
+    fn submitted_or_terminal_plan_cannot_authorize_increase() {
+        let mut p = policy();
+        p.protection_required_for_new_exposure = true;
+        for state in [
+            ProtectionPlanState::Submitted,
+            ProtectionPlanState::Cancelled,
+            ProtectionPlanState::Failed,
+            ProtectionPlanState::Stale,
+        ] {
+            let mut r = request(10, 1);
+            r.snapshot.protection = RiskProtectionStatus {
+                position_lots: 10,
+                active_stop_lots: 10,
+                position_entered_at_unix_ms: Some(10_000),
+                plan_id: Some("canonical-plan-1".to_owned()),
+                plan_state: Some(state),
+            };
+            assert_eq!(
+                RiskEngine::evaluate(&p, &r).expect("risk").outcome,
+                RiskOutcome::Reject,
+                "{state:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fully_covered_position_does_not_need_unprotected_age() {
+        let mut p = policy();
+        p.protection_required_for_new_exposure = true;
+        p.max_unprotected_duration_ms = Some(5_000);
+        let mut r = request(10, 1);
         r.snapshot.protection = RiskProtectionStatus {
             position_lots: 10,
             active_stop_lots: 10,
-            position_entered_at_unix_ms: Some(10_000),
-            plan_id: Some("risk-protection-plan:1".to_owned()),
+            position_entered_at_unix_ms: None,
+            plan_id: Some("canonical-plan-1".to_owned()),
             plan_state: Some(ProtectionPlanState::FullCoverage),
         };
-        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
-        assert_eq!(decision.outcome, RiskOutcome::Approve);
+        assert_eq!(
+            RiskEngine::evaluate(&p, &r).expect("risk").outcome,
+            RiskOutcome::Approve
+        );
     }
 
-    /// TP-only does NOT satisfy mandatory stop-loss protection.
-    /// Only SL/trailing stops count toward protection.
     #[test]
-    fn tp_only_does_not_satisfy_protection() {
+    fn close_and_reduce_both_sides_are_exempt_from_missing_protection() {
         let mut p = policy();
         p.protection_required_for_new_exposure = true;
-        // active_stop_lots = 0 because TP stops are not counted.
-        // The position has lots but no valid SL coverage.
-        let mut r = request(0, 10);
-        r.snapshot.protection = RiskProtectionStatus {
-            position_lots: 10,
-            active_stop_lots: 0, // TP stops excluded
-            position_entered_at_unix_ms: Some(10_000),
-            plan_id: Some("risk-protection-plan:1".to_owned()),
-            plan_state: Some(ProtectionPlanState::Planned),
-        };
-        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
-        assert_eq!(decision.outcome, RiskOutcome::Reject);
-        assert_eq!(decision.reasons[0].code, RiskReasonCode::ProtectionRequired);
+        p.max_unprotected_duration_ms = Some(0);
+        for (base, delta) in [(10, -5), (10, -10), (-10, 5), (-10, 10)] {
+            let mut r = request(base, delta);
+            r.snapshot.protection = RiskProtectionStatus {
+                position_lots: base,
+                plan_state: Some(ProtectionPlanState::Failed),
+                ..RiskProtectionStatus::default()
+            };
+            assert_eq!(
+                RiskEngine::evaluate(&p, &r).expect("risk").outcome,
+                RiskOutcome::Approve,
+                "{base}, {delta}"
+            );
+        }
     }
 
-    /// Wrong-direction stop does NOT satisfy protection.
-    /// A long position needs SELL (direction=2) stops; BUY (direction=1) stops are for shorts.
     #[test]
-    fn wrong_direction_stop_does_not_satisfy_protection() {
+    fn reversal_requires_protection_for_new_opposite_exposure() {
         let mut p = policy();
         p.protection_required_for_new_exposure = true;
-        // active_stop_lots = 0 because the stop has wrong direction (BUY for a long position).
-        let mut r = request(0, 10);
-        r.snapshot.protection = RiskProtectionStatus {
-            position_lots: 10,
-            active_stop_lots: 0, // wrong direction excluded
-            position_entered_at_unix_ms: Some(10_000),
-            plan_id: Some("risk-protection-plan:1".to_owned()),
-            plan_state: Some(ProtectionPlanState::Planned),
-        };
-        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
-        assert_eq!(decision.outcome, RiskOutcome::Reject);
-        assert_eq!(decision.reasons[0].code, RiskReasonCode::ProtectionRequired);
+        for (base, delta) in [(10, -15), (-10, 15)] {
+            let mut r = request(base, delta);
+            r.snapshot.protection = RiskProtectionStatus {
+                position_lots: base,
+                active_stop_lots: 10,
+                plan_id: Some("old-direction-plan".to_owned()),
+                plan_state: Some(ProtectionPlanState::FullCoverage),
+                ..RiskProtectionStatus::default()
+            };
+            let decision = RiskEngine::evaluate(&p, &r).expect("risk");
+            assert_eq!(decision.outcome, RiskOutcome::Reject);
+            assert_eq!(decision.reasons[0].code, RiskReasonCode::ProtectionRequired);
+        }
     }
 
-    /// Lot size > 1: position quantity is normalized to lots before comparison.
     #[test]
-    fn lot_size_greater_than_one() {
+    fn flat_entry_requires_preallocated_canonical_protection_plan() {
         let mut p = policy();
         p.protection_required_for_new_exposure = true;
-        // Position: 100 units, lot_size=10 → 10 lots.
-        // Stop coverage: 10 lots (correctly normalized).
-        let mut r = request(0, 10);
-        r.snapshot.protection = RiskProtectionStatus {
-            position_lots: 10, // already in lots
-            active_stop_lots: 10,
-            position_entered_at_unix_ms: Some(10_000),
-            plan_id: Some("risk-protection-plan:1".to_owned()),
-            plan_state: Some(ProtectionPlanState::FullCoverage),
-        };
-        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
-        assert_eq!(decision.outcome, RiskOutcome::Approve);
-    }
-
-    /// Partial fill + partial protection: plan in PartialCoverage permits
-    /// additional exposure if the plan itself permits it.
-    #[test]
-    fn partial_fill_partial_protection() {
-        let mut p = policy();
-        p.protection_required_for_new_exposure = true;
-        // Position: 20 lots, stop coverage: 10 lots → partial.
-        // Plan in PartialCoverage permits additional exposure.
-        let mut r = request(0, 10);
-        r.snapshot.protection = RiskProtectionStatus {
-            position_lots: 20,
-            active_stop_lots: 10,
-            position_entered_at_unix_ms: Some(10_000),
-            plan_id: Some("risk-protection-plan:1".to_owned()),
-            plan_state: Some(ProtectionPlanState::PartialCoverage),
-        };
-        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
-        assert_eq!(decision.outcome, RiskOutcome::Approve);
-    }
-
-    /// Terminal plan (CANCELLED/FAILED/STALE) blocks new exposure
-    /// even if broker shows coverage.
-    #[test]
-    fn terminal_plan_blocks_new_exposure() {
-        let mut p = policy();
-        p.protection_required_for_new_exposure = true;
-        // Plan is CANCELLED — new exposure must be rejected.
-        let mut r = request(0, 10);
-        r.snapshot.protection = RiskProtectionStatus {
-            position_lots: 10,
-            active_stop_lots: 10, // broker shows coverage
-            position_entered_at_unix_ms: Some(10_000),
-            plan_id: Some("risk-protection-plan:1".to_owned()),
-            plan_state: Some(ProtectionPlanState::Cancelled),
-        };
-        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
-        assert_eq!(decision.outcome, RiskOutcome::Reject);
-        assert_eq!(decision.reasons[0].code, RiskReasonCode::ProtectionRequired);
-    }
-
-    /// Submitted plan blocks new exposure until broker confirms.
-    #[test]
-    fn submitted_plan_blocks_new_exposure() {
-        let mut p = policy();
-        p.protection_required_for_new_exposure = true;
-        // Plan is SUBMITTED — not yet confirmed by broker.
-        // permits_additional_exposure returns false for Submitted.
-        let mut r = request(0, 10);
-        r.snapshot.protection = RiskProtectionStatus {
-            position_lots: 10,
-            active_stop_lots: 0, // not yet active
-            position_entered_at_unix_ms: Some(10_000),
-            plan_id: Some("risk-protection-plan:1".to_owned()),
-            plan_state: Some(ProtectionPlanState::Submitted),
-        };
-        let decision = RiskEngine::evaluate(&p, &r).expect("risk");
-        assert_eq!(decision.outcome, RiskOutcome::Reject);
-        assert_eq!(decision.reasons[0].code, RiskReasonCode::ProtectionRequired);
+        p.max_unprotected_duration_ms = Some(5_000);
+        for delta in [-5, 5] {
+            let mut r = request(0, delta);
+            r.snapshot.protection.plan_state = Some(ProtectionPlanState::Planned);
+            assert_eq!(
+                RiskEngine::evaluate(&p, &r).expect("risk").outcome,
+                RiskOutcome::Reject
+            );
+            r.snapshot.protection.plan_id = Some("canonical-plan-1".to_owned());
+            assert_eq!(
+                RiskEngine::evaluate(&p, &r).expect("risk").outcome,
+                RiskOutcome::Approve
+            );
+            r.snapshot.protection.position_lots = delta;
+            r.snapshot.current_position_lots = delta;
+            assert_eq!(
+                RiskEngine::evaluate(&p, &r).expect("risk").outcome,
+                RiskOutcome::Reject
+            );
+        }
     }
 }

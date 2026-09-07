@@ -5,8 +5,8 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
 
 use crate::model::{
-    ProtectionPlanState, ReservationState, RiskDecision, RiskPolicySet, RiskProtectionPlanRow,
-    RiskReservation, RiskSource,
+    ProtectionPlanState, ReservationState, RiskDecision, RiskPolicySet, RiskProtectionLegRow,
+    RiskProtectionPlanRow, RiskReservation, RiskSource,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -75,6 +75,26 @@ pub trait RiskStore: Clone + Send + Sync + 'static {
         now_unix_ms: i64,
     ) -> Result<RiskReservation, RiskStoreError>;
 
+    fn reservation_by_id(
+        &self,
+        account_id: &str,
+        reservation_id: &str,
+    ) -> Result<Option<RiskReservation>, RiskStoreError>;
+    fn protection_plans(
+        &self,
+        account_id: &str,
+    ) -> Result<Vec<RiskProtectionPlanRow>, RiskStoreError>;
+    fn protection_legs(
+        &self,
+        canonical_plan_id: &str,
+    ) -> Result<Vec<RiskProtectionLegRow>, RiskStoreError>;
+    fn protection_leg_for_command(
+        &self,
+        account_id: &str,
+        command_id: &str,
+    ) -> Result<Option<RiskProtectionLegRow>, RiskStoreError>;
+    fn put_protection_leg(&self, leg: &RiskProtectionLegRow) -> Result<(), RiskStoreError>;
+
     // --- Protection-required lifecycle (#21) ------------------------------------
     /// Create a new protection plan row and persist it. Returns the persisted plan.
     #[allow(clippy::too_many_arguments)]
@@ -112,18 +132,6 @@ pub trait RiskStore: Clone + Send + Sync + 'static {
         entry_reservation_id: &str,
     ) -> Result<Option<RiskProtectionPlanRow>, RiskStoreError>;
 
-    /// Reconcile protection plans against broker stop facts.
-    /// `active_stop_lots` must already be filtered: only valid protective SL/trailing
-    /// stops for the correct instrument and direction (TP must NOT satisfy mandatory
-    /// stop-loss protection). `position_lots` must be in lots (not units).
-    fn reconcile_protection_plans(
-        &self,
-        account_id: &str,
-        instrument_id: &str,
-        active_stop_lots: i64,
-        position_lots: i64,
-        now_unix_ms: i64,
-    ) -> Result<Vec<RiskProtectionPlanRow>, RiskStoreError>;
     /// Transition a protection plan to FAILED when the broker rejects the leg.
     fn transition_protection_plan_on_reject(
         &self,
@@ -143,7 +151,19 @@ impl SqliteRiskStore {
         let store = Self {
             path: path.as_ref().to_path_buf(),
         };
-        store.connection()?.execute_batch(SCHEMA)?;
+        let connection = store.connection()?;
+        connection.execute_batch(SCHEMA)?;
+        let has_canonical_id = connection
+            .prepare("PRAGMA table_info(risk_protection_plans)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .any(|column| column == "canonical_plan_id");
+        if !has_canonical_id {
+            connection.execute_batch(
+                "ALTER TABLE risk_protection_plans ADD COLUMN canonical_plan_id TEXT",
+            )?;
+        }
         Ok(store)
     }
 
@@ -520,6 +540,142 @@ impl RiskStore for SqliteRiskStore {
         Ok(updated)
     }
 
+    fn reservation_by_id(
+        &self,
+        account_id: &str,
+        reservation_id: &str,
+    ) -> Result<Option<RiskReservation>, RiskStoreError> {
+        Ok(reservation_by_id(&self.connection()?, reservation_id)?
+            .filter(|reservation| reservation.account_id == account_id))
+    }
+
+    fn protection_plans(
+        &self,
+        account_id: &str,
+    ) -> Result<Vec<RiskProtectionPlanRow>, RiskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT plan_id, account_id, instrument_id, strategy_id, entry_reservation_id,
+                    protected_delta_lots, canonical_plan_id, state,
+                    created_at_unix_ms, updated_at_unix_ms
+             FROM risk_protection_plans WHERE account_id = ?1 ORDER BY created_at_unix_ms, plan_id",
+        )?;
+        statement
+            .query_map([account_id], plan_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn protection_legs(
+        &self,
+        canonical_plan_id: &str,
+    ) -> Result<Vec<RiskProtectionLegRow>, RiskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT payload FROM risk_protection_legs WHERE canonical_plan_id = ?1 ORDER BY command_id")?;
+        let rows = statement
+            .query_map([canonical_plan_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|payload| serde_json::from_str(&payload).map_err(Into::into))
+            .collect()
+    }
+
+    fn protection_leg_for_command(
+        &self,
+        account_id: &str,
+        command_id: &str,
+    ) -> Result<Option<RiskProtectionLegRow>, RiskStoreError> {
+        protection_leg_connection(&self.connection()?, account_id, command_id)
+    }
+
+    fn put_protection_leg(&self, leg: &RiskProtectionLegRow) -> Result<(), RiskStoreError> {
+        if leg.canonical_plan_id.trim().is_empty()
+            || leg.command_id.trim().is_empty()
+            || leg.entry_decision_id.trim().is_empty()
+            || leg.entry_reservation_id.trim().is_empty()
+            || leg.account_id.trim().is_empty()
+            || leg.instrument_id.trim().is_empty()
+            || leg.lot_size <= 0
+            || leg.position_lots == 0
+            || leg
+                .broker_stop_order_id
+                .as_ref()
+                .is_some_and(|id| id.trim().is_empty())
+        {
+            return Err(RiskStoreError::ApprovalInvariantViolation(
+                "invalid protection leg identity or quantity",
+            ));
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(existing) =
+            protection_leg_connection(&transaction, &leg.account_id, &leg.command_id)?
+        {
+            let mut expected = existing.clone();
+            expected.state = leg.state;
+            expected.updated_at_unix_ms = leg.updated_at_unix_ms;
+            if existing.broker_stop_order_id.is_none() {
+                expected.broker_stop_order_id = leg.broker_stop_order_id.clone();
+            }
+            if expected != *leg {
+                return Err(RiskStoreError::ApprovalInvariantViolation(
+                    "protection leg immutable relationship changed",
+                ));
+            }
+        }
+        let reservation = reservation_by_id(&transaction, &leg.entry_reservation_id)?
+            .ok_or(RiskStoreError::ReservationNotFound)?;
+        if reservation.account_id != leg.account_id
+            || reservation.instrument_id != leg.instrument_id
+        {
+            return Err(RiskStoreError::ApprovalInvariantViolation(
+                "protection leg reservation scope mismatch",
+            ));
+        }
+        let decision_payload: Option<String> = transaction
+            .query_row(
+                "SELECT payload FROM risk_decisions WHERE decision_id = ?1",
+                [&leg.entry_decision_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let decision: RiskDecision = serde_json::from_str(&decision_payload.ok_or(
+            RiskStoreError::ApprovalInvariantViolation("protection leg decision missing"),
+        )?)?;
+        if decision.reservation_id.as_deref() != Some(&leg.entry_reservation_id)
+            || decision.account_id != leg.account_id
+            || decision.request_id != reservation.logical_request_id
+        {
+            return Err(RiskStoreError::ApprovalInvariantViolation(
+                "protection leg decision reservation mismatch",
+            ));
+        }
+        let plan_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM risk_protection_plans WHERE account_id = ?1
+             AND instrument_id = ?2 AND entry_reservation_id = ?3 AND canonical_plan_id = ?4)",
+            params![
+                leg.account_id,
+                leg.instrument_id,
+                leg.entry_reservation_id,
+                leg.canonical_plan_id
+            ],
+            |row| row.get(0),
+        )?;
+        if !plan_exists {
+            return Err(RiskStoreError::ApprovalInvariantViolation(
+                "protection leg canonical plan mismatch",
+            ));
+        }
+        transaction.execute(
+            "INSERT INTO risk_protection_legs(account_id, command_id, canonical_plan_id, broker_stop_order_id, payload)
+             VALUES(?1, ?2, ?3, ?4, ?5) ON CONFLICT(account_id, command_id) DO UPDATE SET
+             broker_stop_order_id = excluded.broker_stop_order_id, payload = excluded.payload",
+            params![leg.account_id, leg.command_id, leg.canonical_plan_id, leg.broker_stop_order_id, serde_json::to_string(leg)?])?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     fn create_protection_plan(
         &self,
         account_id: impl Into<String>,
@@ -539,38 +695,59 @@ impl RiskStore for SqliteRiskStore {
             canonical_plan_id,
             now_unix_ms,
         );
-        self.put_protection_plan(&plan)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing = transaction.query_row(
+            "SELECT plan_id, account_id, instrument_id, strategy_id, entry_reservation_id,
+                    protected_delta_lots, canonical_plan_id, state, created_at_unix_ms, updated_at_unix_ms
+             FROM risk_protection_plans WHERE account_id = ?1 AND entry_reservation_id = ?2",
+            params![plan.account_id, plan.entry_reservation_id], plan_from_row).optional()?;
+        if let Some(existing) = existing {
+            if existing.canonical_plan_id != plan.canonical_plan_id
+                || existing.instrument_id != plan.instrument_id
+                || existing.strategy_id != plan.strategy_id
+                || existing.protected_delta_lots != plan.protected_delta_lots
+            {
+                return Err(RiskStoreError::ApprovalInvariantViolation(
+                    "protection plan entry replay changed correlation",
+                ));
+            }
+            transaction.commit()?;
+            return Ok(existing);
+        }
+        put_protection_plan_connection(&transaction, &plan)?;
+        transaction.commit()?;
         Ok(plan)
     }
 
     fn put_protection_plan(&self, plan: &RiskProtectionPlanRow) -> Result<(), RiskStoreError> {
-        let connection = self.connection()?;
-        connection.execute(
-            "INSERT INTO risk_protection_plans (
-                 plan_id, account_id, instrument_id, strategy_id, entry_reservation_id,
-                 protected_delta_lots, canonical_plan_id, state,
-                 created_at_unix_ms, updated_at_unix_ms
-             ) VALUES (
-                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
-             )
-             ON CONFLICT(plan_id) DO UPDATE SET
-                 protected_delta_lots = excluded.protected_delta_lots,
-                 canonical_plan_id = excluded.canonical_plan_id,
-                 state = excluded.state,
-                 updated_at_unix_ms = excluded.updated_at_unix_ms",
-            params![
-                plan.plan_id,
-                plan.account_id,
-                plan.instrument_id,
-                plan.strategy_id,
-                plan.entry_reservation_id,
-                plan.protected_delta_lots,
-                plan.canonical_plan_id,
-                plan_state_name(plan.state),
-                plan.created_at_unix_ms,
-                plan.updated_at_unix_ms,
-            ],
-        )?;
+        if plan
+            .canonical_plan_id
+            .as_deref()
+            .is_none_or(|identity| identity.trim().is_empty())
+        {
+            return Err(RiskStoreError::ApprovalInvariantViolation(
+                "canonical protection plan identity is required",
+            ));
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(existing) = plan_by_id(&transaction, &plan.plan_id)?
+            && (existing.account_id != plan.account_id
+                || existing.instrument_id != plan.instrument_id
+                || existing.entry_reservation_id != plan.entry_reservation_id
+                || existing.strategy_id != plan.strategy_id
+                || existing
+                    .canonical_plan_id
+                    .as_ref()
+                    .is_some_and(|id| Some(id) != plan.canonical_plan_id.as_ref()))
+        {
+            return Err(RiskStoreError::ApprovalInvariantViolation(
+                "protection plan immutable relationship changed",
+            ));
+        }
+        put_protection_plan_connection(&transaction, plan)?;
+        transaction.commit()?;
         tracing::info!(
             persistence.event = "protection_plan_upsert",
             risk.plan_id = %plan.plan_id,
@@ -676,61 +853,6 @@ impl RiskStore for SqliteRiskStore {
             )
             .optional()
             .map_err(Into::into)
-    }
-
-    fn reconcile_protection_plans(
-        &self,
-        account_id: &str,
-        instrument_id: &str,
-        active_stop_lots: i64,
-        position_lots: i64,
-        now_unix_ms: i64,
-    ) -> Result<Vec<RiskProtectionPlanRow>, RiskStoreError> {
-        let plans = self.protection_plans_for_instrument(account_id, instrument_id)?;
-        let mut updated = Vec::new();
-
-        for plan in plans {
-            // Skip terminal plans — they are already resolved.
-            if plan.state.terminal() {
-                continue;
-            }
-
-            // Compute coverage from broker facts.
-            // active_stop_lots is already filtered by direction (SL/trailing only, not TP)
-            // and normalized to lots by the caller.
-            let covered = (active_stop_lots.unsigned_abs() as i128)
-                .min(position_lots.unsigned_abs() as i128) as i64;
-            let is_fully_covered =
-                covered >= position_lots.unsigned_abs() as i64 && position_lots != 0;
-            let has_any_coverage = covered > 0;
-
-            // Determine target state from broker evidence.
-            let target = if is_fully_covered {
-                ProtectionPlanState::FullCoverage
-            } else if has_any_coverage {
-                ProtectionPlanState::PartialCoverage
-            } else {
-                // No broker stop coverage — the plan is stale.
-                // This handles: stop cancelled, stop expired, crash between
-                // dispatch and outcome (Submitted → Stale).
-                ProtectionPlanState::Stale
-            };
-
-            // Only transition if the target state differs.
-            if plan.state != target {
-                let transitioned = self.transition_protection_plan(
-                    &plan.plan_id,
-                    &[plan.state],
-                    target,
-                    now_unix_ms,
-                )?;
-                updated.push(transitioned);
-            } else {
-                updated.push(plan);
-            }
-        }
-
-        Ok(updated)
     }
 
     fn transition_protection_plan_on_reject(
@@ -898,6 +1020,55 @@ fn decision_for_request_connection(
         .query_row(
             "SELECT payload FROM risk_decisions WHERE account_id = ?1 AND request_id = ?2",
             params![account_id, request_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|payload| serde_json::from_str(&payload).map_err(Into::into))
+        .transpose()
+}
+
+fn put_protection_plan_connection(
+    connection: &Connection,
+    plan: &RiskProtectionPlanRow,
+) -> Result<(), RiskStoreError> {
+    connection.execute(
+        "INSERT INTO risk_protection_plans (
+                 plan_id, account_id, instrument_id, strategy_id, entry_reservation_id,
+                 protected_delta_lots, canonical_plan_id, state,
+                 created_at_unix_ms, updated_at_unix_ms
+             ) VALUES (
+                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+             )
+             ON CONFLICT(plan_id) DO UPDATE SET
+                 protected_delta_lots = excluded.protected_delta_lots,
+                 canonical_plan_id = excluded.canonical_plan_id,
+                 state = excluded.state,
+                 updated_at_unix_ms = excluded.updated_at_unix_ms",
+        params![
+            plan.plan_id,
+            plan.account_id,
+            plan.instrument_id,
+            plan.strategy_id,
+            plan.entry_reservation_id,
+            plan.protected_delta_lots,
+            plan.canonical_plan_id,
+            plan_state_name(plan.state),
+            plan.created_at_unix_ms,
+            plan.updated_at_unix_ms,
+        ],
+    )?;
+    Ok(())
+}
+
+fn protection_leg_connection(
+    connection: &Connection,
+    account_id: &str,
+    command_id: &str,
+) -> Result<Option<RiskProtectionLegRow>, RiskStoreError> {
+    connection
+        .query_row(
+            "SELECT payload FROM risk_protection_legs WHERE account_id = ?1 AND command_id = ?2",
+            params![account_id, command_id],
             |row| row.get::<_, String>(0),
         )
         .optional()?
@@ -1169,6 +1340,20 @@ CREATE TABLE IF NOT EXISTS risk_policy_audit (
 CREATE INDEX IF NOT EXISTS idx_risk_policy_audit_account
     ON risk_policy_audit(account_id, observed_at_unix_ms);
 
+CREATE TABLE IF NOT EXISTS risk_protection_legs (
+    account_id TEXT NOT NULL,
+    command_id TEXT NOT NULL,
+    canonical_plan_id TEXT NOT NULL,
+    broker_stop_order_id TEXT,
+    payload TEXT NOT NULL,
+    PRIMARY KEY(account_id, command_id)
+);
+CREATE INDEX IF NOT EXISTS idx_risk_protection_legs_plan
+    ON risk_protection_legs(canonical_plan_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_risk_protection_legs_broker
+    ON risk_protection_legs(account_id, broker_stop_order_id)
+    WHERE broker_stop_order_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS risk_protection_plans (
     plan_id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL,
@@ -1433,7 +1618,7 @@ mod tests {
             strategy_id: None,
             entry_reservation_id: entry_reservation_id.clone(),
             protected_delta_lots: 10,
-            canonical_plan_id: None,
+            canonical_plan_id: Some("protection-plan:1".into()),
             state: ProtectionPlanState::Planned,
             created_at_unix_ms: 1,
             updated_at_unix_ms: 1,
@@ -1470,6 +1655,62 @@ mod tests {
             4,
         )?;
         assert_eq!(active.state, ProtectionPlanState::FullCoverage);
+        let _ = std::fs::remove_file(path);
+        Ok(())
+    }
+
+    #[test]
+    fn decision_reservation_plan_leg_and_broker_stop_survive_restart() -> Result<(), RiskStoreError>
+    {
+        let path = std::env::temp_dir().join(format!("vox-risk-{}.sqlite3", uuid::Uuid::new_v4()));
+        let store = SqliteRiskStore::open(&path)?;
+        let reservation = reservation("entry-request", 3);
+        let decision = decision("entry-request", &reservation.reservation_id, 3);
+        store.persist_approval_atomic(
+            &decision,
+            &reservation,
+            ReservationCapacity {
+                max_account_reserved_notional_nanos: None,
+                max_instrument_reserved_abs_lots: None,
+            },
+        )?;
+        let plan = store.create_protection_plan(
+            "account-1",
+            "instrument-1",
+            None,
+            &reservation.reservation_id,
+            3,
+            Some("protection-plan:restart".into()),
+            1,
+        )?;
+        let leg = RiskProtectionLegRow {
+            canonical_plan_id: plan.canonical_plan_id.clone().expect("canonical identity"),
+            entry_decision_id: decision.decision_id.clone(),
+            entry_reservation_id: reservation.reservation_id.clone(),
+            account_id: "account-1".into(),
+            instrument_id: "instrument-1".into(),
+            command_id: "stop-command-1".into(),
+            broker_stop_order_id: Some("broker-stop-1".into()),
+            is_stop_loss: true,
+            position_lots: 3,
+            lot_size: 10,
+            state: ProtectionPlanState::Submitted,
+            created_at_unix_ms: 2,
+            updated_at_unix_ms: 3,
+        };
+        store.put_protection_leg(&leg)?;
+        drop(store);
+
+        let restored = SqliteRiskStore::open(&path)?;
+        assert_eq!(
+            restored
+                .protection_plan_by_entry_reservation("account-1", &reservation.reservation_id,)?,
+            Some(plan)
+        );
+        assert_eq!(
+            restored.protection_leg_for_command("account-1", "stop-command-1")?,
+            Some(leg)
+        );
         let _ = std::fs::remove_file(path);
         Ok(())
     }
