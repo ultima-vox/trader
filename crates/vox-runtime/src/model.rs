@@ -657,6 +657,10 @@ pub struct StopFact {
     /// SELL=2 protective sell-to-close a long). Used to match the protection leg to the
     /// exposed position side. `0` is the provider UNSPECIFIED sentinel.
     pub direction: Option<i32>,
+    /// Provider `StopOrderType`: STOP_LOSS=3, TAKE_PROFIT=2. Missing or unknown
+    /// values cannot establish mandatory stop-loss coverage, including trailing TP.
+    #[serde(default)]
+    pub stop_order_type: Option<i32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

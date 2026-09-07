@@ -19,7 +19,7 @@ pub use execution::{
 };
 pub use identity::{
     BrokerFillId, BrokerOrderId, BrokerStopOrderId, ClientOrderId, ClientRequestId,
-    ExchangeOrderId, IdentityError,
+    ExchangeOrderId, IdentityError, ProtectionPlanId,
 };
 pub use instrument::{InstrumentIdentity, InstrumentIdentityError};
 pub use money::{

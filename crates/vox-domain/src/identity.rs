@@ -39,6 +39,9 @@ identity!(BrokerOrderId);
 identity!(ExchangeOrderId);
 identity!(BrokerStopOrderId);
 identity!(BrokerFillId);
+// Identity of a protection intent across entry, replacement legs and broker stops.
+// It is deliberately distinct from a leg's idempotency/client request identity.
+identity!(ProtectionPlanId);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IdentityError {

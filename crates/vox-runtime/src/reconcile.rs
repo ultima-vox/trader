@@ -449,6 +449,7 @@ where
 
         if let Some(stop) = snapshot.stop_orders.iter().find(|stop| {
             existing.broker_stop_order_id.as_deref() == Some(&stop.broker_stop_order_id)
+                && stop_kind_matches(&mutation, stop)
         }) && let Some(disposition) = stop_disposition(mutation.kind, stop.status)
         {
             let mut links = existing.clone();
@@ -876,6 +877,17 @@ fn order_disposition(
         (_, OrderExecutionStatus::Cancelled) => Some(ReconciliationDisposition::OrderCancelled),
         (_, OrderExecutionStatus::Rejected) => Some(ReconciliationDisposition::OrderRejected),
         (_, OrderExecutionStatus::UnknownProviderStatus(_)) => None,
+    }
+}
+
+fn stop_kind_matches(mutation: &MutationRecord, stop: &crate::model::StopFact) -> bool {
+    if mutation.kind == MutationKind::CancelStopOrder {
+        return true;
+    }
+    match mutation.request_evidence.protection_kind {
+        Some(crate::model::ProtectionKind::StopLoss) => stop.stop_order_type == Some(3),
+        Some(crate::model::ProtectionKind::TakeProfit) => stop.stop_order_type == Some(2),
+        None => false,
     }
 }
 

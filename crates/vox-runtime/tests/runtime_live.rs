@@ -200,6 +200,9 @@ impl BrokerReadPort for SandboxReads {
                     instrument_uid: stop.instrument_uid.unwrap_or_default(),
                     status: stop_status(stop.status),
                     status_cause: None,
+                    quantity_lots: None,
+                    direction: None,
+                    stop_order_type: (stop.stop_order_type != 0).then_some(stop.stop_order_type),
                 })
             })
             .collect()
@@ -809,20 +812,25 @@ impl RiskAdmissionPort for SandboxRiskAdmission {
         command: &RuntimeExecutionCommand,
         logical_request_id: &str,
     ) -> Result<RiskAdmission, RiskAdmissionError> {
+        let exposure_bearing = matches!(
+            command,
+            RuntimeExecutionCommand::RegularOrder(_)
+                | RuntimeExecutionCommand::PostOrderAsync(_)
+                | RuntimeExecutionCommand::ReplaceOrder(_)
+        );
         let approved_delta_lots = match command {
             RuntimeExecutionCommand::RegularOrder(command)
             | RuntimeExecutionCommand::PostOrderAsync(command) => command.quantity_lots,
             RuntimeExecutionCommand::ReplaceOrder(command) => command.quantity_lots,
-            RuntimeExecutionCommand::PostStopOrder(command)
-            | RuntimeExecutionCommand::ProtectionLeg(command) => command.quantity_lots,
-            RuntimeExecutionCommand::CancelOrder(_)
-            | RuntimeExecutionCommand::CancelStopOrder(_) => 1,
+            RuntimeExecutionCommand::PostStopOrder(_)
+            | RuntimeExecutionCommand::ProtectionLeg(_)
+            | RuntimeExecutionCommand::CancelOrder(_)
+            | RuntimeExecutionCommand::CancelStopOrder(_) => 0,
         };
         Ok(RiskAdmission {
             decision_id: format!("runtime-qualification:{logical_request_id}"),
-            reservation_id: Some(format!(
-                "runtime-qualification-reservation:{logical_request_id}"
-            )),
+            reservation_id: exposure_bearing
+                .then(|| format!("runtime-qualification-reservation:{logical_request_id}")),
             policy_revision: 1,
             approved_delta_lots,
         })
@@ -1727,6 +1735,8 @@ fn live_fixed_stop_command(
             trigger_price,
             limit_price: None,
         }),
+        entry_reservation_id: None,
+        canonical_plan_id: None,
     })
 }
 

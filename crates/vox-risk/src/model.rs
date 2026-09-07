@@ -379,23 +379,16 @@ pub enum ProtectionPlanState {
 impl ProtectionPlanState {
     /// `true` when the plan currently allows additional exposure on the instrument.
     ///
-    /// Only full coverage (or an active plan that fully protects the entered position)
-    /// satisfies protection-required policy. Partial, planned, submitted and failed
-    /// states do not permit new exposure unless the plan itself is being maintained.
+    /// Only full coverage permits new exposure. The caller must also verify current
+    /// broker coverage: a persisted lifecycle label cannot substitute for evidence.
     #[must_use]
     pub const fn permits_additional_exposure(&self) -> bool {
-        matches!(
-            self,
-            Self::Active | Self::FullCoverage | Self::PartialCoverage
-        )
+        matches!(self, Self::FullCoverage)
     }
 
     #[must_use]
     pub const fn terminal(&self) -> bool {
-        matches!(
-            self,
-            Self::Cancelled | Self::Failed | Self::Stale
-        )
+        matches!(self, Self::Cancelled | Self::Failed | Self::Stale)
     }
 }
 
@@ -509,17 +502,29 @@ pub struct GlobalRiskStateRow {
 /// A plan binds an approved exposure (via its reservation) to the #10 protection
 /// legs that cover it. Lifecycle state is advanced only by broker-authoritative
 /// stop/fill evidence, never by local intent.
+///
+/// `entry_reservation_id` is the #21 reservation whose approved exposure this plan
+/// protects. It is the durable link used to locate this plan from the risk layer
+/// without relying on the protection command's logical_request_id.
+///
+/// `canonical_plan_id` links this risk-layer plan to the #10 canonical protection
+/// plan (the runtime ProtectionPlan client_request_id) so that restart/reconciliation
+/// can restore the correlation between risk decisions, reservations, and broker-native
+/// stop orders.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RiskProtectionPlanRow {
     pub plan_id: String,
     pub account_id: String,
     pub instrument_id: String,
     pub strategy_id: Option<String>,
-    /// The reservation whose approved exposure this plan protects.
-    pub reservation_id: String,
+    /// The #21 entry reservation whose approved exposure this plan protects.
+    pub entry_reservation_id: String,
     /// Signed lot quantity the plan is responsible for protecting.
     pub protected_delta_lots: i64,
     pub state: ProtectionPlanState,
+    /// Correlation to the #10 canonical protection plan (runtime ProtectionPlan
+    /// client_request_id). Set when the actual #10 protection leg is dispatched.
+    pub canonical_plan_id: Option<String>,
     pub created_at_unix_ms: i64,
     pub updated_at_unix_ms: i64,
 }
@@ -529,4 +534,49 @@ impl RiskProtectionPlanRow {
     pub fn new_id() -> String {
         format!("risk-protection-plan:{}", Uuid::new_v4())
     }
+
+    /// Create a new protection plan row in the Planned state.
+    #[must_use]
+    pub fn new(
+        account_id: impl Into<String>,
+        instrument_id: impl Into<String>,
+        strategy_id: Option<String>,
+        entry_reservation_id: impl Into<String>,
+        protected_delta_lots: i64,
+        canonical_plan_id: Option<String>,
+        now_unix_ms: i64,
+    ) -> Self {
+        let id = Self::new_id();
+        Self {
+            plan_id: id.clone(),
+            account_id: account_id.into(),
+            instrument_id: instrument_id.into(),
+            strategy_id,
+            entry_reservation_id: entry_reservation_id.into(),
+            protected_delta_lots,
+            state: ProtectionPlanState::Planned,
+            canonical_plan_id,
+            created_at_unix_ms: now_unix_ms,
+            updated_at_unix_ms: now_unix_ms,
+        }
+    }
+}
+
+/// Durable correlation of one canonical #10 protection leg to its entry approval.
+/// Broker identity may be attached after dispatch; immutable fields cannot change.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RiskProtectionLegRow {
+    pub canonical_plan_id: String,
+    pub entry_decision_id: String,
+    pub entry_reservation_id: String,
+    pub account_id: String,
+    pub instrument_id: String,
+    pub command_id: String,
+    pub broker_stop_order_id: Option<String>,
+    pub is_stop_loss: bool,
+    pub position_lots: i64,
+    pub lot_size: i64,
+    pub state: ProtectionPlanState,
+    pub created_at_unix_ms: i64,
+    pub updated_at_unix_ms: i64,
 }

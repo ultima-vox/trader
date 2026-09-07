@@ -769,6 +769,8 @@ export type SubmitProtectionRequest = {
   price_convention: PriceConventionDto;
   confirm_margin_trade: boolean;
   plan: ProtectionPlanDto;
+  /** The #21 entry reservation whose approved exposure this protection covers. Required when protection_required_for_new_exposure is true. Allows the risk layer to correlate the protection command to the entry reservation/decision without looking up by the protection command's own logical_request_id (which has no reservation). */
+  entry_reservation_id?: string | null;
 };
 
 /** Submit a stop order. Trigger is exact; limit price is optional. */

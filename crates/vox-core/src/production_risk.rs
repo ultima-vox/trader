@@ -1,3 +1,6 @@
+#[path = "production_protection.rs"]
+mod protection;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -6,10 +9,10 @@ use tokio::sync::{Mutex, RwLock, Semaphore};
 use vox_connections::{ConnectionId, ExecutionPurpose};
 use vox_domain::{OrderSide, RegularOrderType, RuntimeExecutionCommand};
 use vox_risk::{
-    BrokerLotLimits, BrokerMarginFacts, BuyLotLimit, ReservationCapacity, ReservationState,
-    RiskActionKind, RiskEngine, RiskPolicySet, RiskReasonCode, RiskRequest, RiskReservation,
-    RiskReservationReconciler, RiskSnapshot, RiskSource, RiskState, RiskStore, RiskValidityContext,
-    SellLotLimit, SqliteRiskStore,
+    BrokerLotLimits, BrokerMarginFacts, BuyLotLimit, ProtectionPlanState, ReservationCapacity,
+    ReservationState, RiskActionKind, RiskEngine, RiskPolicySet, RiskReasonCode, RiskRequest,
+    RiskReservation, RiskReservationReconciler, RiskSnapshot, RiskSource, RiskState, RiskStore,
+    RiskValidityContext, SellLotLimit, SqliteRiskStore,
 };
 use vox_runtime::{
     ReconciliationReport, RiskAdmission, RiskAdmissionError, RiskAdmissionPort,
@@ -75,57 +78,6 @@ impl ProductionRiskAdapter {
                 now_unix_ms()?,
             )
             .map_err(store_unavailable)
-    }
-
-    /// Builds broker-authoritative protection evidence for the requesting instrument,
-    /// correlated to the durable #10 protection plan when one exists. Coverage is
-    /// derived from broker stop facts (`report.active_stops`) and current position lots,
-    /// never from local intent.
-    async fn protection_status(
-        &self,
-        report: &ReconciliationReport,
-        instrument_id: &str,
-    ) -> Result<vox_risk::RiskProtectionStatus, RiskAdmissionError> {
-        let position_lots = report
-            .positions
-            .iter()
-            .find(|position| position.instrument_uid == instrument_id)
-            .map(|position| position.quantity_units)
-            .unwrap_or(0);
-
-        let active_stop_lots = report
-            .active_stops
-            .iter()
-            .filter(|stop| {
-                stop.instrument_uid == instrument_id && stop.status.active()
-            })
-            .map(|stop| stop.quantity_lots.unwrap_or(0))
-            .sum::<i64>();
-
-        let position_entered_at_unix_ms = report
-            .positions
-            .iter()
-            .find(|position| position.instrument_uid == instrument_id)
-            .and_then(|position| position.broker_observed_at_unix_ms);
-
-        let plans = self
-            .risk_store
-            .protection_plans_for_instrument(&self.canonical_account_id, instrument_id)
-            .map_err(store_unavailable)?;
-        let (plan_id, plan_state) = plans
-            .iter()
-            .filter(|plan| !plan.state.terminal())
-            .max_by_key(|plan| plan.created_at_unix_ms)
-            .map(|plan| (Some(plan.plan_id.clone()), Some(plan.state)))
-            .unwrap_or((None, None));
-
-        Ok(vox_risk::RiskProtectionStatus {
-            active_stop_lots,
-            position_lots,
-            position_entered_at_unix_ms,
-            plan_id,
-            plan_state,
-        })
     }
 
     pub fn replace_state(
@@ -470,7 +422,7 @@ impl ProductionRiskAdapter {
                     None
                 },
                 protection: self
-                    .protection_status(&cached.report, &instrument_id)
+                    .protection_status(&cached.report, &instrument_id, lot_size)
                     .await?,
                 validity: RiskValidityContext {
                     runtime_epoch: cached.report.runtime_epoch,
@@ -541,9 +493,21 @@ impl RiskAdmissionPort for ProductionRiskAdapter {
             });
         }
         let policy = self.policy()?;
-        let request = self
+        let mut request = self
             .build_request(scope, purpose, command, logical_request_id, &policy)
             .await?;
+        let canonical_intent =
+            vox_domain::ProtectionPlanId::new(format!("protection-plan:{}", uuid::Uuid::new_v4()))
+                .map_err(|error| RiskAdmissionError::Unavailable(error.to_string()))?;
+        if request.snapshot.current_position_lots == 0
+            && matches!(
+                request.action,
+                RiskActionKind::DirectionalOrder | RiskActionKind::ReplaceDirectionalOrder
+            )
+        {
+            request.snapshot.protection.plan_id = Some(canonical_intent.as_str().to_owned());
+            request.snapshot.protection.plan_state = Some(ProtectionPlanState::Planned);
+        }
         let mut decision = RiskEngine::evaluate(&policy, &request)
             .map_err(|error| RiskAdmissionError::Unavailable(error.to_string()))?;
         if !decision.permits_dispatch() {
@@ -614,6 +578,50 @@ impl RiskAdmissionPort for ProductionRiskAdapter {
                 .map_err(store_unavailable)?;
             (decision, None)
         };
+
+        // Create a protection plan when policy mandates protection for new exposure.
+        // The plan starts in PLANNED state and is advanced to SUBMITTED once the
+        // runtime dispatches the protection leg to the broker.
+        let protected_increase = increasing_portion(
+            request.snapshot.current_position_lots,
+            persisted.0.approved_delta_lots,
+        )?;
+        if matches!(
+            persisted.0.action,
+            RiskActionKind::DirectionalOrder | RiskActionKind::ReplaceDirectionalOrder
+        ) && protected_increase > 0
+            && let Some(ref reservation) = persisted.1
+        {
+            let plan = self
+                .risk_store
+                .create_protection_plan(
+                    &self.canonical_account_id,
+                    &reservation.instrument_id,
+                    reservation.strategy_id.clone(),
+                    &reservation.reservation_id,
+                    protected_increase
+                        .checked_mul(persisted.0.approved_delta_lots.signum())
+                        .ok_or_else(|| {
+                            RiskAdmissionError::Unavailable(
+                                "protected exposure quantity overflow".into(),
+                            )
+                        })?,
+                    Some(canonical_intent.as_str().to_owned()),
+                    now_unix_ms()?,
+                )
+                .map_err(|error| {
+                    RiskAdmissionError::Unavailable(format!(
+                        "protection plan creation failed: {error}"
+                    ))
+                })?;
+            tracing::info!(
+                risk.plan_id = %plan.plan_id,
+                risk.reservation_id = %reservation.reservation_id,
+                risk.instrument_id = %reservation.instrument_id,
+                persistence.event = "protection_plan_created",
+                "protection plan created for approved exposure",
+            );
+        }
 
         Ok(RiskAdmission {
             decision_id: persisted.0.decision_id,
@@ -734,17 +742,19 @@ impl RiskAdmissionPort for ProductionRiskAdapter {
                 "conflicting UNKNOWN_AFTER_DISPATCH mutation appeared".into(),
             ));
         }
+        self.prepare_protection(scope, command).await?;
         Ok(())
     }
 
     async fn record_dispatch_outcome(
         &self,
-        _scope: &RuntimeScope,
+        scope: &RuntimeScope,
         logical_request_id: &str,
         outcome: RiskDispatchOutcome,
     ) -> Result<(), RiskAdmissionError> {
-        let reconciler = RiskReservationReconciler::new(self.risk_store.clone());
         let now = now_unix_ms()?;
+        self.protection_dispatch_outcome(scope, logical_request_id, outcome, now)?;
+        let reconciler = RiskReservationReconciler::new(self.risk_store.clone());
         let result = match outcome {
             RiskDispatchOutcome::Acknowledged => {
                 reconciler.dispatch_acknowledged(&self.canonical_account_id, logical_request_id)
@@ -768,7 +778,7 @@ impl RiskAdmissionPort for ProductionRiskAdapter {
 
     async fn reconcile(
         &self,
-        _scope: &RuntimeScope,
+        scope: &RuntimeScope,
         report: &ReconciliationReport,
     ) -> Result<(), RiskAdmissionError> {
         *self.snapshot.write().await = Some(ProductionRiskSnapshot {
@@ -813,6 +823,9 @@ impl RiskAdmissionPort for ProductionRiskAdapter {
                     .map_err(|error| RiskAdmissionError::Unavailable(error.to_string()))?;
             }
         }
+
+        self.reconcile_protection(scope, report)?;
+
         Ok(())
     }
 }
