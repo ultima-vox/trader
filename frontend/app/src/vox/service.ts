@@ -6,6 +6,14 @@ import {
   type BrokerConnectionMetadataDto,
   type CapabilitySet,
   type ConnectionDetailsDto,
+  type CreateBrokerConnectionRequest,
+  type BrokerAccountBindingDto,
+  type ExecutionAuthorizationDto,
+  type ChangeExecutionAuthorizationRequest,
+  type RiskStatusDto,
+  type ChangeRiskStateRequest,
+  type QuoteDto,
+  type SubmitProtectionRequest,
   type CreateSessionRequest,
   type ExecutionScope,
   type InstrumentSummaryDto,
@@ -266,8 +274,40 @@ export class VoxService {
     );
   }
 
+  createConnection(request: CreateBrokerConnectionRequest): Promise<UnscopedResult<BrokerConnectionMetadataDto>> {
+    return this.runUnscoped(() => this.client.postBrokerConnections(request));
+  }
+
+  bindAccount(connectionId: string, providerAccountId: string, accountId: string): Promise<UnscopedResult<BrokerAccountBindingDto>> {
+    return this.runUnscoped(() => this.client.postBrokerConnectionsConnection_idBindings(
+      { connection_id: connectionId },
+      { provider_account_id: providerAccountId, account_id: accountId },
+    ));
+  }
+
+  authorizeExecution(
+    connectionId: string,
+    request: ChangeExecutionAuthorizationRequest,
+  ): Promise<UnscopedResult<ExecutionAuthorizationDto>> {
+    return this.runUnscoped(() => this.client.putBrokerConnectionsConnection_idExecutionAuthorization(
+      { connection_id: connectionId }, request,
+    ));
+  }
+
   instruments(provider: ExecutionScope["provider"], query: string): Promise<UnscopedResult<Array<InstrumentSummaryDto>>> {
     return this.runUnscoped(() => this.client.marketInstruments({ provider, query, limit: 50 }));
+  }
+
+  quote(provider: ExecutionScope["provider"], instrumentUid: string): Promise<UnscopedResult<QuoteDto>> {
+    return this.runUnscoped(() => this.client.marketQuote({ provider, instrument_uid: instrumentUid }));
+  }
+
+  riskStatus(): Promise<ScopedResult<RiskStatusDto>> {
+    return this.runScoped((ctx, client) => client.riskStatus(scopeQuery(ctx)));
+  }
+
+  changeRiskState(request: ChangeRiskStateRequest): Promise<UnscopedResult<RiskStatusDto>> {
+    return this.runUnscoped(() => this.client.postRiskState(request));
   }
 
   async submitOrder(
@@ -285,6 +325,10 @@ export class VoxService {
       if (error instanceof VoxApiError) return { ok: false, error };
       throw error;
     }
+  }
+
+  submitProtection(request: SubmitProtectionRequest): Promise<UnscopedResult<MutationReceiptDto>> {
+    return this.runUnscoped(() => this.client.postCommandsProtection(request));
   }
 
   async refreshCommand(handle: CommandHandle): Promise<CommandResult> {

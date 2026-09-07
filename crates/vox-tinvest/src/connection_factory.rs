@@ -29,9 +29,17 @@ use crate::{GrpcConfigError, GrpcCredential, SecretToken, SecretTokenError, TInv
 pub struct TInvestReadSession {
     pub target: AccountTarget,
     pub client: AccountReadClient,
+    market_client: TInvestGrpcClient,
     pub runtime_reads: crate::runtime_read::TInvestRuntimeReadAdapter,
     pub risk_reads: crate::risk_read::TInvestRiskReadAdapter,
     pub runtime_streams: crate::runtime_stream::TInvestRuntimeStreamAdapter,
+}
+
+impl TInvestReadSession {
+    #[must_use]
+    pub fn market_data(&self) -> crate::market_data::TInvestMarketDataAdapter<'_> {
+        crate::market_data::TInvestMarketDataAdapter::new(&self.market_client)
+    }
 }
 
 struct AuthorizedTInvestExecutionClient {
@@ -448,6 +456,7 @@ fn build_session(
     Ok(TInvestReadSession {
         target,
         client: AccountReadClient::new(client.clone()),
+        market_client: client.clone(),
         runtime_reads: crate::runtime_read::TInvestRuntimeReadAdapter::new(
             client.clone(),
             environment,

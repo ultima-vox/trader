@@ -510,6 +510,50 @@ async fn live_sandbox_onboarding_read_and_restart_use_production_composition()
         let body = response_json(response).await?;
         assert_eq!(status, StatusCode::OK, "{path} response: {body}");
     }
+    let instruments = app
+        .clone()
+        .oneshot(
+            authenticated_request(
+                app.clone(),
+                "GET",
+                "/api/v1/market/instruments?provider=T_INVEST&query=SBER&limit=5",
+                false,
+            )
+            .await?,
+        )
+        .await?;
+    let instruments_status = instruments.status();
+    let instruments = response_json(instruments).await?;
+    assert_eq!(
+        instruments_status,
+        StatusCode::OK,
+        "instrument response: {instruments}"
+    );
+    let instrument_uid = instruments
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|item| item["identity"]["uid"].as_str())
+        .ok_or("SBER instrument missing")?;
+    let quote = app
+        .clone()
+        .oneshot(
+            authenticated_request(
+                app.clone(),
+                "GET",
+                &format!("/api/v1/market/quote?provider=T_INVEST&instrument_uid={instrument_uid}"),
+                false,
+            )
+            .await?,
+        )
+        .await?;
+    let quote_status = quote.status();
+    let quote = response_json(quote).await?;
+    assert_eq!(quote_status, StatusCode::OK, "quote response: {quote}");
+    assert!(
+        quote["last"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
     let execution_session = composition.client_factory.execution_session(
         &ConnectionId::parse(connection_id.to_owned())?,
         provider_account_id,

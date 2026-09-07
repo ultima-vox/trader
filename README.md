@@ -40,6 +40,11 @@ See `architecture/adr/ADR-0001-nautilus-runtime.md`.
 
 Qualification harnesses under `qualification/` remain regression evidence while equivalent Rust gates move into the workspace. See `docs/rust-foundation.md`.
 
+## Run T-Invest Sandbox RC1
+
+Windows clean-checkout startup, browser onboarding, secure credential entry, manual trading, and
+restart recovery: [`docs/rc1-sandbox.md`](docs/rc1-sandbox.md).
+
 ## Legacy reference
 
 The previous `ultima-vox/ai-trader` repository remains a reference source for proven domain requirements, tests, broker semantics, safety rules and UX lessons. Source code is not copied wholesale into Trader 2.0.

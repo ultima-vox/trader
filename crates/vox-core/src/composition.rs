@@ -161,7 +161,12 @@ impl ApplicationComposition {
             binding_resolver,
             config.runtime_database_directory,
             broker_environment(config.core.environment())?,
+            Arc::clone(&account_reads),
         ));
+        runtime
+            .restore_scopes()
+            .await
+            .context("restore bound runtime scopes")?;
         let connection_admin = Arc::new(
             ConnectionAdministrationAdapter::new(Arc::clone(&connections))
                 .with_lifecycle_observer(runtime.clone()),
@@ -170,13 +175,14 @@ impl ApplicationComposition {
             ProviderDto::TInvest,
             broker_environment(config.core.environment())?,
             runtime.clone(),
-            account_reads,
+            runtime.clone(),
             runtime.clone(),
             connection_admin,
             Arc::new(auth.clone()),
         )
         .with_risk_queries(runtime.clone())
-        .with_risk_commands(runtime.clone());
+        .with_risk_commands(runtime.clone())
+        .with_market_data(runtime.clone());
         let api = vox_api::router(state)
             .layer(DefaultBodyLimit::max(128 * 1024))
             .layer(middleware::from_fn_with_state(
